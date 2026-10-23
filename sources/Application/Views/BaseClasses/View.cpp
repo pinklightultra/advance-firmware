@@ -238,9 +238,8 @@ void View::drawNotes() {
   GUITextProperties props;
 
   Player *player = Player::GetInstance();
-  const bool showPlaybackVisualizer = ShowsChannelPlaybackVisualizer(
-      player->IsRunning(), viewData_->playMode_ == PM_AUDITION,
-      player->IsMidiInputPlaying());
+  const bool isSequencerPlayback =
+      player->IsRunning() && viewData_->playMode_ != PM_AUDITION;
 
   props.invert_ = true;
   const int channelCount = SONG_CHANNEL_COUNT;
@@ -250,6 +249,9 @@ void View::drawNotes() {
     } else {
       SetColor(CD_HILITE1);
     }
+    const bool showPlaybackVisualizer = ShowsChannelPlaybackVisualizer(
+        isSequencerPlayback, viewData_->song_->IsMidiInputChannelAssigned(i),
+        player->IsMidiInputChannelPlaying(static_cast<uint8_t>(i)));
     if (showPlaybackVisualizer) {
       uint8_t sliceIndex = 0;
       if (player->GetPlayedSliceIndex(i, sliceIndex)) {

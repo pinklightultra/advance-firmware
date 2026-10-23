@@ -395,6 +395,7 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
   };
   rp->channelCount_ = source_->GetChannelCount(rp->midiNote_);
   int sampleSize = source_->GetSize(rp->midiNote_);
+  rp->sampleFrameCount_ = sampleSize;
   uint32_t sampleSizeU = sampleSize > 0 ? static_cast<uint32_t>(sampleSize) : 0;
 
   int rootNote =
@@ -726,6 +727,16 @@ bool SampleInstrument::Render(int channel, AudioSample *buffer, int size,
 
     int channelCount = rp->channelCount_;
 
+    if (channelCount <= 0 || rp->sampleFrameCount_ <= 0) {
+      *rpFinished = true;
+      return false;
+    }
+
+    const uintptr_t sampleFirstAddress = reinterpret_cast<uintptr_t>(wavbuf);
+    const uintptr_t sampleLastFrameAddress =
+        sampleFirstAddress + static_cast<uintptr_t>(rp->sampleFrameCount_ - 1) *
+                                 static_cast<uintptr_t>(2 * channelCount);
+
     int count = size; // number of samples to treat
 
     AudioSample *result = buffer;
@@ -957,7 +968,15 @@ bool SampleInstrument::Render(int channel, AudioSample *buffer, int size,
           }
         }
 
-        short *i2 = i1 + channelCount;
+        uintptr_t i1Address = reinterpret_cast<uintptr_t>(i1);
+        i1Address =
+            std::clamp(i1Address, sampleFirstAddress, sampleLastFrameAddress);
+        i1 = reinterpret_cast<short *>(i1Address);
+
+        const uintptr_t nextFrameAddress =
+            i1Address + static_cast<uintptr_t>(2 * channelCount);
+        short *i2 = reinterpret_cast<short *>(
+            std::min(nextFrameAddress, sampleLastFrameAddress));
 
         if (filtering) {
           fltSpeedPtr = fltSpeed;
@@ -1645,6 +1664,15 @@ void SampleInstrument::Purge() {
   source_ = NULL;
   slicePoints_.fill(0);
 };
+
+void SampleInstrument::CloneFrom(I_Instrument &src) {
+  I_Instrument::CloneFrom(src);
+  auto &sampleSrc = static_cast<SampleInstrument &>(src);
+  slicePoints_ = sampleSrc.slicePoints_;
+  SetChanged();
+  NotifyObservers();
+}
+
 bool SampleInstrument::IsEmpty() {
   Variable *v = FindVariable(FourCC::SampleInstrumentSample);
   return (v->GetInt() == -1);

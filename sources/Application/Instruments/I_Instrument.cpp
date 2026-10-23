@@ -132,3 +132,13 @@ void I_Instrument::Purge() {
     (*it)->Reset();
   }
 };
+
+void I_Instrument::CloneFrom(I_Instrument &src) {
+  SetName(src.GetUserSetName().c_str());
+  for (auto it = src.Variables()->begin(); it != src.Variables()->end(); it++) {
+    Variable *dstV = FindVariable((*it)->GetID());
+    if (dstV) {
+      dstV->CopyFrom(**it);
+    }
+  }
+}

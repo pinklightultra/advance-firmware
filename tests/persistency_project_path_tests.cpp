@@ -88,6 +88,26 @@ TEST_CASE("PersistencyService deletes sibling entries after nested directory "
                     }));
 }
 
+TEST_CASE("PersistencyService replaces an invalid unnamed project") {
+  BoundaryTestEnvironment env;
+  PersistencyService *persistency = PersistencyService::GetInstance();
+  env.fs.AddDirectory("/projects");
+  env.fs.AddDirectory("/projects/.untitled");
+  env.fs.AddDirectory("/projects/.untitled/samples");
+  env.fs.AddFile("/projects/.untitled/ptsav.dat", "invalid project data");
+  env.fs.AddFile("/projects/.untitled/" AUTO_SAVE_FILENAME,
+                 "invalid autosave data");
+  env.fs.AddFile("/projects/.untitled/samples/stale.wav", "sample data");
+
+  const PersistencyResult result = persistency->CreateProject();
+
+  REQUIRE(result == PERSIST_SAVED);
+  CHECK(persistency->Load(UNNAMED_PROJECT_NAME) == PERSIST_LOADED);
+  CHECK(env.fs.exists("/projects/.untitled/samples"));
+  CHECK_FALSE(env.fs.exists("/projects/.untitled/" AUTO_SAVE_FILENAME));
+  CHECK_FALSE(env.fs.exists("/projects/.untitled/samples/stale.wav"));
+}
+
 TEST_CASE("PersistencyService save-as copies project samples from explicit "
           "absolute paths") {
   BoundaryTestEnvironment env;

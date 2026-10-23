@@ -343,6 +343,11 @@ void InstrumentView::onInstrumentChange() {
 };
 
 void InstrumentView::refreshInstrumentFields() {
+  // Dynamic fields are destroyed and recreated below.  Drop the focus pointer
+  // first so FieldView cannot dereference a field after its container is
+  // cleared.
+  ClearFocus();
+
   for (auto &f : sampleIndexField_) {
     f.RemoveObserver(*this);
   }
@@ -859,10 +864,9 @@ void InstrumentView::fillSampleSourceParameters() {
 }
 
 void InstrumentView::clearEmbeddedSlicerWaveform() {
-  if (!isEmbeddedSlicerActive()) {
-    return;
-  }
-
+  // The slicer may still refer to an instrument that was released while this
+  // view was unfocused (for example, Remove Unused Instruments).  Do not query
+  // that pointer here.
   embeddedSlicer_.MarkModalRecovery(0);
   embeddedSlicer_.ClearWaveformRegion(*this);
   ((AppWindow &)w_).InvalidateTextCache();

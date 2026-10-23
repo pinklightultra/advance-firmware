@@ -646,6 +646,9 @@ void ApcMiniMk2Surface::updateProjectMixerFader(int faderIndex, uint8_t value) {
 
   if (variable != nullptr) {
     variable->SetInt(scaledValue);
+    if (AppWindow *appWindow = AppWindow::GetInstance()) {
+      appWindow->SetMixerViewDirty();
+    }
   }
 }
 

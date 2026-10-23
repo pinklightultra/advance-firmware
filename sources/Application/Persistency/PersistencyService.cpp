@@ -86,8 +86,17 @@ PersistencyService::PersistencyService()
 
 PersistencyResult PersistencyService::CreateProject() {
   Trace::Log("APPLICATION", "create new project");
-  // create  project
-  CreateProjectDirs_(UNNAMED_PROJECT_NAME);
+
+  if (Exists(UNNAMED_PROJECT_NAME) && !PurgeUnnamedProject()) {
+    Trace::Error("PERSISTENCYSERVICE: Could not clear unnamed project");
+    return PERSIST_ERROR;
+  }
+
+  if (CreateProjectDirs_(UNNAMED_PROJECT_NAME) != PERSIST_SAVED) {
+    Trace::Error("PERSISTENCYSERVICE: Could not create unnamed project");
+    return PERSIST_ERROR;
+  }
+
   return PersistencyService::GetInstance()->Save(UNNAMED_PROJECT_NAME, "",
                                                  false);
 };

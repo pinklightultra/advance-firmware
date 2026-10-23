@@ -61,6 +61,16 @@ void I_Instrument::Purge() {
   }
 }
 
+void I_Instrument::CloneFrom(I_Instrument &src) {
+  SetName(src.GetUserSetName().c_str());
+  for (auto it = src.Variables()->begin(); it != src.Variables()->end(); ++it) {
+    Variable *dstV = FindVariable((*it)->GetID());
+    if (dstV) {
+      dstV->CopyFrom(**it);
+    }
+  }
+}
+
 void TableSaveState::Reset() {
   position_[0] = 0;
   position_[1] = 0;

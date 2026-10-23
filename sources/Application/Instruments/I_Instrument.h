@@ -162,6 +162,7 @@ public:
   }
 
   virtual void Purge();
+  virtual void CloneFrom(I_Instrument &src);
 
   virtual int GetTable() = 0;
   virtual bool GetTableAutomation() = 0;

@@ -180,3 +180,57 @@ TEST_CASE("Sample assignments survive a project-pool sample reload") {
             ->GetString() == "A.wav");
   CHECK(unrelated->GetSampleIndex() == 0);
 }
+
+TEST_CASE(
+    "Cloning a sample instrument preserves slices and custom name [#491]") {
+  SamplePoolInstallGuard samplePoolGuard;
+  InstrumentBank bank;
+
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE, 0) == 0);
+  auto *sample = static_cast<SampleInstrument *>(bank.GetInstrument(0));
+  REQUIRE(sample != nullptr);
+
+  sample->SetName("LegacySlices");
+  sample->SetSlicePoint(0, 100);
+  sample->SetSlicePoint(1, 500);
+  sample->SetSlicePoint(2, 1200);
+
+  const uint16_t clonedId = bank.Clone(0);
+  REQUIRE(clonedId == 1);
+
+  auto *cloned = static_cast<SampleInstrument *>(bank.GetInstrument(clonedId));
+  REQUIRE(cloned != nullptr);
+  CHECK(cloned->GetUserSetName() == "LegacySlices");
+  CHECK(cloned->GetSlicePoint(0) == 100);
+  CHECK(cloned->GetSlicePoint(1) == 500);
+  CHECK(cloned->GetSlicePoint(2) == 1200);
+  CHECK(cloned->GetSlicePoint(3) == 0);
+}
+
+TEST_CASE("Cloning a sample source instrument preserves slices and custom name "
+          "[#491]") {
+  SamplePoolInstallGuard samplePoolGuard;
+  InstrumentBank bank;
+
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE_SOURCE, 0) == 0);
+  auto *sampleSource =
+      static_cast<SampleSourceInstrument *>(bank.GetInstrument(0));
+  REQUIRE(sampleSource != nullptr);
+
+  sampleSource->SetName("SourceSlices");
+  sampleSource->SetSlicePoint(0, 200);
+  sampleSource->SetSlicePoint(1, 800);
+  sampleSource->SetSlicePoint(2, 1500);
+
+  const uint16_t clonedId = bank.Clone(0);
+  REQUIRE(clonedId == 1);
+
+  auto *cloned =
+      static_cast<SampleSourceInstrument *>(bank.GetInstrument(clonedId));
+  REQUIRE(cloned != nullptr);
+  CHECK(cloned->GetUserSetName() == "SourceSlices");
+  CHECK(cloned->GetSlicePoint(0) == 200);
+  CHECK(cloned->GetSlicePoint(1) == 800);
+  CHECK(cloned->GetSlicePoint(2) == 1500);
+  CHECK(cloned->GetSlicePoint(3) == 0);
+}

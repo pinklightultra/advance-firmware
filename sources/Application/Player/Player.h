@@ -65,6 +65,10 @@ public:
 
   void Clear() { channelMask_ = 0; }
   bool IsActive() const { return channelMask_ != 0; }
+  bool IsChannelActive(uint8_t channel) const {
+    return channel < SONG_CHANNEL_COUNT &&
+           (channelMask_ & static_cast<uint32_t>(1UL << channel)) != 0;
+  }
 
 private:
   uint32_t channelMask_ = 0;
@@ -130,6 +134,7 @@ public:
   bool IsRunning();
   bool IsAuditioning() const;
   bool IsMidiInputPlaying() const;
+  bool IsMidiInputChannelPlaying(uint8_t channel) const;
   bool IsTailPlaying();
   bool GetStopAtEnd() { return stopAtEnd_; }
 

@@ -1731,6 +1731,14 @@ void SampleSourceInstrument::Purge() {
   slicePoints_.fill(0);
 }
 
+void SampleSourceInstrument::CloneFrom(I_Instrument &src) {
+  I_Instrument::CloneFrom(src);
+  auto &sampleSrc = static_cast<SampleSourceInstrument &>(src);
+  slicePoints_ = sampleSrc.slicePoints_;
+  SetChanged();
+  NotifyObservers();
+}
+
 bool SampleSourceInstrument::IsEmpty() {
   Variable *v = FindVariable(FourCC::SampleSourceInstrumentSample);
   return (v->GetInt() == -1);

@@ -494,6 +494,9 @@ void MixerView::OnPlayerUpdate(PlayerEventType eventType, unsigned int tick) {
 }
 
 void MixerView::AnimationUpdate() {
+  if ((AppWindow::GetAnimationFrameCounter() % PICO_CLOCK_HZ) == 0) {
+    SetDirty(true);
+  }
   ScreenView::AnimationUpdate();
   GUITextProperties props;
 

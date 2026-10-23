@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SAMPLE_RENDER_PARAMS_H_
@@ -13,11 +17,13 @@
 #include "Externals/etl/include/etl/vector.h"
 #include "Foundation/Types/Types.h"
 #include "SRPUpdaters.h"
+#include <cstdint>
 
 struct renderParams {
 
   void *sampleBuffer_; // wavdata
   int channelCount_;
+  int32_t sampleFrameCount_;
 
   int krateCount_; // K-rate counter
   float position_; // Position in the sample stream

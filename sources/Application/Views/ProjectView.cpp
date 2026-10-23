@@ -392,6 +392,7 @@ void ProjectView::Reset() {
   lastClock_ = 0;
   lastTick_ = 0;
   saveAsFlag_ = false;
+  nameField_->SetVariable(*project_->FindVariable(FourCC::VarProjectName));
   oldProjName_ = getProjectName();
 }
 

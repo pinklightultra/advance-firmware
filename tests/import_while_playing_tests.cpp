@@ -587,11 +587,29 @@ TEST_CASE("MIDI input has a distinct playback status") {
   CHECK(GetPlaybackStatusSuffix(status)[0] == 'M');
 }
 
-TEST_CASE("Channel visualizer is shown for sequencer or MIDI input playback") {
+TEST_CASE("Channel visualizer uses per-channel playback state") {
   CHECK(ShowsChannelPlaybackVisualizer(true, false, false));
-  CHECK_FALSE(ShowsChannelPlaybackVisualizer(true, true, false));
-  CHECK(ShowsChannelPlaybackVisualizer(false, false, true));
   CHECK_FALSE(ShowsChannelPlaybackVisualizer(false, false, false));
+  CHECK_FALSE(ShowsChannelPlaybackVisualizer(true, true, false));
+  CHECK(ShowsChannelPlaybackVisualizer(false, true, true));
+  CHECK(ShowsChannelPlaybackVisualizer(true, true, true));
+}
+
+TEST_CASE("Direct note state tracks active channels independently") {
+  DirectNoteChannelState state;
+
+  state.StartChannel(1);
+  state.StartChannel(5);
+
+  CHECK(state.IsActive());
+  CHECK(state.IsChannelActive(1));
+  CHECK(state.IsChannelActive(5));
+  CHECK_FALSE(state.IsChannelActive(2));
+
+  state.StopChannel(1);
+
+  CHECK_FALSE(state.IsChannelActive(1));
+  CHECK(state.IsChannelActive(5));
 }
 
 TEST_CASE("Playback status preserves normal, chain, and idle states") {

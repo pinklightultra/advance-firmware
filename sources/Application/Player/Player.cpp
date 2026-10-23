@@ -1777,6 +1777,10 @@ bool Player::IsMidiInputPlaying() const {
   return midiInputNoteState_.IsActive();
 }
 
+bool Player::IsMidiInputChannelPlaying(uint8_t channel) const {
+  return midiInputNoteState_.IsChannelActive(channel);
+}
+
 bool Player::IsTailPlaying() {
   return !isRunning_ && !directNoteAuditionState_.IsActive() &&
          !midiInputNoteState_.IsActive() && mixer_.HasTail();

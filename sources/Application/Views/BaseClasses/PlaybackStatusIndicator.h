@@ -55,10 +55,11 @@ constexpr bool ShowsPlaybackIcon(PlaybackStatusIndicator indicator) {
   return indicator != PlaybackStatusIndicator::None;
 }
 
-constexpr bool ShowsChannelPlaybackVisualizer(bool isRunning,
-                                              bool isSequencerAudition,
-                                              bool isMidiInputPlaying) {
-  return (isRunning && !isSequencerAudition) || isMidiInputPlaying;
+constexpr bool ShowsChannelPlaybackVisualizer(bool isSequencerPlayback,
+                                              bool isMidiInputChannelAssigned,
+                                              bool isMidiInputChannelPlaying) {
+  return (isSequencerPlayback && !isMidiInputChannelAssigned) ||
+         isMidiInputChannelPlaying;
 }
 
 constexpr const char *

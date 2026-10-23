@@ -9,6 +9,7 @@
 #include "doctest/doctest.h"
 
 #define private public
+#include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
 #undef private
@@ -158,6 +159,49 @@ Variable *requireVariable(SampleSourceInstrument &instrument, FourCC id) {
   Variable *variable = instrument.FindVariable(id);
   REQUIRE(variable != nullptr);
   return variable;
+}
+
+Variable *requireLegacyVariable(SampleInstrument &instrument, FourCC id) {
+  Variable *variable = instrument.FindVariable(id);
+  REQUIRE(variable != nullptr);
+  return variable;
+}
+
+void configureLegacyPingPong(SampleInstrument &instrument,
+                             TestSoundSource &source, int32_t endFrame) {
+  instrument.source_ = &source;
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentVolume)
+      ->SetInt(108, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentInterpolation)
+      ->SetInt(1, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentCrush)
+      ->SetInt(16, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentCrushVolume)
+      ->SetInt(255, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentDownsample)
+      ->SetInt(0, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentRootNote)
+      ->SetInt(48, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentFineTune)
+      ->SetInt(133, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentPan)
+      ->SetInt(159, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentFilterCutOff)
+      ->SetInt(143, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentFilterResonance)
+      ->SetInt(64, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentFilterType)
+      ->SetInt(176, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentFilterMode)
+      ->SetInt(0, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentStart)
+      ->SetInt(0, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentLoopMode)
+      ->SetInt(SILM_LOOP_PINGPONG, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentLoopStart)
+      ->SetInt(0, false);
+  requireLegacyVariable(instrument, FourCC::SampleInstrumentEnd)
+      ->SetInt(endFrame, false);
 }
 
 void configureMonoOneShot(SampleSourceInstrument &instrument,
@@ -322,6 +366,27 @@ void fillOscillatorComparisonSamples(std::array<int16_t, 4096> &exactSamples,
 }
 
 } // namespace
+
+TEST_CASE("Legacy Sample pingpong stays within the sample allocation [#502]") {
+  static constexpr int32_t kFrameCount = 600;
+  static constexpr int32_t kRenderFrameCount = 320;
+  std::array<int16_t, kFrameCount + 8> samples{};
+  std::fill(samples.begin() + kFrameCount, samples.end(), 30000);
+
+  TestSamplePool pool;
+  SamplePoolInstallGuard poolGuard(&pool);
+  SampleInstrument instrument;
+  TestSoundSource source(samples.data(), kFrameCount, 44100, 1);
+  configureLegacyPingPong(instrument, source, kFrameCount);
+
+  REQUIRE(instrument.Start(0, NOTE_C3, true));
+
+  std::array<AudioSample, kRenderFrameCount * 2> buffer{};
+  REQUIRE(instrument.Render(0, buffer.data(), kRenderFrameCount, false));
+  for (AudioSample sample : buffer) {
+    CHECK(sample == doctest::Approx(0.0f));
+  }
+}
 
 TEST_CASE("SampleSourceInstrument slice notes start the selected slice range") {
   static constexpr std::array<int16_t, 16> kSamples = {

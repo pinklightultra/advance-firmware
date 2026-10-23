@@ -97,6 +97,7 @@ public:
   virtual void SaveContent(tinyxml2::XMLPrinter *printer) override;
   virtual void RestoreContent(PersistencyDocument *doc) override;
   void Purge();
+  virtual void CloneFrom(I_Instrument &src) override;
 
 protected:
   void updateInstrumentData(bool search);

@@ -51,6 +51,7 @@
 #include "Application/Views/ThemeView.h"
 #include "Application/Views/VoiceView.h"
 #include "BaseClasses/View.h"
+#include "Externals/etl/include/etl/string.h"
 #include "Foundation/Variables/WatchedVariable.h"
 #include "Player/Player.h"
 #include "Services/Midi/MidiService.h"
@@ -666,8 +667,16 @@ AppWindow *AppWindow::Create(GUICreateWindowParams &params,
   return w;
 };
 
+AppWindow *AppWindow::GetInstance() { return instance; }
+
 void AppWindow::SetDirty() {
   if (_currentView) {
+    _currentView->SetDirty(true);
+  }
+};
+
+void AppWindow::SetMixerViewDirty() {
+  if (views_ && _currentView == &views_->mixerView) {
     _currentView->SetDirty(true);
   }
 };
@@ -775,7 +784,6 @@ void AppWindow::onUpdate(bool redraw) {
 void AppWindow::AnimationUpdate() {
   // Increment the animation frame counter
   animationFrameCounter_++;
-  char failedProjectName_[MAX_PROJECT_NAME_LENGTH + 1] = {0};
 
   if (awaitingProjectLoadAck_) {
     if (_mask != 0) {
@@ -784,24 +792,25 @@ void AppWindow::AnimationUpdate() {
                    UNNAMED_PROJECT_NAME);
       loadProject_ = true;
       awaitingProjectLoadAck_ = false;
-      Trace::Error("Falling back to untitled after failed load of '%s'",
-                   failedProjectName_);
+      Trace::Error("Falling back to untitled after failed project load");
     }
     return;
   }
 
   if (loadProject_) {
-    LoadProjectResult loadResult = LoadProject(projectName_);
+    const etl::string<MAX_PROJECT_NAME_LENGTH> projectNameToLoad(projectName_);
+    const bool loadingUnnamedProject =
+        strcmp(projectNameToLoad.c_str(), UNNAMED_PROJECT_NAME) == 0;
+    LoadProjectResult loadResult = LoadProject(projectNameToLoad.c_str());
     loadProject_ = false;
     if (loadResult == LoadProjectResult::LOAD_FAILED) {
-      npf_snprintf(failedProjectName_, sizeof(failedProjectName_), "%s",
-                   projectName_);
+      createProjectOnLoad_ = loadingUnnamedProject;
       Status::SetMultiLine(
           "Invalid Project:\n%s\n  \nPress any key\nto continue...",
-          failedProjectName_);
+          projectNameToLoad.c_str());
       Trace::Error(
           "Failed to load project '%s'. Waiting for key press to load untitled",
-          failedProjectName_);
+          projectNameToLoad.c_str());
       awaitingProjectLoadAck_ = true;
       return;
     }

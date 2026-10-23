@@ -36,6 +36,7 @@ protected:
 
 public:
   static AppWindow *Create(GUICreateWindowParams &, const char *projectName);
+  static AppWindow *GetInstance();
 
   static GUIColor GetColor(ColorDefinition cd);
 
@@ -51,6 +52,7 @@ public:
   void InvalidateTextCache();
 
   void SetDirty();
+  void SetMixerViewDirty();
   void PowerDown();
   void UpdateColorsFromConfig();
   void SetSdCardPresent(bool present);
