@@ -9,16 +9,12 @@
 add_library(application_mixer
   MixBus.cpp
   MixerService.cpp
-  OutputEffectSlot.cpp
-  ReverbOutputEffect.cpp
-)
-
-set_source_files_properties(ReverbOutputEffect.cpp PROPERTIES
-  COMPILE_OPTIONS "$<$<CONFIG:Release>:-O3>"
 )
 
 target_link_libraries(application_mixer PUBLIC
   application_audio
+  application_effects
+  application_model
   system_console
   platform
 )

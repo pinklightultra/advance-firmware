@@ -230,3 +230,25 @@ uint8_t Song::GetMidiDefaultProgram(int midiChannel) const {
 uint8_t Song::GetMidiDefaultInstrumentIndex(int midiChannel) const {
   return GetMidiDefaultProgram(midiChannel);
 }
+
+Song::InstrumentUsageMap Song::GetInstrumentUsage() const {
+  InstrumentUsageMap used{};
+  for (const uint8_t phraseInstrument : phrase_.instr_) {
+    if (phraseInstrument < MAX_INSTRUMENT_COUNT) {
+      used[phraseInstrument] = true;
+    }
+  }
+
+  for (uint8_t songChannel = 0; songChannel < SONG_CHANNEL_COUNT;
+       songChannel++) {
+    const uint8_t midiInputChannel = GetMidiInputChannel(songChannel);
+    if (midiInputChannel == MIDI_INPUT_CHANNEL_NONE) {
+      continue;
+    }
+
+    const uint8_t midiChannel = static_cast<uint8_t>(midiInputChannel - 1U);
+    used[GetMidiDefaultInstrumentIndex(midiChannel)] = true;
+  }
+
+  return used;
+}

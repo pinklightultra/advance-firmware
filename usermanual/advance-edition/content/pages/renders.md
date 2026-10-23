@@ -2,6 +2,16 @@
 title:  Renders and Stems
 template: page
 ---
+<!--
+SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+
+Copyright (c) 2026 xiphonics, inc.
+
+Inherited BSD-licensed material remains BSD-3-Clause.
+New original contributions by xiphonics, inc. are GPL-3.0-only.
+Previously granted BSD permissions are preserved. See LICENSING.md.
+-->
+
 
 ![rendering dialog](image/rendering-dialog-small.png)
 
@@ -54,7 +64,7 @@ To render stems:
 3. Make sure your song is not currently playing
 4. Select the "Stems" option under "Render:"
 5. The rendering process will begin, and a progress dialog will display the current render time
-6. The selected portion of the song will play through once while rendering, producing one stereo file per channel
+6. The selected portion of the song will play through once while rendering, producing one stereo file per channel plus separate delay and reverb files
 7. You can press "Cancel" at any time to stop the rendering process
 8. When the selection has completed playing through, the rendering will automatically finish
 
@@ -64,6 +74,7 @@ The rendered audio files are saved to your device's sdcard int he `/renders` top
 
 - Mixdown files are named `(projectname)-mixdown.wav`
 - Stem files are named `(projectname)-channel(number).wav`
+- Delay and reverb stem files are named `(projectname)-delay.wav` and `(projectname)-reverb.wav`
 
 ## Render Quality
 

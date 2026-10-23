@@ -14,7 +14,7 @@
 #ifndef _MIXER_VIEW_H_
 #define _MIXER_VIEW_H_
 
-#include "Application/Mixer/OutputEffectConstants.h"
+#include "Application/Effects/OutputEffectConstants.h"
 #include "BaseClasses/UIIntVarField.h"
 #include "FieldView.h"
 #include "ViewData.h"
@@ -44,11 +44,9 @@ protected:
   void togglePlay();
 
 private:
-#if SHOW_FX_SCREEN
-  static constexpr int MixerEffectRowCount = OUTPUT_EFFECT_COUNT;
-#else
-  static constexpr int MixerEffectRowCount = 0;
-#endif
+  // FX1 and FX2 remain reserved but are hidden until they have effects.
+  static constexpr int MixerEffectRowCount =
+      OUTPUT_EFFECT_COUNT - kOutputEffectDelayIndex;
   static constexpr int MixerRowCount = 1 + MixerEffectRowCount;
   static constexpr int MixerStripCount = SONG_CHANNEL_COUNT + 1;
 
@@ -61,14 +59,9 @@ private:
   void syncFocusToSelection();
 
   etl::vector<UIIntVarField, SONG_CHANNEL_COUNT> channelVolumeFields_;
-#if SHOW_FX_SCREEN
   etl::vector<UIIntVarField, SONG_CHANNEL_COUNT * OUTPUT_EFFECT_COUNT>
       channelSendFields_;
   etl::vector<UIIntVarField, OUTPUT_EFFECT_COUNT> fxReturnFields_;
-#else
-  etl::vector<UIIntVarField, 1> channelSendFields_;
-  etl::vector<UIIntVarField, 1> fxReturnFields_;
-#endif
   etl::vector<UIIntVarField, 1> masterVolumeField_;
   UIField *fieldGrid_[MixerStripCount][MixerRowCount];
   int selectedStrip_;

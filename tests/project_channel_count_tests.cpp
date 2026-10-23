@@ -8,6 +8,9 @@
 
 #include "Application/Model/Project.h"
 #include "Application/Persistency/PersistencyDocument.h"
+#include "Application/Player/Player.h"
+#include "Services/Midi/MidiInDevice.h"
+#include "Services/Midi/MidiService.h"
 #include "boundary_test_utils.h"
 #include "doctest/doctest.h"
 
@@ -15,7 +18,42 @@
 #include <cstdio>
 #include <string>
 
+void SetPlayerInstrumentInUseForTest(const I_Instrument *instrument);
+void SetMidiInputProgramForTest(int midiChannel, int program);
+
 namespace {
+class TestMidiInDevice : public MidiInDevice {
+public:
+  TestMidiInDevice() : MidiInDevice("test") {}
+
+  bool Start() override { return MidiInDevice::Start(); }
+  void Stop() override { MidiInDevice::Stop(); }
+  void poll() override {}
+
+  void EmitMessage(MidiMessage &message) { onDriverMessage(message); }
+
+protected:
+  bool initDriver() override { return true; }
+  void closeDriver() override {}
+  bool startDriver() override { return true; }
+  void stopDriver() override {}
+  MidiInputSource getInputSource() const override {
+    return MidiInputSource::Trs;
+  }
+};
+
+class ScopedMidiServiceInstallation {
+public:
+  explicit ScopedMidiServiceInstallation(MidiService &service) {
+    MidiService::Install(&service);
+  }
+
+  ~ScopedMidiServiceInstallation() {
+    MidiService::Install(nullptr);
+    SetMidiInputProgramForTest(-1, -1);
+  }
+};
+
 bool loadProjectNode(PersistencyDocument &doc, const char *path) {
   if (!doc.Load(path)) {
     return false;
@@ -161,6 +199,7 @@ std::string saveSongContentToXml(Song &song) {
   printer.CloseElement();
   return file.contents();
 }
+
 } // namespace
 
 TEST_CASE("Project ignores the obsolete audio mode parameter") {
@@ -186,6 +225,129 @@ TEST_CASE("Project save omits the obsolete audio mode parameter") {
   Project project("Demo");
   const std::string xml = saveProjectContentToXml(project);
   CHECK(xml.find("projectaudiomode") == std::string::npos);
+}
+
+TEST_CASE("Project saves mixer volumes with new parameter names") {
+  Project project("Demo");
+  const std::string xml = saveProjectContentToXml(project);
+
+  CHECK(xml.find("NAME=\"mastervolume\" VALUE=\"255\"") != std::string::npos);
+  CHECK(xml.find("NAME=\"channel1volume\" VALUE=\"255\"") != std::string::npos);
+  CHECK(xml.find("NAME=\"master\"") == std::string::npos);
+  CHECK(xml.find("NAME=\"channel1vol\"") == std::string::npos);
+}
+
+TEST_CASE("Project converts legacy mixer volumes to 00-FF") {
+  BoundaryTestEnvironment env;
+  env.fs.AddFile("/legacy-mixer-volumes.xml",
+                 "<PICOTRACKER><PROJECT VERSION=\"legacy\">\n"
+                 "<PARAMETER NAME=\"master\" VALUE=\"50\"/>"
+                 "<PARAMETER NAME=\"channel1vol\" VALUE=\"0\"/>"
+                 "<PARAMETER NAME=\"channel2vol\" VALUE=\"33\"/>"
+                 "<PARAMETER NAME=\"channel8vol\" VALUE=\"99\"/>"
+                 "</PROJECT></PICOTRACKER>");
+
+  Project project("Demo");
+  PersistencyDocument doc;
+  REQUIRE(loadProjectNode(doc, "/legacy-mixer-volumes.xml"));
+  project.RestoreContent(&doc);
+
+  CHECK(project.GetMasterVolume() == 128);
+  CHECK(project.GetChannelVolume(0) == 0);
+  CHECK(project.GetChannelVolume(1) == 85);
+  CHECK(project.GetChannelVolume(7) == 255);
+
+  const std::string xml = saveProjectContentToXml(project);
+  CHECK(xml.find("NAME=\"mastervolume\" VALUE=\"128\"") != std::string::npos);
+  CHECK(xml.find("NAME=\"channel2volume\" VALUE=\"85\"") != std::string::npos);
+  CHECK(xml.find("NAME=\"master\"") == std::string::npos);
+  CHECK(xml.find("NAME=\"channel2vol\"") == std::string::npos);
+}
+
+TEST_CASE("New mixer volumes take precedence over legacy values") {
+  BoundaryTestEnvironment env;
+  env.fs.AddFile("/mixed-mixer-volumes.xml",
+                 "<PICOTRACKER><PROJECT VERSION=\"mixed\">\n"
+                 "<PARAMETER NAME=\"mastervolume\" VALUE=\"42\"/>"
+                 "<PARAMETER NAME=\"master\" VALUE=\"100\"/>"
+                 "<PARAMETER NAME=\"channel1volume\" VALUE=\"200\"/>"
+                 "<PARAMETER NAME=\"channel1vol\" VALUE=\"99\"/>"
+                 "</PROJECT></PICOTRACKER>");
+
+  Project project("Demo");
+  PersistencyDocument doc;
+  REQUIRE(loadProjectNode(doc, "/mixed-mixer-volumes.xml"));
+  project.RestoreContent(&doc);
+
+  CHECK(project.GetMasterVolume() == 42);
+  CHECK(project.GetChannelVolume(0) == 200);
+}
+
+TEST_CASE("Project persists fixed output effect parameters") {
+  Project source("Demo");
+  Variable *delayTime = source.FindVariable(FourCC::VarDelayTime);
+  Variable *reverbPreDelay = source.FindVariable(FourCC::VarReverbPreDelay);
+  Variable *reverbDiffuse = source.FindVariable(FourCC::VarReverbDiffuse);
+  Variable *reverbDecay = source.FindVariable(FourCC::VarReverbDecay);
+  Variable *reverbPreDiffusion1 =
+      source.FindVariable(FourCC::VarReverbPreDiffusion1);
+  REQUIRE(delayTime != nullptr);
+  REQUIRE(reverbPreDelay != nullptr);
+  REQUIRE(reverbDiffuse != nullptr);
+  REQUIRE(reverbDecay != nullptr);
+  REQUIRE(reverbPreDiffusion1 != nullptr);
+  delayTime->SetInt(12);
+  reverbPreDelay->SetInt(0x24);
+  reverbDiffuse->SetInt(0x5A);
+  reverbDecay->SetInt(0x80);
+  reverbPreDiffusion1->SetInt(900);
+
+  const std::string xml =
+      "<PICOTRACKER>" + saveProjectContentToXml(source) + "</PICOTRACKER>";
+  BoundaryTestEnvironment env;
+  env.fs.AddFile("/fixed-output-effects.xml", xml.c_str());
+
+  Project restored("Restored");
+  PersistencyDocument doc;
+  REQUIRE(loadProjectNode(doc, "/fixed-output-effects.xml"));
+  restored.RestoreContent(&doc);
+
+  delayTime = restored.FindVariable(FourCC::VarDelayTime);
+  reverbPreDelay = restored.FindVariable(FourCC::VarReverbPreDelay);
+  reverbDiffuse = restored.FindVariable(FourCC::VarReverbDiffuse);
+  reverbDecay = restored.FindVariable(FourCC::VarReverbDecay);
+  reverbPreDiffusion1 = restored.FindVariable(FourCC::VarReverbPreDiffusion1);
+  REQUIRE(delayTime != nullptr);
+  REQUIRE(reverbPreDelay != nullptr);
+  REQUIRE(reverbDiffuse != nullptr);
+  REQUIRE(reverbDecay != nullptr);
+  REQUIRE(reverbPreDiffusion1 != nullptr);
+  CHECK(delayTime->GetInt() == 12);
+  CHECK(reverbPreDelay->GetInt() == 0x24);
+  CHECK(reverbDiffuse->GetInt() == 0x5A);
+  CHECK(reverbDecay->GetInt() == 0x80);
+  CHECK(reverbPreDiffusion1->GetInt() == 900);
+}
+
+TEST_CASE("Project persists reverb hold in the decay parameter") {
+  Project source("Demo");
+  Variable *decay = source.FindVariable(FourCC::VarReverbDecay);
+  REQUIRE(decay != nullptr);
+  decay->SetInt(DattorroReverbOutputEffect::MaximumParameterValue);
+
+  const std::string xml =
+      "<PICOTRACKER>" + saveProjectContentToXml(source) + "</PICOTRACKER>";
+  BoundaryTestEnvironment env;
+  env.fs.AddFile("/reverb-hold.xml", xml.c_str());
+
+  Project restored("Restored");
+  PersistencyDocument doc;
+  REQUIRE(loadProjectNode(doc, "/reverb-hold.xml"));
+  restored.RestoreContent(&doc);
+
+  decay = restored.FindVariable(FourCC::VarReverbDecay);
+  REQUIRE(decay != nullptr);
+  CHECK(decay->GetInt() == DattorroReverbOutputEffect::MaximumParameterValue);
 }
 
 TEST_CASE("Song save and restore preserves eight-channel row packing") {
@@ -268,4 +430,122 @@ TEST_CASE("Song MIDI default programs reset and reject invalid programs") {
 
   song.SetMidiDefaultProgram(4, MIDI_INPUT_MAX_PROGRAM + 1);
   CHECK(song.GetMidiDefaultProgram(4) == MIDI_INPUT_DEFAULT_PROGRAM);
+}
+
+TEST_CASE("Song usage map includes instruments used by phrases") {
+  Song song;
+  constexpr uint8_t instrumentId = 0x2A;
+
+  auto used = song.GetInstrumentUsage();
+  CHECK_FALSE(used[instrumentId]);
+
+  song.phrase_.instr_[PHRASE_COUNT * STEPS_PER_PHRASE - 1] = instrumentId;
+
+  used = song.GetInstrumentUsage();
+  CHECK(used[instrumentId]);
+}
+
+TEST_CASE("Song usage map only includes assigned MIDI input defaults") {
+  Song song;
+  constexpr uint8_t midiChannel = 4;
+  constexpr uint8_t instrumentId = 0x2A;
+
+  song.SetMidiDefaultProgram(midiChannel, instrumentId);
+  auto used = song.GetInstrumentUsage();
+  CHECK_FALSE(used[instrumentId]);
+
+  song.SetMidiInputChannel(3, midiChannel + 1U);
+  used = song.GetInstrumentUsage();
+  CHECK(used[instrumentId]);
+
+  song.SetMidiInputChannel(3, MIDI_INPUT_CHANNEL_NONE);
+  used = song.GetInstrumentUsage();
+  CHECK_FALSE(used[instrumentId]);
+}
+
+TEST_CASE("NONE instruments can always change type during playback") {
+  Project project("Demo");
+  constexpr uint8_t instrumentId = 7;
+
+  CHECK(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+
+  project.song_.phrase_.instr_[0] = instrumentId;
+  CHECK(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+}
+
+TEST_CASE("Non-NONE instruments can only change while unused") {
+  Project project("Demo");
+  constexpr uint8_t instrumentId = 7;
+  InstrumentBank *bank = project.GetInstrumentBank();
+  REQUIRE(bank->GetNextAndAssignID(IT_MIDI, instrumentId) == instrumentId);
+
+  CHECK(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+
+  project.song_.phrase_.instr_[0] = instrumentId;
+  CHECK_FALSE(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+
+  project.song_.phrase_.instr_[0] = EMPTY_SONG_VALUE;
+  constexpr uint8_t midiChannel = 4;
+  project.song_.SetMidiDefaultProgram(midiChannel, instrumentId);
+  project.song_.SetMidiInputChannel(3, midiChannel + 1U);
+  CHECK_FALSE(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+}
+
+TEST_CASE("Live MIDI programs block instrument type changes") {
+  Project project("Demo");
+  constexpr uint8_t instrumentId = 7;
+  constexpr uint8_t midiChannel = 4;
+  InstrumentBank *bank = project.GetInstrumentBank();
+  REQUIRE(bank->GetNextAndAssignID(IT_MIDI, instrumentId) == instrumentId);
+  project.song_.SetMidiInputChannel(3, midiChannel + 1U);
+
+  TestMidiInDevice input;
+  REQUIRE(input.Start());
+  MidiService midiService;
+  ScopedMidiServiceInstallation installMidiService(midiService);
+
+  MidiMessage programChange(MidiMessage::MIDI_PROGRAM_CHANGE + midiChannel,
+                            instrumentId);
+  input.EmitMessage(programChange);
+  SetMidiInputProgramForTest(midiChannel,
+                             input.GetProgramForChannel(midiChannel));
+
+  CHECK_FALSE(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+
+  input.SetProgramForChannel(midiChannel, instrumentId + 1U);
+  SetMidiInputProgramForTest(midiChannel,
+                             input.GetProgramForChannel(midiChannel));
+  CHECK(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+}
+
+TEST_CASE("Active voices block instrument type changes") {
+  Project project("Demo");
+  constexpr uint8_t instrumentId = 7;
+  InstrumentBank *bank = project.GetInstrumentBank();
+  REQUIRE(bank->GetNextAndAssignID(IT_MIDI, instrumentId) == instrumentId);
+  I_Instrument *instrument = bank->GetInstrument(instrumentId);
+
+  Player::GetInstance();
+  SetPlayerInstrumentInUseForTest(instrument);
+  CHECK_FALSE(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+
+  SetPlayerInstrumentInUseForTest(nullptr);
+  CHECK(project.CanChangeInstrumentTypeWhilePlaying(instrumentId));
+}
+
+TEST_CASE("Removing unused instruments preserves MIDI input instruments") {
+  Project project("Demo");
+  constexpr uint8_t instrumentId = 7;
+  constexpr uint8_t midiChannel = 4;
+  InstrumentBank *bank = project.GetInstrumentBank();
+  REQUIRE(bank->GetNextAndAssignID(IT_MIDI, instrumentId) == instrumentId);
+
+  project.song_.SetMidiDefaultProgram(midiChannel, instrumentId);
+  project.song_.SetMidiInputChannel(3, midiChannel + 1U);
+  project.PurgeInstruments();
+  CHECK(bank->GetInstrument(instrumentId)->GetType() == IT_MIDI);
+
+  project.song_.SetMidiInputChannel(3, MIDI_INPUT_CHANNEL_NONE);
+  project.PurgeInstruments();
+  CHECK(bank->GetInstrument(instrumentId)->GetType() == IT_NONE);
 }

@@ -93,6 +93,8 @@ public:
 
   int currentGroove_; // .Current edited groove
 
+  int currentFXSlot_; // .Current edited master effect slot
+
   // Player Settings
 
   PlayMode playMode_;

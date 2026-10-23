@@ -21,10 +21,11 @@ public:
 
   bool Init() override { return true; }
 
-  bool Start(int channel, unsigned char note, bool retrigger = true) override {
+  bool Start(int channel, unsigned char note,
+             InstrumentStartMode mode = InstrumentStartMode::NewNote) override {
     (void)channel;
     (void)note;
-    (void)retrigger;
+    (void)mode;
     return true;
   }
 

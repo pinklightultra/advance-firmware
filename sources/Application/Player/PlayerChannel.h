@@ -25,7 +25,8 @@ public:
   PlayerChannel(int index);
   virtual ~PlayerChannel();
   virtual bool Render(AudioSample *buffer, int samplecount);
-  void StartInstrument(I_Instrument *instr, unsigned char note, bool retrigger);
+  void StartInstrument(I_Instrument *instr, unsigned char note,
+                       InstrumentStartMode mode);
   void ReleaseChannel();
   void ReleaseInstrument();
   void StopInstrument();

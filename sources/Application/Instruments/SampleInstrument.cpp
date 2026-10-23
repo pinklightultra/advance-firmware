@@ -362,7 +362,7 @@ bool SampleInstrument::Init() {
 void SampleInstrument::OnStart() { tableState_.Reset(); };
 
 bool SampleInstrument::Start(int channel, unsigned char midinote,
-                             bool cleanstart) {
+                             InstrumentStartMode mode) {
   // Look if we're dirty & need to update this instrument's data
 
   if (dirty_) {
@@ -377,7 +377,8 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
   // Get Rendering params for current voice & fill init data
 
   renderParams *rp = renderParams_ + channel;
-  const bool resumePosition = (!cleanstart) && (!rp->finished_);
+  const bool resumePosition =
+      mode == InstrumentStartMode::TiedNote && !rp->finished_;
 
   rp->midiNote_ = midinote;
 
@@ -554,7 +555,7 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
 
   // If we do a clean start (there was a instr number on the line)
 
-  if (cleanstart) {
+  if (mode == InstrumentStartMode::NewNote) {
 
     // Clear retrigger data
 

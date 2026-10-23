@@ -56,7 +56,8 @@ void AudioDriver::Stop() {
 }
 
 PICOTRACKER_FAST_CODE("audio_driver_add_buffer")
-void AudioDriver::AddBuffer(short *buffer, int samplecount) {
+void AudioDriver::AddBuffer(short *buffer, int samplecount,
+                            bool silenceOutput) {
   int len = samplecount * 2 * sizeof(short);
 
   if (!isPlaying_)
@@ -73,7 +74,11 @@ void AudioDriver::AddBuffer(short *buffer, int samplecount) {
     return;
   }
 
-  memcpy(pool_[poolQueuePosition_].buffer_, (char *)buffer, len);
+  if (silenceOutput) {
+    memset(pool_[poolQueuePosition_].buffer_, 0, len);
+  } else {
+    memcpy(pool_[poolQueuePosition_].buffer_, (char *)buffer, len);
+  }
   pool_[poolQueuePosition_].size_ = len;
   pool_[poolQueuePosition_].empty_ = false;
   poolQueuePosition_ = (poolQueuePosition_ + 1) % SOUND_BUFFER_COUNT;

@@ -38,6 +38,7 @@ public:
   void SetName(etl::string<12> name) { name_ = name; };
   void SetRenderProfileStats(DWTProfileStats *stats) { profileStats_ = stats; }
   void SetProfileMixMath(bool enabled) { profileMixMath_ = enabled; }
+  static DWTProfileStats *GetMixProfileStats();
 
   stereosample GetMixerLevels() { return peakMixerLevel_; }
   void AddModule(AudioModule &module);

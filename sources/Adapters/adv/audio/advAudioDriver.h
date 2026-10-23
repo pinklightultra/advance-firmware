@@ -1,14 +1,19 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef _ADVAUDIO_DRIVER_H_
 #define _ADVAUDIO_DRIVER_H_
 
 #include "Foundation/T_Singleton.h"
+#include "Services/Audio/AudioConstants.h"
 #include "Services/Audio/AudioDriver.h"
 
 #define MINI_BLANK_SIZE 256 // 16-bit samples
@@ -24,7 +29,7 @@ public:
   virtual bool StartDriver();
   virtual void StopDriver();
   virtual int GetPlayedBufferPercentage();
-  virtual int GetSampleRate() { return 44100; };
+  virtual int GetSampleRate() { return kAudioSampleRateHz; };
   virtual bool Interlaced() { return true; };
 
   // Additional
@@ -32,7 +37,6 @@ public:
   void SetVolume(int v);
   int GetVolume();
   virtual double GetStreamTime();
-  void OnAudioActive(bool active) override;
   static void IRQHandler();
   static void BufferNeeded();
 

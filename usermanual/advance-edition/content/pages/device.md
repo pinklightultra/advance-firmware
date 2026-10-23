@@ -93,6 +93,10 @@ See the [Theme Settings](theme.html) chapter for more details.
 
 First copy the new firmware file you want to install to the top level directory of your sdcard using your computer and then insert it back into your Advance.
 
+{% callout type=note %}
+The sdcard can hold a maximum of 10 firmware `.bin` files in the top level directory. If you keep more than 10 firmware files there, delete the ones you no longer need before updating.
+{% endcallout %}
+
 Then go to the Device Screen and select the `Update firmware` menu item. You will be prompted to confirm that you want to reboot and lose any unsaved changes. This will reboot the Advance into its "bootloader" mode.
 
 If the sequencer is currently playing, the update will be blocked with a "Not while playing" message — stop playback first.
@@ -105,4 +109,6 @@ You can now use the arrow buttons to select the `.bin` firmware file to install 
 
 Once installation of the new firmware is completed, you can use the arrow keys to move the selection to the `Reboot` on screen option to reboot into normal mode and be running the newly installed firmware.
 
-**NOTE:** If for some reason you cannot boot into the normal mode on your Advance, you can also boot the Advance into its _bootloader_ mode by holding down the boot button, accessible through a small hole below the sdcard slot as you keep pressing the power button for approximately 8 seconds to reboot into the bootloader mode.
+{% callout type=note %}
+If for some reason you cannot boot your Advance into normal mode — for example after a crash — you can force it into _bootloader_ mode: press and hold the **boot button**, accessible through the small hole below the sdcard slot, while you press and keep holding the **power button** for approximately **8 seconds**. The Advance will then reboot into the bootloader mode.
+{% endcallout %}

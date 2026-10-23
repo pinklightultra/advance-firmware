@@ -45,7 +45,8 @@ public:
   virtual ~SampleInstrument();
   // I_Instrument implementation
   virtual bool Init();
-  virtual bool Start(int channel, unsigned char note, bool trigger = true);
+  virtual bool Start(int channel, unsigned char note,
+                     InstrumentStartMode mode = InstrumentStartMode::NewNote);
   virtual void Stop(int channel);
   virtual bool Render(int channel, AudioSample *buffer, int size,
                       bool updateTick) override;
@@ -108,9 +109,6 @@ private:
   etl::vector<Variable *, 38> variables_;
 
   SoundSource *source_;
-#if !defined(HOST_TEST)
-  __attribute__((section(".DTCMRAM")))
-#endif
   static struct renderParams renderParams_[SONG_CHANNEL_COUNT];
   bool running_;
   bool dirty_;

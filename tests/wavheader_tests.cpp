@@ -273,6 +273,19 @@ TEST_CASE("ReadHeader accepts supported sample rate for import resampling") {
   CHECK(result->sampleRate == 48000);
 }
 
+TEST_CASE("ReadHeader accepts 384 kHz 64-bit float for import resampling") {
+  BoundaryTestEnvironment env;
+  SetImportResampler(2);
+  ByteWriter wav = BuildExtensibleWav(1, 384000, 64, 8, 3);
+  TestFile file(wav.data, wav.size);
+
+  auto result = WavHeaderWriter::ReadHeader(&file);
+  REQUIRE(result.has_value());
+  CHECK(result->sampleRate == 384000);
+  CHECK(result->audioFormat == 3);
+  CHECK(result->bitsPerSample == 64);
+}
+
 TEST_CASE("ReadHeader rejects unsupported audio format") {
   ByteWriter wav = BuildPcmWav(2, 44100, 16, 4);
   uint16_t format = 2;

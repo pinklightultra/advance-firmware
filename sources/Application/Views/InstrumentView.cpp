@@ -343,6 +343,11 @@ void InstrumentView::onInstrumentChange() {
 };
 
 void InstrumentView::refreshInstrumentFields() {
+  const bool restoreSampleFieldFocus =
+      !sampleIndexField_.empty() && GetFocus() == &sampleIndexField_.back();
+  const bool restoreFM6PresetFieldFocus =
+      !fm6ActionField_.empty() && GetFocus() == &fm6ActionField_.back();
+
   // Dynamic fields are destroyed and recreated below.  Drop the focus pointer
   // first so FieldView cannot dereference a field after its container is
   // cleared.
@@ -473,6 +478,12 @@ void InstrumentView::refreshInstrumentFields() {
       SetFocus(field);
       break;
     }
+  }
+
+  if (restoreSampleFieldFocus && !sampleIndexField_.empty()) {
+    SetFocus(&sampleIndexField_.back());
+  } else if (restoreFM6PresetFieldFocus && !fm6ActionField_.empty()) {
+    SetFocus(&fm6ActionField_.back());
   }
 
   // observer all var fields so we can mark the instrument as modified
@@ -607,25 +618,25 @@ void InstrumentView::fillSIDParameters() {
   addStatic(labelX, voiceHeaderY + 2, "Tune:");
   for (int voice = 0; voice < SIDInstrument::VoiceCount; voice++) {
     Variable *variable = instrument->FindVariable(pitchOffsetIDs[voice]);
-    pitchOffsetVarField_.emplace_back(
-        GUIPoint(voiceX[voice] - 2, voiceHeaderY + 2), *variable);
+    pitchOffsetVarField_.emplace_back(GUIPoint(voiceX[voice], voiceHeaderY + 2),
+                                      *variable);
     fieldList_.insert(fieldList_.end(), &pitchOffsetVarField_.back());
   }
-  addVoiceRow(voiceHeaderY + 3, "Wdth:", pulseWidthIDs, " %3.3X  ", 0, 0xFFF,
-              -1, 1, 0x40);
-  addVoiceRow(voiceHeaderY + 4, "Sync:", syncIDs, "%-6s", 0, 1, 0, 1, 1);
-  addVoiceRow(voiceHeaderY + 5, "Ring:", ringIDs, "%-6s", 0, 1, 0, 1, 1);
+  addVoiceRow(voiceHeaderY + 3, "Wdth:", pulseWidthIDs, "%3.3X", 0, 0xFFF, 0, 1,
+              0x40);
+  addVoiceRow(voiceHeaderY + 4, "Sync:", syncIDs, "%s", 0, 1, 0, 1, 1);
+  addVoiceRow(voiceHeaderY + 5, "Ring:", ringIDs, "%s", 0, 1, 0, 1, 1);
 
   const int adsrY = voiceHeaderY + 6;
   addStatic(labelX, adsrY, "ADSR:");
   for (int voice = 0; voice < SIDInstrument::VoiceCount; voice++) {
     Variable *variable = instrument->FindVariable(adsrIDs[voice]);
     bigHexVarField_.emplace_back(UIBigHexVarField(
-        GUIPoint(voiceX[voice] - 1, adsrY), *variable, 4, " %4.4X ", 0, 0xFFFF,
-        16, false, UIBigHexEditMode::IndependentDigits));
+        GUIPoint(voiceX[voice], adsrY), *variable, 4, "%4.4X", 0, 0xFFFF, 16,
+        false, UIBigHexEditMode::IndependentDigits));
     fieldList_.insert(fieldList_.end(), &bigHexVarField_.back());
   }
-  addVoiceRow(voiceHeaderY + 7, "Filt:", filterOnIDs, "%-6s", 0, 1, 0, 1, 1);
+  addVoiceRow(voiceHeaderY + 7, "Filt:", filterOnIDs, "%s", 0, 1, 0, 1, 1);
 
   const int chipHeaderY = voiceHeaderY + 8;
   addSectionHeader(5, chipHeaderY, "Filter");
@@ -1281,7 +1292,7 @@ void InstrumentView::fillStarLoomParameters() {
   for (size_t oscillator = 0; oscillator < 2; ++oscillator) {
     Variable *variable = instrument->FindVariable(pitchOffsetIDs[oscillator]);
     pitchOffsetVarField_.emplace_back(
-        GUIPoint(oscillatorX[oscillator] - 1, voiceHeaderY + 4), *variable);
+        GUIPoint(oscillatorX[oscillator], voiceHeaderY + 4), *variable);
     fieldList_.insert(fieldList_.end(), &pitchOffsetVarField_.back());
   }
 
@@ -1522,6 +1533,9 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
       if (instrumentModified) {
         MessageBox *mb = MessageBox::Create(*this, "Reset all settings?",
                                             MBBF_YES | MBBF_NO);
+        // The waveform is drawn directly into the framebuffer, so remove it
+        // before the dialog is drawn over it.
+        clearEmbeddedSlicerWaveform();
         pendingPurgeInstrument_ = instr;
         DoModal(mb,
                 ModalViewCallback::create<
@@ -1636,7 +1650,12 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
         if (!samplelibExists) {
           MessageBox *mb =
               MessageBox::Create(*this, "Can't access the samplelib", MBBF_OK);
-          DoModal(mb);
+          clearEmbeddedSlicerWaveform();
+          DoModal(
+              mb,
+              ModalViewCallback::create<InstrumentView,
+                                        &InstrumentView::onSimpleModalDismiss>(
+                  *this));
         } else {
           ImportView::SetSourceViewType(VT_INSTRUMENT);
 
@@ -1953,9 +1972,12 @@ void InstrumentView::Update(Observable &o, I_ObservableData *data) {
     // Revert the UI field back to the current type until confirmed
     instrumentType_.SetInt(displayIndexFromInstrumentType(currentType), false);
 
-    // Check if player is running
     Player *player = Player::GetInstance();
-    if (!player->IsRunning()) {
+    const bool changeBlockedByPlayback =
+        player->IsRunning() &&
+        !project_->CanChangeInstrumentTypeWhilePlaying(
+            static_cast<uint8_t>(viewData_->currentInstrumentID_));
+    if (!changeBlockedByPlayback) {
       // Check if any instrument field has been modified
       bool instrumentModified = checkInstrumentModified();
       if (instrumentModified) {
@@ -2054,7 +2076,11 @@ void InstrumentView::Update(Observable &o, I_ObservableData *data) {
     if (sampleIndex < 0) {
       MessageBox *mb =
           MessageBox::Create(*this, "Assign a sample first", MBBF_OK);
-      DoModal(mb);
+      clearEmbeddedSlicerWaveform();
+      DoModal(mb,
+              ModalViewCallback::create<InstrumentView,
+                                        &InstrumentView::onSimpleModalDismiss>(
+                  *this));
       break;
     }
     ViewType vt = VT_SAMPLE_SLICES;
@@ -2158,7 +2184,11 @@ void InstrumentView::handleInstrumentExport() {
     // Show error message if no name is set
     MessageBox *mb = MessageBox::Create(*this, "Please set a name",
                                         "before exporting", MBBF_OK);
-    DoModal(mb);
+    clearEmbeddedSlicerWaveform();
+    DoModal(mb,
+            ModalViewCallback::create<InstrumentView,
+                                      &InstrumentView::onSimpleModalDismiss>(
+                *this));
   } else {
     // Export the instrument using the name field
     PersistencyResult result =
@@ -2173,6 +2203,7 @@ void InstrumentView::handleInstrumentExport() {
 
       exportInstrument_ = instrument;
       exportName_ = name;
+      clearEmbeddedSlicerWaveform();
       DoModal(
           mb,
           ModalViewCallback::create<InstrumentView,
@@ -2189,7 +2220,11 @@ void InstrumentView::handleInstrumentExport() {
                                 : "Failed to export instrument";
       // Show export result message
       MessageBox *mb = MessageBox::Create(*this, message, MBBF_OK);
-      DoModal(mb);
+      clearEmbeddedSlicerWaveform();
+      DoModal(mb,
+              ModalViewCallback::create<InstrumentView,
+                                        &InstrumentView::onSimpleModalDismiss>(
+                  *this));
     }
   }
 }
@@ -2209,10 +2244,24 @@ void InstrumentView::onConfirmResetInstrument(View &, ModalView &dialog) {
   pendingPurgeInstrument_ = nullptr;
 
   if (dialog.GetReturnCode() != MBL_YES || !instr) {
+    // The waveform was cleared to make room for the dialog, so schedule its
+    // redraw even when the reset is declined.
+    if (isEmbeddedSlicerActive()) {
+      embeddedSlicer_.MarkModalRecovery(2);
+    }
+    isDirty_ = true;
     return;
   }
 
   instr->Purge();
+  updateSliceCountLabel(sliceCountLabel_, instr);
+
+  // A purge drops the sample, so the slicer must forget the waveform it
+  // rendered for it and redraw the graph area empty.
+  setupEmbeddedSlicer();
+  if (isEmbeddedSlicerActive()) {
+    embeddedSlicer_.MarkModalRecovery(2);
+  }
   isDirty_ = true;
 }
 
@@ -2267,13 +2316,13 @@ void InstrumentView::onConfirmExportOverwrite(View &, ModalView &dialog) {
   exportInstrument_ = nullptr;
   exportName_.clear();
 
-  if (dialog.GetReturnCode() != MBL_YES || !instrument) {
-    return;
+  if (dialog.GetReturnCode() == MBL_YES && instrument) {
+    PersistencyService::GetInstance()->ExportInstrument(instrument, name, true);
+    Trace::Log("INSTRUMENTVIEW", "Instrument '%s' exported with overwrite",
+               name.c_str());
   }
 
-  PersistencyService::GetInstance()->ExportInstrument(instrument, name, true);
-  Trace::Log("INSTRUMENTVIEW", "Instrument '%s' exported with overwrite",
-             name.c_str());
+  onSimpleModalDismiss(*this, dialog);
 }
 
 void InstrumentView::onSimpleModalDismiss(View &, ModalView &) {

@@ -45,7 +45,7 @@ public:
   void OnPlayerStop();
 
   void StartInstrument(int channel, I_Instrument *instrument,
-                       unsigned char note, bool retrigger);
+                       unsigned char note, InstrumentStartMode mode);
   void ReleaseChannel(int channel);
   void ReleaseInstrument(int channel);
   void StopInstrument(int channel);

@@ -211,8 +211,8 @@ void AppWindow::defineColor(FourCC colorCode, GUIColor &color,
 }
 
 AppWindow::AppWindow(I_GUIWindowImp &imp, const char *projectName)
-    : GUIWindow(imp), project_(projectName), viewData_(&project_),
-      views_(nullptr), _currentView(nullptr) {
+    : GUIWindow(imp), originalProjectName_(projectName), project_(projectName),
+      viewData_(&project_), views_(nullptr), _currentView(nullptr) {
   registerAppWindowProfiles();
 
   instance = this;
@@ -790,6 +790,7 @@ void AppWindow::AnimationUpdate() {
       FileSystem::GetInstance()->DeleteFile("/.current");
       npf_snprintf(projectName_, sizeof(projectName_), "%s",
                    UNNAMED_PROJECT_NAME);
+      originalProjectName_ = UNNAMED_PROJECT_NAME;
       loadProject_ = true;
       awaitingProjectLoadAck_ = false;
       Trace::Error("Falling back to untitled after failed project load");
@@ -1061,6 +1062,7 @@ void AppWindow::Update(Observable &o, I_ObservableData *d) {
     const char *name = static_cast<const char *>(ve->GetData());
     if (name && name[0] != '\0') {
       npf_snprintf(projectName_, sizeof(projectName_), "%s", name);
+      originalProjectName_ = name;
       createProjectOnLoad_ = false;
       loadProject_ = true;
     }
@@ -1069,6 +1071,7 @@ void AppWindow::Update(Observable &o, I_ObservableData *d) {
   case VET_NEW_PROJECT: {
     npf_snprintf(projectName_, sizeof(projectName_), "%s",
                  UNNAMED_PROJECT_NAME);
+    originalProjectName_ = UNNAMED_PROJECT_NAME;
     createProjectOnLoad_ = true;
     loadProject_ = true;
     break;
@@ -1190,8 +1193,27 @@ bool AppWindow::AutoSave() {
 }
 
 void AppWindow::PowerDown() {
+  // Device and Theme defer config writes until focus is lost. Powering down
+  // from either view bypasses normal navigation, so flush their pending
+  // changes before saving the project and cutting power.
+  View *viewToRestore = nullptr;
+  ViewType viewTypeToRestore = VT_DEVICE;
+  if (views_ != nullptr && (_currentView == &views_->deviceView ||
+                            _currentView == &views_->themeView)) {
+    viewToRestore = _currentView;
+    viewTypeToRestore =
+        (_currentView == &views_->deviceView) ? VT_DEVICE : VT_THEME;
+    _currentView->LooseFocus();
+  }
+
   AutoSaveBeforePowerDown();
   System::GetInstance()->PowerDown();
+
+  // PowerDown normally cuts power and never returns. If it does return, keep
+  // the displayed view active so settings can still be changed and saved.
+  if (viewToRestore != nullptr) {
+    viewToRestore->SetFocus(viewTypeToRestore);
+  }
 }
 
 void AppWindow::AutoSaveBeforePowerDown() {

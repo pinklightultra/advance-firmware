@@ -2,6 +2,16 @@
 title: Project Pool
 template: page
 ---
+<!--
+SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+
+Copyright (c) 2026 xiphonics, inc.
+
+Inherited BSD-licensed material remains BSD-3-Clause.
+New original contributions by xiphonics, inc. are GPL-3.0-only.
+Previously granted BSD permissions are preserved. See LICENSING.md.
+-->
+
 
 ![screen capture of project pool screen](image/projectpool-screen-small.png)
 
@@ -12,6 +22,7 @@ The Project Pool is the sample browser for the samples that belong to the curren
 ## Accessing the Project Pool
 
 1. Open the Sample Browser from the Project screen (select **Sample Pool** and press <span class="minikeys">ENTER</span>).
+2. Press <span class="minikeys">NAV</span> + <span class="minikeys">EDIT</span> to switch between the Project Pool and the sample library/filesystem browser.
 
 ## Using the Project Pool
 

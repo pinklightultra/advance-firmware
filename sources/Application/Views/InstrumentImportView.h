@@ -40,7 +40,7 @@ public:
 
 protected:
   void setCurrentFolder(FileSystem *fs, const char *name);
-  void warpToNextInstrument(bool goUp);
+  void warpToNextInstrument(bool goUp, bool page = false);
   void importInstrument(const char *name);
   // Opens a validated .syx bank as a virtual directory of its 32 patches.
   void enterSysexFile(const char *path);

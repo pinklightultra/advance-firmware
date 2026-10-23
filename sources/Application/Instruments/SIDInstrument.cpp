@@ -220,10 +220,11 @@ void SIDInstrument::OnStart() {
       ((byte) & 0x08 ? '1' : '0'), ((byte) & 0x04 ? '1' : '0'),                \
       ((byte) & 0x02 ? '1' : '0'), ((byte) & 0x01 ? '1' : '0')
 
-bool SIDInstrument::Start(int c, unsigned char note, bool retrigger) {
-  Trace::Debug("Retrigger: %i", retrigger);
+bool SIDInstrument::Start(int c, unsigned char note,
+                          InstrumentStartMode startMode) {
+  Trace::Debug("Retrigger: %i", startMode != InstrumentStartMode::TiedNote);
   SIDRenderParams &renderParams = renderParams_[c];
-  if (retrigger) {
+  if (startMode != InstrumentStartMode::TiedNote) {
     renderParams.Reset();
   }
   AdvanceSID &sid = renderParams.sid_;
@@ -253,7 +254,9 @@ bool SIDInstrument::Start(int c, unsigned char note, bool retrigger) {
       // Switching models resets the chip state, so its first note must open
       // the gate even when the caller requested a legato start.
       const int gate =
-          retrigger || modelChanged ? 1 : (sid.Register[channelOffset + 4] & 1);
+          startMode != InstrumentStartMode::TiedNote || modelChanged
+              ? 1
+              : (sid.Register[channelOffset + 4] & 1);
       sid.Register[channelOffset] = frequency & 0xFF;
       sid.Register[channelOffset + 1] = frequency >> 8;
       sid.Register[channelOffset + 4] = settings.waveform_.GetInt() << 4 |

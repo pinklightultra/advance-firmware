@@ -14,6 +14,7 @@
 #include "UIController.h"
 
 #include "Application/Player/Player.h"
+#include <algorithm>
 
 UIController::UIController(){};
 
@@ -34,6 +35,7 @@ void UIController::UnMuteAll() {
   for (int i = 0; i < channelCount; i++) {
     player->SetChannelMute(i, false);
   };
+  std::fill_n(soloMask_, SONG_CHANNEL_COUNT, false);
 };
 
 void UIController::ToggleMute(int from, int to) {

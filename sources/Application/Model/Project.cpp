@@ -16,9 +16,9 @@
 #include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
-#include "Application/Mixer/OutputEffectDefinitions.h"
 #include "Application/Model/FirmwareVersion.h"
 #include "Application/Persistency/PersistencyService.h"
+#include "Application/Player/Player.h"
 #include "Application/Player/SyncMaster.h"
 #include "Foundation/Variables/WatchedVariable.h"
 #include "Groove.h"
@@ -31,20 +31,44 @@
 
 #include <math.h>
 
-#define DEFAULT_CHANNEL_VOLUME 99
 #define DEFAULT_CHANNEL_FX_SEND 0
-#define DEFAULT_FX_RETURN_VOLUME 99
-#define DEFAULT_REVERB_INPUT_GAIN 20
-#define DEFAULT_REVERB_TIME 35
-#define DEFAULT_REVERB_DIFFUSION 62
-#define DEFAULT_REVERB_LOWPASS 69
+#define DEFAULT_FX_RETURN_VOLUME OutputEffectReturnMaximum
+#define DEFAULT_FX_ROUTING_SEND 0
 #define DEFAULT_PREVIEW_VOLUME 60
-
-#define DEFAULT_MASTER_VOLUME 100
 
 #define DATA_UNUSED_VALUE 0xFF
 
 namespace {
+constexpr uint8_t DefaultMixerVolume = Project::MixerVolumeMaximum;
+constexpr int32_t LegacyChannelVolumeMaximum = 99;
+constexpr int32_t LegacyMasterVolumeMaximum = 100;
+constexpr const char *LegacyMasterVolumeName = "master";
+constexpr const char *LegacyChannelVolumeNames[SONG_CHANNEL_COUNT] = {
+    "channel1vol", "channel2vol", "channel3vol", "channel4vol",
+    "channel5vol", "channel6vol", "channel7vol", "channel8vol"};
+
+int32_t GetChannelVolumeIndex(FourCC id) {
+  if (id < FourCC::VarChannel1Volume || id > FourCC::VarChannel8Volume) {
+    return -1;
+  }
+  return static_cast<int32_t>(id.get_value() - FourCC::VarChannel1Volume);
+}
+
+int32_t GetLegacyChannelVolumeIndex(const char *name) {
+  for (int32_t channel = 0; channel < SONG_CHANNEL_COUNT; ++channel) {
+    if (!strcmp(name, LegacyChannelVolumeNames[channel])) {
+      return channel;
+    }
+  }
+  return -1;
+}
+
+int32_t ScaleLegacyMixerVolume(int32_t value, int32_t legacyMaximum) {
+  const int32_t clamped = std::clamp(value, int32_t(0), legacyMaximum);
+  return (clamped * Project::MixerVolumeMaximum + legacyMaximum / 2) /
+         legacyMaximum;
+}
+
 bool IsMixRoutingVariable(FourCC id) {
   if (id == FourCC::VarMasterVolume) {
     return true;
@@ -52,13 +76,13 @@ bool IsMixRoutingVariable(FourCC id) {
   if (id >= FourCC::VarChannel1Volume && id <= FourCC::VarChannel8Volume) {
     return true;
   }
-  if (id >= FourCC::VarChannel1FX1Send && id <= FourCC::VarChannel8FX3Send) {
+  if (id >= FourCC::VarChannel1FX1Send && id <= FourCC::VarChannel8FX4Send) {
     return true;
   }
-  if (id >= FourCC::VarFX1Volume && id <= FourCC::VarFX3Type) {
+  if (id >= FourCC::VarFX1Volume && id <= FourCC::VarFX3ToFX4Send) {
     return true;
   }
-  return id >= FourCC::VarReverbInputGain && id <= FourCC::VarReverbLowPass;
+  return false;
 }
 
 } // namespace
@@ -66,15 +90,15 @@ bool IsMixRoutingVariable(FourCC id) {
 Project::Project(const char *name)
     : Persistent("PROJECT"), VariableContainer(&variables_), song_(),
       tempoNudge_(0), tempo_(FourCC::VarTempo, DEFAULT_TEMPO),
-      masterVolume_(FourCC::VarMasterVolume, DEFAULT_MASTER_VOLUME),
-      channelVolume1_(FourCC::VarChannel1Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume2_(FourCC::VarChannel2Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume3_(FourCC::VarChannel3Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume4_(FourCC::VarChannel4Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume5_(FourCC::VarChannel5Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume6_(FourCC::VarChannel6Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume7_(FourCC::VarChannel7Volume, DEFAULT_CHANNEL_VOLUME),
-      channelVolume8_(FourCC::VarChannel8Volume, DEFAULT_CHANNEL_VOLUME),
+      masterVolume_(FourCC::VarMasterVolume, DefaultMixerVolume),
+      channelVolume1_(FourCC::VarChannel1Volume, DefaultMixerVolume),
+      channelVolume2_(FourCC::VarChannel2Volume, DefaultMixerVolume),
+      channelVolume3_(FourCC::VarChannel3Volume, DefaultMixerVolume),
+      channelVolume4_(FourCC::VarChannel4Volume, DefaultMixerVolume),
+      channelVolume5_(FourCC::VarChannel5Volume, DefaultMixerVolume),
+      channelVolume6_(FourCC::VarChannel6Volume, DefaultMixerVolume),
+      channelVolume7_(FourCC::VarChannel7Volume, DefaultMixerVolume),
+      channelVolume8_(FourCC::VarChannel8Volume, DefaultMixerVolume),
       channel1FX1Send_(FourCC::VarChannel1FX1Send, DEFAULT_CHANNEL_FX_SEND),
       channel2FX1Send_(FourCC::VarChannel2FX1Send, DEFAULT_CHANNEL_FX_SEND),
       channel3FX1Send_(FourCC::VarChannel3FX1Send, DEFAULT_CHANNEL_FX_SEND),
@@ -99,26 +123,35 @@ Project::Project(const char *name)
       channel6FX3Send_(FourCC::VarChannel6FX3Send, DEFAULT_CHANNEL_FX_SEND),
       channel7FX3Send_(FourCC::VarChannel7FX3Send, DEFAULT_CHANNEL_FX_SEND),
       channel8FX3Send_(FourCC::VarChannel8FX3Send, DEFAULT_CHANNEL_FX_SEND),
+      channel1FX4Send_(FourCC::VarChannel1FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel2FX4Send_(FourCC::VarChannel2FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel3FX4Send_(FourCC::VarChannel3FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel4FX4Send_(FourCC::VarChannel4FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel5FX4Send_(FourCC::VarChannel5FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel6FX4Send_(FourCC::VarChannel6FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel7FX4Send_(FourCC::VarChannel7FX4Send, DEFAULT_CHANNEL_FX_SEND),
+      channel8FX4Send_(FourCC::VarChannel8FX4Send, DEFAULT_CHANNEL_FX_SEND),
       fx1Volume_(FourCC::VarFX1Volume, DEFAULT_FX_RETURN_VOLUME),
       fx2Volume_(FourCC::VarFX2Volume, DEFAULT_FX_RETURN_VOLUME),
       fx3Volume_(FourCC::VarFX3Volume, DEFAULT_FX_RETURN_VOLUME),
-      fx1Type_(FourCC::VarFX1Type, GetOutputEffectNames(),
-               kOutputEffectTypeCount, kDefaultOutputEffectTypes[0]),
-      fx2Type_(FourCC::VarFX2Type, GetOutputEffectNames(),
-               kOutputEffectTypeCount, kDefaultOutputEffectTypes[1]),
-      fx3Type_(FourCC::VarFX3Type, GetOutputEffectNames(),
-               kOutputEffectTypeCount, kDefaultOutputEffectTypes[2]),
-      reverbInputGain_(FourCC::VarReverbInputGain, DEFAULT_REVERB_INPUT_GAIN),
-      reverbTime_(FourCC::VarReverbTime, DEFAULT_REVERB_TIME),
-      reverbDiffusion_(FourCC::VarReverbDiffusion,
-                       DEFAULT_REVERB_DIFFUSION),
-      reverbLowPass_(FourCC::VarReverbLowPass, DEFAULT_REVERB_LOWPASS),
+      fx4Volume_(FourCC::VarFX4Volume, DEFAULT_FX_RETURN_VOLUME),
+      fx1ToFX2Send_(FourCC::VarFX1ToFX2Send, DEFAULT_FX_ROUTING_SEND),
+      fx1ToFX3Send_(FourCC::VarFX1ToFX3Send, DEFAULT_FX_ROUTING_SEND),
+      fx1ToFX4Send_(FourCC::VarFX1ToFX4Send, DEFAULT_FX_ROUTING_SEND),
+      fx2ToFX3Send_(FourCC::VarFX2ToFX3Send, DEFAULT_FX_ROUTING_SEND),
+      fx2ToFX4Send_(FourCC::VarFX2ToFX4Send, DEFAULT_FX_ROUTING_SEND),
+      fx3ToFX4Send_(FourCC::VarFX3ToFX4Send, DEFAULT_FX_ROUTING_SEND),
       wrap_(FourCC::VarWrap, false), transpose_(FourCC::VarTranspose, 0),
       scale_(FourCC::VarScale, scaleNames, numScales, 0),
       scaleRoot_(FourCC::VarScaleRoot, noteNames, 12, 0),
       projectName_(FourCC::VarProjectName, name),
       previewVolume_(FourCC::VarPreviewVolume, DEFAULT_PREVIEW_VOLUME),
       mixRoutingDirty_(true) {
+
+  outputEffects_[kOutputEffectSlot1Index] = &fx1Effect_;
+  outputEffects_[kOutputEffectSlot2Index] = &fx2Effect_;
+  outputEffects_[kOutputEffectDelayIndex] = &delayEffect_;
+  outputEffects_[kOutputEffectReverbIndex] = &reverbEffect_;
 
   this->variables_.insert(variables_.end(), &tempo_);
   this->variables_.insert(variables_.end(), &masterVolume_);
@@ -156,16 +189,24 @@ Project::Project(const char *name)
   this->variables_.insert(variables_.end(), &channel6FX3Send_);
   this->variables_.insert(variables_.end(), &channel7FX3Send_);
   this->variables_.insert(variables_.end(), &channel8FX3Send_);
+  this->variables_.insert(variables_.end(), &channel1FX4Send_);
+  this->variables_.insert(variables_.end(), &channel2FX4Send_);
+  this->variables_.insert(variables_.end(), &channel3FX4Send_);
+  this->variables_.insert(variables_.end(), &channel4FX4Send_);
+  this->variables_.insert(variables_.end(), &channel5FX4Send_);
+  this->variables_.insert(variables_.end(), &channel6FX4Send_);
+  this->variables_.insert(variables_.end(), &channel7FX4Send_);
+  this->variables_.insert(variables_.end(), &channel8FX4Send_);
   this->variables_.insert(variables_.end(), &fx1Volume_);
   this->variables_.insert(variables_.end(), &fx2Volume_);
   this->variables_.insert(variables_.end(), &fx3Volume_);
-  this->variables_.insert(variables_.end(), &fx1Type_);
-  this->variables_.insert(variables_.end(), &fx2Type_);
-  this->variables_.insert(variables_.end(), &fx3Type_);
-  this->variables_.insert(variables_.end(), &reverbInputGain_);
-  this->variables_.insert(variables_.end(), &reverbTime_);
-  this->variables_.insert(variables_.end(), &reverbDiffusion_);
-  this->variables_.insert(variables_.end(), &reverbLowPass_);
+  this->variables_.insert(variables_.end(), &fx4Volume_);
+  this->variables_.insert(variables_.end(), &fx1ToFX2Send_);
+  this->variables_.insert(variables_.end(), &fx1ToFX3Send_);
+  this->variables_.insert(variables_.end(), &fx1ToFX4Send_);
+  this->variables_.insert(variables_.end(), &fx2ToFX3Send_);
+  this->variables_.insert(variables_.end(), &fx2ToFX4Send_);
+  this->variables_.insert(variables_.end(), &fx3ToFX4Send_);
 
   this->variables_.insert(variables_.end(), &wrap_);
   this->variables_.insert(variables_.end(), &transpose_);
@@ -175,51 +216,31 @@ Project::Project(const char *name)
   scaleRoot_.SetInt(0); // Default to C (0)
   this->variables_.insert(variables_.end(), &projectName_);
   this->variables_.insert(variables_.end(), &previewVolume_);
+  for (Variable *parameter : delayEffect_.GetVariables()) {
+    this->variables_.insert(variables_.end(), parameter);
+  }
+  for (Variable *parameter : reverbEffect_.GetVariables()) {
+    this->variables_.insert(variables_.end(), parameter);
+  }
 
   WatchedVariable *mixRoutingVars[] = {
-      &masterVolume_,
-      &channelVolume1_,
-      &channelVolume2_,
-      &channelVolume3_,
-      &channelVolume4_,
-      &channelVolume5_,
-      &channelVolume6_,
-      &channelVolume7_,
-      &channelVolume8_,
-      &channel1FX1Send_,
-      &channel2FX1Send_,
-      &channel3FX1Send_,
-      &channel4FX1Send_,
-      &channel5FX1Send_,
-      &channel6FX1Send_,
-      &channel7FX1Send_,
-      &channel8FX1Send_,
-      &channel1FX2Send_,
-      &channel2FX2Send_,
-      &channel3FX2Send_,
-      &channel4FX2Send_,
-      &channel5FX2Send_,
-      &channel6FX2Send_,
-      &channel7FX2Send_,
-      &channel8FX2Send_,
-      &channel1FX3Send_,
-      &channel2FX3Send_,
-      &channel3FX3Send_,
-      &channel4FX3Send_,
-      &channel5FX3Send_,
-      &channel6FX3Send_,
-      &channel7FX3Send_,
-      &channel8FX3Send_,
-      &fx1Volume_,
-      &fx2Volume_,
-      &fx3Volume_,
-      &fx1Type_,
-      &fx2Type_,
-      &fx3Type_,
-      &reverbInputGain_,
-      &reverbTime_,
-      &reverbDiffusion_,
-      &reverbLowPass_,
+      &masterVolume_,    &channelVolume1_,  &channelVolume2_,
+      &channelVolume3_,  &channelVolume4_,  &channelVolume5_,
+      &channelVolume6_,  &channelVolume7_,  &channelVolume8_,
+      &channel1FX1Send_, &channel2FX1Send_, &channel3FX1Send_,
+      &channel4FX1Send_, &channel5FX1Send_, &channel6FX1Send_,
+      &channel7FX1Send_, &channel8FX1Send_, &channel1FX2Send_,
+      &channel2FX2Send_, &channel3FX2Send_, &channel4FX2Send_,
+      &channel5FX2Send_, &channel6FX2Send_, &channel7FX2Send_,
+      &channel8FX2Send_, &channel1FX3Send_, &channel2FX3Send_,
+      &channel3FX3Send_, &channel4FX3Send_, &channel5FX3Send_,
+      &channel6FX3Send_, &channel7FX3Send_, &channel8FX3Send_,
+      &channel1FX4Send_, &channel2FX4Send_, &channel3FX4Send_,
+      &channel4FX4Send_, &channel5FX4Send_, &channel6FX4Send_,
+      &channel7FX4Send_, &channel8FX4Send_, &fx1Volume_,
+      &fx2Volume_,       &fx3Volume_,       &fx4Volume_,
+      &fx1ToFX2Send_,    &fx1ToFX3Send_,    &fx1ToFX4Send_,
+      &fx2ToFX3Send_,    &fx2ToFX4Send_,    &fx3ToFX4Send_,
   };
   for (WatchedVariable *var : mixRoutingVars) {
     var->AddObserver(*this);
@@ -251,6 +272,10 @@ void Project::Load(const char *name) {
 
   song_.Reset();
   instrumentBank_.Reset();
+  delayEffect_.ResetParameters();
+  delayEffect_.Reset();
+  reverbEffect_.ResetParameters();
+  reverbEffect_.Reset();
   Groove::GetInstance()->Clear();
 
   tempo_.Reset();
@@ -287,16 +312,24 @@ void Project::Load(const char *name) {
   channel6FX3Send_.Reset();
   channel7FX3Send_.Reset();
   channel8FX3Send_.Reset();
+  channel1FX4Send_.Reset();
+  channel2FX4Send_.Reset();
+  channel3FX4Send_.Reset();
+  channel4FX4Send_.Reset();
+  channel5FX4Send_.Reset();
+  channel6FX4Send_.Reset();
+  channel7FX4Send_.Reset();
+  channel8FX4Send_.Reset();
   fx1Volume_.Reset();
   fx2Volume_.Reset();
   fx3Volume_.Reset();
-  fx1Type_.Reset();
-  fx2Type_.Reset();
-  fx3Type_.Reset();
-  reverbInputGain_.Reset();
-  reverbTime_.Reset();
-  reverbDiffusion_.Reset();
-  reverbLowPass_.Reset();
+  fx4Volume_.Reset();
+  fx1ToFX2Send_.Reset();
+  fx1ToFX3Send_.Reset();
+  fx1ToFX4Send_.Reset();
+  fx2ToFX3Send_.Reset();
+  fx2ToFX4Send_.Reset();
+  fx3ToFX4Send_.Reset();
   wrap_.Reset();
   transpose_.Reset();
   scale_.Reset();
@@ -432,6 +465,28 @@ int Project::GetChannelFXSend(int channel, int fx) {
       NAssert(false);
       return 0;
     }
+  case 3:
+    switch (channel) {
+    case 0:
+      return channel1FX4Send_.GetInt();
+    case 1:
+      return channel2FX4Send_.GetInt();
+    case 2:
+      return channel3FX4Send_.GetInt();
+    case 3:
+      return channel4FX4Send_.GetInt();
+    case 4:
+      return channel5FX4Send_.GetInt();
+    case 5:
+      return channel6FX4Send_.GetInt();
+    case 6:
+      return channel7FX4Send_.GetInt();
+    case 7:
+      return channel8FX4Send_.GetInt();
+    default:
+      NAssert(false);
+      return 0;
+    }
   default:
     NAssert(false);
     return 0;
@@ -446,33 +501,51 @@ int Project::GetFXReturnVolume(int fx) {
     return fx2Volume_.GetInt();
   case 2:
     return fx3Volume_.GetInt();
+  case 3:
+    return fx4Volume_.GetInt();
   default:
     NAssert(false);
     return 0;
   }
 }
 
-int Project::GetFXSlotType(int fx) {
-  switch (fx) {
-  case 0:
-    return fx1Type_.GetInt();
-  case 1:
-    return fx2Type_.GetInt();
-  case 2:
-    return fx3Type_.GetInt();
-  default:
-    NAssert(false);
-    return kDefaultOutputEffectTypeIndex;
+int Project::GetFXSend(int sourceFx, int destinationFx) {
+  if (sourceFx == 0 && destinationFx == 1) {
+    return fx1ToFX2Send_.GetInt();
   }
+  if (sourceFx == 0 && destinationFx == 2) {
+    return fx1ToFX3Send_.GetInt();
+  }
+  if (sourceFx == 0 && destinationFx == 3) {
+    return fx1ToFX4Send_.GetInt();
+  }
+  if (sourceFx == 1 && destinationFx == 2) {
+    return fx2ToFX3Send_.GetInt();
+  }
+  if (sourceFx == 1 && destinationFx == 3) {
+    return fx2ToFX4Send_.GetInt();
+  }
+  if (sourceFx == 2 && destinationFx == 3) {
+    return fx3ToFX4Send_.GetInt();
+  }
+
+  NAssert(false);
+  return 0;
 }
 
-int Project::GetReverbInputGain() { return reverbInputGain_.GetInt(); }
+OutputEffect *Project::GetOutputEffect(int fx) {
+  if (fx < 0 || fx >= OUTPUT_EFFECT_COUNT) {
+    return nullptr;
+  }
+  return outputEffects_[fx];
+}
 
-int Project::GetReverbTime() { return reverbTime_.GetInt(); }
-
-int Project::GetReverbDiffusion() { return reverbDiffusion_.GetInt(); }
-
-int Project::GetReverbLowPass() { return reverbLowPass_.GetInt(); }
+const OutputEffect *Project::GetOutputEffect(int fx) const {
+  if (fx < 0 || fx >= OUTPUT_EFFECT_COUNT) {
+    return nullptr;
+  }
+  return outputEffects_[fx];
+}
 
 bool Project::IsMixRoutingDirty() const { return mixRoutingDirty_; }
 
@@ -526,6 +599,44 @@ bool Project::Wrap() {
 };
 
 InstrumentBank *Project::GetInstrumentBank() { return &instrumentBank_; };
+
+// Changing a NONE slot is always safe. Other instrument types can only be
+// replaced during playback when no project data, live input, or mixer voice
+// refers to them.
+bool Project::CanChangeInstrumentTypeWhilePlaying(uint8_t instrumentId) const {
+  if (instrumentId >= MAX_INSTRUMENT_COUNT) {
+    return false;
+  }
+
+  I_Instrument *instrument = instrumentBank_.InstrumentsList()[instrumentId];
+  if (instrument == nullptr) {
+    return false;
+  }
+  if (instrument->GetType() == IT_NONE) {
+    return true;
+  }
+
+  const Song::InstrumentUsageMap used = song_.GetInstrumentUsage();
+  if (used[instrumentId]) {
+    return false;
+  }
+
+  MidiService *midiService = MidiService::GetInstance();
+  if (midiService != nullptr) {
+    for (uint8_t songChannel = 0; songChannel < SONG_CHANNEL_COUNT;
+         songChannel++) {
+      const uint8_t midiInputChannel = song_.GetMidiInputChannel(songChannel);
+      if (midiInputChannel != MIDI_INPUT_CHANNEL_NONE &&
+          midiService->IsInputProgramSelected(midiInputChannel - 1U,
+                                              instrumentId)) {
+        return false;
+      }
+    }
+  }
+
+  Player *player = Player::GetExistingInstance();
+  return player == nullptr || !player->IsInstrumentInUse(instrument);
+}
 
 void Project::Update(Observable &o, I_ObservableData *d) {
   if (!d) {
@@ -666,24 +777,13 @@ void Project::PurgeSamples() {
 }
 
 void Project::PurgeInstruments() {
-
-  bool used[MAX_INSTRUMENT_COUNT] = {false};
-  unsigned char *data = song_.phrase_.instr_;
-
-  for (int i = 0; i < PHRASE_COUNT; i++) {
-    for (int j = 0; j < 16; j++) {
-      if (*data != DATA_UNUSED_VALUE) {
-        NAssert(*data < MAX_INSTRUMENT_COUNT);
-        used[*data] = true;
-      }
-      data++;
-    }
-  }
+  const Song::InstrumentUsageMap used = song_.GetInstrumentUsage();
 
   InstrumentBank *bank = GetInstrumentBank();
-  for (int i = 0; i < MAX_INSTRUMENT_COUNT; i++) {
-    if (!used[i]) {
-      I_Instrument *instrument = bank->GetInstrument(i);
+  for (uint8_t instrumentId = 0; instrumentId < MAX_INSTRUMENT_COUNT;
+       instrumentId++) {
+    if (!used[instrumentId]) {
+      I_Instrument *instrument = bank->GetInstrument(instrumentId);
       if (instrument->GetType() == IT_SAMPLE) {
         SampleInstrument *sampleInstrument =
             static_cast<SampleInstrument *>(instrument);
@@ -694,13 +794,20 @@ void Project::PurgeInstruments() {
         sampleSourceInstrument->AssignSample(-1);
       }
       // we dont reorder indexes on release so safe to call inside this loop
-      bank->releaseInstrument(i);
-      Trace::Debug("Set unused instrument slot [%d] to NONE", i);
+      bank->releaseInstrument(instrumentId);
+      Trace::Debug("Set unused instrument slot [%d] to NONE", instrumentId);
     }
   }
 };
 
 void Project::RestoreContent(PersistencyDocument *doc) {
+  bool newMasterVolumeFound = false;
+  bool legacyMasterVolumeFound = false;
+  int32_t legacyMasterVolume = 0;
+  bool newChannelVolumesFound[SONG_CHANNEL_COUNT] = {};
+  bool legacyChannelVolumesFound[SONG_CHANNEL_COUNT] = {};
+  int32_t legacyChannelVolumes[SONG_CHANNEL_COUNT] = {};
+
   bool attr = doc->NextAttribute();
   while (attr) {
     attr = doc->NextAttribute();
@@ -710,8 +817,8 @@ void Project::RestoreContent(PersistencyDocument *doc) {
   bool elem = doc->FirstChild();
   while (elem) {
     bool attr = doc->NextAttribute();
-    char name[MAX_VARIABLE_STRING_LENGTH + 1];
-    char value[MAX_VARIABLE_STRING_LENGTH + 1];
+    char name[MAX_VARIABLE_STRING_LENGTH + 1] = {};
+    char value[MAX_VARIABLE_STRING_LENGTH + 1] = {};
     while (attr) {
       if (!strcmp(doc->attrname_, "NAME")) {
         strcpy(name, doc->attrval_);
@@ -726,11 +833,43 @@ void Project::RestoreContent(PersistencyDocument *doc) {
     if (v && v->GetID() != FourCC::VarProjectName) {
       if (v->GetID() == FourCC::VarTempo) {
         v->SetInt(std::clamp(atoi(value), int(MIN_TEMPO), int(MAX_TEMPO)));
+      } else if (v->GetID() == FourCC::VarMasterVolume) {
+        newMasterVolumeFound = true;
+        v->SetInt(
+            std::clamp(atoi(value), 0, static_cast<int>(MixerVolumeMaximum)));
+      } else if (const int32_t channel = GetChannelVolumeIndex(v->GetID());
+                 channel >= 0) {
+        newChannelVolumesFound[channel] = true;
+        v->SetInt(
+            std::clamp(atoi(value), 0, static_cast<int>(MixerVolumeMaximum)));
       } else {
         v->SetString(value);
       }
+    } else if (!strcmp(name, LegacyMasterVolumeName)) {
+      legacyMasterVolumeFound = true;
+      legacyMasterVolume = atoi(value);
+    } else if (const int32_t channel = GetLegacyChannelVolumeIndex(name);
+               channel >= 0) {
+      legacyChannelVolumesFound[channel] = true;
+      legacyChannelVolumes[channel] = atoi(value);
     }
     elem = doc->NextSibling();
+  }
+
+  if (!newMasterVolumeFound && legacyMasterVolumeFound) {
+    masterVolume_.SetInt(
+        ScaleLegacyMixerVolume(legacyMasterVolume, LegacyMasterVolumeMaximum));
+  }
+
+  WatchedVariable *channelVolumes[SONG_CHANNEL_COUNT] = {
+      &channelVolume1_, &channelVolume2_, &channelVolume3_, &channelVolume4_,
+      &channelVolume5_, &channelVolume6_, &channelVolume7_, &channelVolume8_};
+  for (int32_t channel = 0; channel < SONG_CHANNEL_COUNT; ++channel) {
+    if (!newChannelVolumesFound[channel] &&
+        legacyChannelVolumesFound[channel]) {
+      channelVolumes[channel]->SetInt(ScaleLegacyMixerVolume(
+          legacyChannelVolumes[channel], LegacyChannelVolumeMaximum));
+    }
   }
   mixRoutingDirty_ = true;
 }
@@ -745,8 +884,7 @@ void Project::SaveContent(tinyxml2::XMLPrinter *printer) {
   auto it = variables_.begin();
   for (size_t i = 0; i < variables_.size(); i++) {
     Variable *currentVar = *it;
-    // Persist everything except the project name, which is derived from the
-    // projects directory name
+    // The project name comes from its directory.
     if (currentVar->GetID() == FourCC::VarProjectName) {
       it++;
       continue;

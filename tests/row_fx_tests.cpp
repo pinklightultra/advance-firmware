@@ -310,9 +310,9 @@ TEST_CASE("ResolveRowHop randomizes both repeat count and destination") {
 
   SUBCASE("Randomizes only destination when high byte of RND is 00") {
     // ResolveRowHop uses 0x0F mask for destination
-    const int32_t hop = ResolveRowHop(TrackerCommand::InstrumentCommandHop,
-                                      0x1204,
-                                      TrackerCommand::InstrumentCommandRandom, 0x00FF);
+    const int32_t hop =
+        ResolveRowHop(TrackerCommand::InstrumentCommandHop, 0x1204,
+                      TrackerCommand::InstrumentCommandRandom, 0x00FF);
     CHECK(hop == 0x0F);
   }
 
@@ -323,8 +323,10 @@ TEST_CASE("ResolveRowHop randomizes both repeat count and destination") {
         .lastParam = 0,
         .valid = false,
     };
-    RowFxResult fx = ResolveRowFx(NO_NOTE, TrackerCommand::InstrumentCommandHop, 0x1204,
-                                  TrackerCommand::InstrumentCommandRandom, 0x1080, lastActive, true, false);
+    RowFxResult fx =
+        ResolveRowFx(NO_NOTE, TrackerCommand::InstrumentCommandHop, 0x1204,
+                     TrackerCommand::InstrumentCommandRandom, 0x1080,
+                     lastActive, true, false);
     // high: 0x12 + 0x10 = 0x22
     // low: original 4, depth (0x80 * 15 + 127) / 255 = 8.
     // original (4) + depth (8) = 12 (0x0C)
@@ -339,9 +341,9 @@ TEST_CASE("ResolveRowHop uses the full low byte as RND depth") {
 
   // depth (0x80 * 15 + 127) / 255 = 8.
   // original (4) + depth (8) = 12 (0x0C)
-  const int32_t hop = ResolveRowHop(TrackerCommand::InstrumentCommandHop,
-                                    0x1204,
-                                    TrackerCommand::InstrumentCommandRandom, 0x0080);
+  const int32_t hop =
+      ResolveRowHop(TrackerCommand::InstrumentCommandHop, 0x1204,
+                    TrackerCommand::InstrumentCommandRandom, 0x0080);
 
   CHECK(hop == 0x0C);
 }
@@ -353,9 +355,9 @@ TEST_CASE("ResolveRowHop avoids clamping bias at the low edge") {
 
   // amount 0xE0, depth (0xE0 * 15 + 127) / 255 = 13.
   // original (0) + depth (13) = 13 (0x0D)
-  const int32_t hop = ResolveRowHop(TrackerCommand::InstrumentCommandHop,
-                                    0x0000,
-                                    TrackerCommand::InstrumentCommandRandom, 0x00E0);
+  const int32_t hop =
+      ResolveRowHop(TrackerCommand::InstrumentCommandHop, 0x0000,
+                    TrackerCommand::InstrumentCommandRandom, 0x00E0);
 
   CHECK(hop == 0x0D);
 }
@@ -394,6 +396,56 @@ TEST_CASE("RND randomizes tempo as one clamped whole value") {
       TrackerCommand::InstrumentCommandRandom, 0x00FF, lastActive, true);
 
   CHECK(fx.param1 == 0x012C);
+}
+
+TEST_CASE("RND clamps delay effect targets and preserves the reserved byte") {
+  TestSystem system;
+  SystemInstallGuard installGuard(&system);
+  system.randomNumber_ = 0xFF;
+
+  const PlayerLastActiveCommandState lastActive = {
+      .lastCmd = TrackerCommand::InstrumentCommandNone,
+      .lastParam = 0,
+      .valid = false,
+  };
+
+  const RowFxResult timeFx = ResolveRowFx(
+      60, TrackerCommand::InstrumentCommandDelayTime, 0xAA30,
+      TrackerCommand::InstrumentCommandRandom, 0x00FF, lastActive, true);
+  CHECK(timeFx.param1 == 0xAA60);
+
+  const RowFxResult feedbackFx = ResolveRowFx(
+      60, TrackerCommand::InstrumentCommandDelayFeedback, 0xAA20,
+      TrackerCommand::InstrumentCommandRandom, 0x00FF, lastActive, true);
+  CHECK(feedbackFx.param1 == 0xAAFF);
+}
+
+TEST_CASE("RND randomizes reverb parameters and preserves the reserved byte") {
+  TestSystem system;
+  SystemInstallGuard installGuard(&system);
+  system.randomNumber_ = 0xFF;
+
+  const PlayerLastActiveCommandState lastActive = {
+      .lastCmd = TrackerCommand::InstrumentCommandNone,
+      .lastParam = 0,
+      .valid = false,
+  };
+  const TrackerCommand commands[] = {
+      TrackerCommand::InstrumentCommandReverbPreDelay,
+      TrackerCommand::InstrumentCommandReverbInputTone,
+      TrackerCommand::InstrumentCommandReverbDiffuse,
+      TrackerCommand::InstrumentCommandReverbDecay,
+      TrackerCommand::InstrumentCommandReverbTailTone,
+      TrackerCommand::InstrumentCommandReverbModulationSpeed,
+      TrackerCommand::InstrumentCommandReverbModulationLevel,
+  };
+
+  for (const TrackerCommand command : commands) {
+    const RowFxResult fx = ResolveRowFx(60, command, 0xAA20,
+                                        TrackerCommand::InstrumentCommandRandom,
+                                        0x00FF, lastActive, true);
+    CHECK(fx.param1 == 0xAAFF);
+  }
 }
 
 TEST_CASE("RND does not randomize protected target commands") {
@@ -495,9 +547,9 @@ TEST_CASE("RND covers every Sample instrument command shape") {
   };
 
   for (size_t i = 0; i < commands.size(); ++i) {
-    const RowFxResult fx = ResolveRowFx(
-        60, commands[i], params[i], TrackerCommand::InstrumentCommandRandom,
-        0xFFFF, lastActive, true);
+    const RowFxResult fx = ResolveRowFx(60, commands[i], params[i],
+                                        TrackerCommand::InstrumentCommandRandom,
+                                        0xFFFF, lastActive, true);
 
     CHECK(fx.cmd1 == commands[i]);
     CHECK(fx.param1 != params[i]);
@@ -532,9 +584,9 @@ TEST_CASE("CHN can gate every Sample instrument command") {
   };
 
   for (TrackerCommand command : commands) {
-    const RowFxResult fx = ResolveRowFx(
-        60, command, 0x4080, TrackerCommand::InstrumentCommandChance, 0x0000,
-        lastActive, true);
+    const RowFxResult fx = ResolveRowFx(60, command, 0x4080,
+                                        TrackerCommand::InstrumentCommandChance,
+                                        0x0000, lastActive, true);
 
     CHECK_FALSE(fx.allowCmd1);
   }
@@ -564,9 +616,9 @@ TEST_CASE("RND covers every SampleSource instrument command shape") {
                                         0x2002, 0x2080, 0x0402};
 
   for (size_t i = 0; i < commands.size(); ++i) {
-    const RowFxResult fx = ResolveRowFx(
-        60, commands[i], params[i], TrackerCommand::InstrumentCommandRandom,
-        0xFFFF, lastActive, true);
+    const RowFxResult fx = ResolveRowFx(60, commands[i], params[i],
+                                        TrackerCommand::InstrumentCommandRandom,
+                                        0xFFFF, lastActive, true);
 
     CHECK(fx.cmd1 == commands[i]);
     CHECK(fx.param1 != params[i]);

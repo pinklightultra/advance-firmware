@@ -12,6 +12,7 @@
  */
 
 #include "DeviceView.h"
+#include "Adapters/adv/audio/record.h"
 #include "Application/AppWindow.h"
 #include "Application/Model/FirmwareVersion.h"
 #include "Application/Model/Scale.h"
@@ -307,6 +308,12 @@ void DeviceView::addSwatchField(ColorDefinition color, GUIPoint position) {
 void DeviceView::OnFocus() { setTitle(etl::string<23>("Device")); }
 
 void DeviceView::OnFocusLost() {
+  if (IsSavingRecording()) {
+    Trace::Log("DEVICEVIEW",
+               "Skipping device config save while recording is being saved");
+    return;
+  }
+
   if (configDirty_) {
     Config *config = Config::GetInstance();
     if (!config->Save()) {

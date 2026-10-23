@@ -283,6 +283,17 @@ void MidiService::SetInputProgramForChannel(int midiChannel, uint8_t program) {
   }
 }
 
+bool MidiService::IsInputProgramSelected(int midiChannel,
+                                         uint8_t program) const {
+  for (const MidiInDevice *device : activeInDevices_) {
+    if (device != nullptr &&
+        device->GetProgramForChannel(midiChannel) == program) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void MidiService::flushOutQueue() {
   auto flushQueue = &queues_[currentOutQueue_];
 

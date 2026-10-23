@@ -1,18 +1,20 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "BatteryGauge.h"
 
+#include "Adapters/adv/system/i2cTransfer.h"
 #include "System/Console/Trace.h"
-#include "i2c.h"
 #include "platform.h"
-
-#define I2C_TIMEOUT_DELAY_MS 100
 
 // bq27441-G1 I2C address (7-bit address: 0x55)
 #define BQ27441_I2C_ADDR 0x55
@@ -98,16 +100,16 @@ bool configureBatteryGauge() {
 
   txBuf[0] = BQ27441_DESIGN_CAPACITY;
 
-  status = HAL_I2C_Master_Transmit(&I2C, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                   I2C_TIMEOUT_DELAY_MS);
+  status = AdvI2C_Master_Transmit(&I2C, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send Design Capacity read command (status: %d)",
                  status);
     return false;
   }
 
-  status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 2,
-                                  I2C_TIMEOUT_DELAY_MS);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to read Design Capacity (status: %d)", status);
     return false;
@@ -137,8 +139,8 @@ bool configureBatteryGauge() {
   txBuf[1] = 0x00;
   txBuf[2] = BQ27441_CONTROL_UNSEALED;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to unseal the fuel gauge (status: %d)", status);
     return false;
@@ -146,8 +148,8 @@ bool configureBatteryGauge() {
   Trace::Log("BATTERY", "Sent first unseal command");
 
   // Send CONTROL_UNSEALED (0x8000) command again
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to unseal the fuel gauge (second command, status: %d)",
                  status);
@@ -164,8 +166,8 @@ bool configureBatteryGauge() {
   txBuf[1] = BQ27441_CONTROL_SET_CFGUPDATE;
   txBuf[2] = 0x00;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send CONFIG UPDATE command (status: %d)", status);
     return false;
@@ -181,8 +183,8 @@ bool configureBatteryGauge() {
   bool cfgUpdateMode = false;
   for (int i = 0; i < 10; i++) {
     txBuf[0] = BQ27441_FLAGS_REG;
-    status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                     HAL_MAX_DELAY);
+    status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                    I2C_TRANSFER_TIMEOUT_MS);
     if (status != HAL_OK) {
       Trace::Error("Failed to send FLAGS register read command (attempt %d)",
                    i + 1);
@@ -190,8 +192,8 @@ bool configureBatteryGauge() {
       continue;
     }
 
-    status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 2,
-                                    HAL_MAX_DELAY);
+    status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 2,
+                                   I2C_TRANSFER_TIMEOUT_MS);
     if (status != HAL_OK) {
       Trace::Error("Failed to read FLAGS register (attempt %d)", i + 1);
       busywait(100);
@@ -223,8 +225,8 @@ bool configureBatteryGauge() {
   txBuf[0] = BQ27441_BLOCK_DATA_CONTROL;
   txBuf[1] = 0x00;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to enable BlockData control (status: %d)", status);
     return false;
@@ -237,8 +239,8 @@ bool configureBatteryGauge() {
   txBuf[0] = BQ27441_DATA_BLOCK_CLASS;
   txBuf[1] = BQ27441_CLASS_STATE;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to set State subclass (status: %d)", status);
     return false;
@@ -250,8 +252,8 @@ bool configureBatteryGauge() {
   txBuf[0] = BQ27441_DATA_BLOCK;
   txBuf[1] = 0x00;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to set block offset (status: %d)", status);
     return false;
@@ -266,8 +268,8 @@ bool configureBatteryGauge() {
   Trace::Log("BATTERY", "Step 6: Reading current checksum");
   txBuf[0] = BQ27441_BLOCK_DATA_CHECKSUM;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send checksum read command (status: %d)", status);
     return false;
@@ -275,8 +277,8 @@ bool configureBatteryGauge() {
 
   busywait(10); // Increased from 1ms to 10ms
 
-  status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 1,
-                                  HAL_MAX_DELAY);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 1,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to read checksum (status: %d)", status);
     return false;
@@ -297,8 +299,8 @@ bool configureBatteryGauge() {
   // First read MSB (offset 10)
   txBuf[0] = 0x4A; // 0x40 + (10 % 32) = 0x4A
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send Design Capacity MSB read command (status: %d)",
                  status);
@@ -307,8 +309,8 @@ bool configureBatteryGauge() {
 
   busywait(10);
 
-  status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, &rxBuf[0], 1,
-                                  HAL_MAX_DELAY);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, &rxBuf[0], 1,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to read Design Capacity MSB (status: %d)", status);
     return false;
@@ -317,8 +319,8 @@ bool configureBatteryGauge() {
   // Then read LSB (offset 11)
   txBuf[0] = 0x4B; // 0x40 + (11 % 32) = 0x4B
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send Design Capacity LSB read command (status: %d)",
                  status);
@@ -327,8 +329,8 @@ bool configureBatteryGauge() {
 
   busywait(10);
 
-  status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, &rxBuf[1], 1,
-                                  HAL_MAX_DELAY);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, &rxBuf[1], 1,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to read Design Capacity LSB (status: %d)", status);
     return false;
@@ -352,8 +354,8 @@ bool configureBatteryGauge() {
   txBuf[0] = 0x4A;                          // 0x40 + (10 % 32) = 0x4A
   txBuf[1] = (DESIGN_CAPACITY >> 8) & 0xFF; // MSB (high byte)
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to write Design Capacity MSB (status: %d)", status);
     return false;
@@ -366,8 +368,8 @@ bool configureBatteryGauge() {
   txBuf[0] = 0x4B;                   // 0x40 + (11 % 32) = 0x4B
   txBuf[1] = DESIGN_CAPACITY & 0xFF; // LSB (low byte)
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to write Design Capacity LSB (status: %d)", status);
     return false;
@@ -419,9 +421,8 @@ bool configureBatteryGauge() {
   Trace::Log("BATTERY", "Writing checksum: register=0x%02X, value=0x%02X",
              txBuf[0], txBuf[1]);
 
-  // Try writing checksumwith a longer timeout
-  status =
-      HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2, 1000);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 2,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to write checksum (status: %d)", status);
     return false;
@@ -433,11 +434,11 @@ bool configureBatteryGauge() {
   busywait(50);
 
   txBuf[0] = BQ27441_BLOCK_DATA_CHECKSUM;
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status == HAL_OK) {
-    status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 1,
-                                    HAL_MAX_DELAY);
+    status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 1,
+                                   I2C_TRANSFER_TIMEOUT_MS);
     if (status == HAL_OK) {
       Trace::Log("BATTERY",
                  "Verification: Checksum read back as 0x%02X (expected 0x%02X)",
@@ -461,8 +462,8 @@ bool configureBatteryGauge() {
   txBuf[1] = BQ27441_CONTROL_SOFT_RESET & 0xFF;        // Low byte
   txBuf[2] = (BQ27441_CONTROL_SOFT_RESET >> 8) & 0xFF; // High byte
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send SOFT_RESET command (status: %d)", status);
     return false;
@@ -483,8 +484,8 @@ bool configureBatteryGauge() {
   for (int i = 0; i < 10; i++) {
     // Read FLAGS register
     txBuf[0] = BQ27441_FLAGS_REG;
-    status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
-                                     HAL_MAX_DELAY);
+    status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 1,
+                                    I2C_TRANSFER_TIMEOUT_MS);
     if (status != HAL_OK) {
       Trace::Error("Failed to send FLAGS register read command");
       continue;
@@ -492,8 +493,8 @@ bool configureBatteryGauge() {
 
     busywait(1);
 
-    status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 2,
-                                    HAL_MAX_DELAY);
+    status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxBuf, 2,
+                                   I2C_TRANSFER_TIMEOUT_MS);
     if (status != HAL_OK) {
       Trace::Error("Failed to read FLAGS register");
       continue;
@@ -525,8 +526,8 @@ bool configureBatteryGauge() {
   txBuf[1] = 0x20;
   txBuf[2] = 0x00;
 
-  status = HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
-                                   HAL_MAX_DELAY);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txBuf, 3,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to seal the fuel gauge (status: %d)", status);
     return false;
@@ -547,8 +548,8 @@ int8_t getBatterySOC() {
 
   // Read State of Charge (SOC) for percentage
   cmdBuf[0] = BQ27441_CMD_SOC;
-  HAL_StatusTypeDef status = HAL_I2C_Master_Transmit(
-      &I2C, BQ27441_I2C_ADDR << 1, cmdBuf, 1, HAL_MAX_DELAY);
+  HAL_StatusTypeDef status = AdvI2C_Master_Transmit(
+      &I2C, BQ27441_I2C_ADDR << 1, cmdBuf, 1, I2C_TRANSFER_TIMEOUT_MS);
 
   if (status != HAL_OK) {
     Trace::Error("Failed to transmit SOC command to battery gauge");
@@ -559,8 +560,8 @@ int8_t getBatterySOC() {
   busywait(1); // Small delay to ensure command processing
 
   // Read the SOC data (2 bytes)
-  status = HAL_I2C_Master_Receive(&I2C, BQ27441_I2C_ADDR << 1, rxData, 2,
-                                  HAL_MAX_DELAY);
+  status = AdvI2C_Master_Receive(&I2C, BQ27441_I2C_ADDR << 1, rxData, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
 
   if (status != HAL_OK) {
     Trace::Error("Failed to receive SOC data from battery gauge");
@@ -584,8 +585,8 @@ uint32_t getBatteryVoltage() {
 
   // Send the voltage command to the fuel gauge
   // Note: The 7-bit address needs to be shifted left by 1 bit for the HAL API
-  HAL_StatusTypeDef status = HAL_I2C_Master_Transmit(
-      &hi2c4, BQ27441_I2C_ADDR << 1, cmdBuf, 1, HAL_MAX_DELAY);
+  HAL_StatusTypeDef status = AdvI2C_Master_Transmit(
+      &hi2c4, BQ27441_I2C_ADDR << 1, cmdBuf, 1, I2C_TRANSFER_TIMEOUT_MS);
 
   if (status != HAL_OK) {
     Trace::Error("Failed to transmit voltage command to battery gauge");
@@ -596,8 +597,8 @@ uint32_t getBatteryVoltage() {
   busywait(1);
 
   // Read the voltage data (2 bytes)
-  status = HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2,
-                                  HAL_MAX_DELAY);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
 
   if (status != HAL_OK) {
     Trace::Error("Failed to receive voltage data from battery gauge");
@@ -623,8 +624,8 @@ int32_t getBatteryTemperature() {
   int32_t temperature = 0;
 
   // Send the TEMP register command
-  status =
-      HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1, 1000);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error(
         "Failed to send temperature read command to battery gauge (status: %d)",
@@ -633,8 +634,8 @@ int32_t getBatteryTemperature() {
   }
 
   // Read the temperature data
-  status =
-      HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2, 1000);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error(
         "Failed to receive temperature data from battery gauge (status: %d)",
@@ -663,8 +664,8 @@ int16_t getBatteryCurrent() {
   uint8_t rxData[2] = {0};                   // Current is a 16-bit register
 
   // Send the current register command
-  status =
-      HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1, 1000);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error(
         "Failed to send current read command to battery gauge (status: %d)",
@@ -673,8 +674,8 @@ int16_t getBatteryCurrent() {
   }
 
   // Read the current data
-  status =
-      HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2, 1000);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error(
         "Failed to receive current data from battery gauge (status: %d)",
@@ -693,8 +694,8 @@ SOHT getBatteryStateOfHealthType() {
   uint8_t rxData[2] = {0}; // register is 16 bit
 
   // Send the state of health type register command
-  status =
-      HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1, 1000);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send state of health type read command to battery "
                  "gauge (status: %d)",
@@ -703,8 +704,8 @@ SOHT getBatteryStateOfHealthType() {
   }
 
   // Read the SOHT data
-  status =
-      HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2, 1000);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to receive state of health type data from battery "
                  "gauge (status: %d)",
@@ -721,8 +722,8 @@ int16_t getBatteryStateOfHealth() {
   uint8_t rxData[2] = {0}; // register is 16 bit
 
   // Send the state of health register command
-  status =
-      HAL_I2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1, 1000);
+  status = AdvI2C_Master_Transmit(&hi2c4, BQ27441_I2C_ADDR << 1, txData, 1,
+                                  I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to send state of health read command to battery "
                  "gauge (status: %d)",
@@ -731,8 +732,8 @@ int16_t getBatteryStateOfHealth() {
   }
 
   // Read the state of health data
-  status =
-      HAL_I2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2, 1000);
+  status = AdvI2C_Master_Receive(&hi2c4, BQ27441_I2C_ADDR << 1, rxData, 2,
+                                 I2C_TRANSFER_TIMEOUT_MS);
   if (status != HAL_OK) {
     Trace::Error("Failed to receive state of health data from battery "
                  "gauge (status: %d)",

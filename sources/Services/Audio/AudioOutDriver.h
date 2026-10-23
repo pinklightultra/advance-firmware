@@ -33,9 +33,8 @@ public:
   virtual void Close();
   virtual bool Start();
   virtual void Stop();
-  void SetAudioActive(bool active) override;
 
-  virtual void Trigger();
+  virtual void Trigger(bool silenceOutput = false);
 
   virtual stereosample GetLastPeakLevels();
 

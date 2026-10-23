@@ -101,14 +101,26 @@ static bool SaveAsProject(ProjectView &projectView) {
     Trace::Error("Failed to save project state");
     return false;
   } else {
+    if (!oldProjName.empty() && oldProjName != projName) {
+      persist->ClearAutosave(oldProjName.c_str());
+    }
     Trace::Log("PROJECTVIEW-STATIC", "SAVED_AS:%s", projName.c_str());
     projectView.clearSaveAsFlag();
+    // Update the app's original directory name so future operations use it
+    AppWindow::GetInstance()->originalProjectName_ = projName;
   }
   return true;
 }
 
 static void CreateNewProjectCallback(View &v, ModalView &dialog) {
   if (dialog.GetReturnCode() == MBL_YES) {
+    // We are abandoning the current project, so clear its autosave to avoid
+    // orphaning it.
+    const auto &originalName = AppWindow::GetInstance()->originalProjectName_;
+    if (!originalName.empty()) {
+      PersistencyService::GetInstance()->ClearAutosave(originalName.c_str());
+    }
+
     // first clear out any existing "unnamed" project
     PersistencyService::GetInstance()->PurgeUnnamedProject();
 

@@ -17,11 +17,14 @@
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
 #include "Application/Views/BaseClasses/BrowserEntrySort.h"
+#include "Application/Views/BaseClasses/BrowserPaging.h"
 #include "Application/Views/BaseClasses/BrowserPathUtils.h"
 #include "Application/Views/ModalDialogs/TextInputModalView.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Application/Views/SampleImportUtils.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Externals/etl/include/etl/to_string.h"
+#include "Foundation/Constants/SpecialCharacters.h"
 #include "ModalDialogs/MessageBox.h"
 #include "System/FileSystem/FileSystem.h"
 #include "System/FileSystem/PathUtils.h"
@@ -33,10 +36,6 @@
 #define LIST_WIDTH SCREEN_WIDTH - 2
 // -4 to allow for title, filesize & spacers
 #define LIST_PAGE_SIZE SCREEN_HEIGHT - 5
-
-// is single cycle macro, checks for FILE size of LGPT and AKWF file formats
-// AKWF "nes" pack 1376, AKWF "standard" 1344, LGPT pack 300
-#define IS_SINGLE_CYCLE(x) (x == 1376 || x == 1344 || x == 300)
 
 // Initialize static member
 ViewType ImportView::sourceViewType_ = VT_PROJECT;
@@ -185,6 +184,8 @@ ImportView::~ImportView() {}
 void ImportView::Reset() {
   topIndex_ = 0;
   currentIndex_ = 0;
+  savedImportTopIndex_ = 0;
+  savedImportIndex_ = 0;
   previewPlayingIndex_ = 0;
   selectedButton_ = 0;
   toInstr_ = 0;
@@ -197,6 +198,7 @@ void ImportView::Reset() {
   std::memset(dirIndexStack_, 0, sizeof(dirIndexStack_));
   currentDir_.clear();
   pendingRenamePath_[0] = '\0';
+  invalidateSelectedSamplePoolSize();
   fileEntries_.clear();
 }
 
@@ -299,7 +301,10 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
       // toggle from sdcard "import sample" & project pool listing
       if (inProjectSampleDir_) {
         inProjectSampleDir_ = false;
-        setCurrentFolder(fs, SAMPLES_LIB_DIR, ImportView::FolderNav::Jump);
+        const char *importDir = viewData_->importViewStartDir.empty()
+                                    ? SAMPLES_LIB_DIR
+                                    : viewData_->importViewStartDir.c_str();
+        setCurrentFolder(fs, importDir, ImportView::FolderNav::ResumeImport);
       } else {
         FileSystemPath::PathString projectSamplesDir;
         char projectName[MAX_PROJECT_NAME_LENGTH + 1] = {};
@@ -309,6 +314,8 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
           Trace::Error("PICOIMPORT: Failed to build project samples dir");
           return;
         }
+        savedImportIndex_ = currentIndex_;
+        savedImportTopIndex_ = topIndex_;
         inProjectSampleDir_ = true;
         setCurrentFolder(fs, projectSamplesDir.c_str(),
                          ImportView::FolderNav::Jump);
@@ -447,12 +454,14 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
     if (inProjectSampleDir_ && fileEntries_.empty()) {
       return; // Do nothing if the list is empty
     }
-    warpToNextSample(true);
+    const bool page = (mask & EPBM_EDIT) != 0;
+    warpToNextSample(true, page);
   } else if (mask & EPBM_DOWN) {
     if (inProjectSampleDir_ && fileEntries_.empty()) {
       return; // Do nothing if the list is empty
     }
-    warpToNextSample(false);
+    const bool page = (mask & EPBM_EDIT) != 0;
+    warpToNextSample(false, page);
   } else if ((mask & EPBM_LEFT) && (mask & EPBM_NAV)) {
     // clear this flag on leaving this screen
     viewData_->isShowingSampleEditorProjectPool = false;
@@ -487,7 +496,9 @@ void ImportView::DrawView() {
 
   // Draw title with available storage space
   const char *baseTitle =
-      inProjectSampleDir_ ? "Project Pool" : "Import Sample";
+      inProjectSampleDir_
+          ? "Pool  NAV+EDIT" char_indicator_rightNoLeft_s "SDCard"
+          : "Import  NAV+EDIT" char_indicator_rightNoLeft_s "Pool";
 
   setTitle(etl::string<23>(baseTitle));
 
@@ -511,7 +522,7 @@ void ImportView::DrawView() {
 
       // Check if it's a single cycle waveform
       const uint64_t filesize = entry.size;
-      bool isSingleCycle = IS_SINGLE_CYCLE(filesize);
+      bool isSingleCycle = IsSingleCycleWaveformFile(filesize);
 
       displayName += entry.name.c_str();
       // Format the display name with appropriate prefix
@@ -661,14 +672,16 @@ void ImportView::DrawView() {
   SetColor(CD_NORMAL);
   props.invert_ = true;
   y = 0;
-  uint32_t filesize = 0;
+  uint32_t samplePoolSize = 0;
   if (!fileEntries_.empty()) {
     const auto &currentEntry = fileEntries_[currentIndex_];
-    // only get file size if it's a file not a dir
-    if (currentEntry.type == PFT_FILE) {
-      filesize = currentEntry.size;
-      // if file size is larger than available space, set color to warning
-      if (filesize > availableSpace) {
+    // Only calculate sample memory usage for a file, not a directory.
+    if (currentEntry.type == PFT_FILE &&
+        getSelectedSamplePoolSize(samplePoolSize)) {
+      // Project-pool samples are already loaded. In the import browser, warn
+      // when the converted sample cannot fit entirely in either memory bank.
+      if (!inProjectSampleDir_ &&
+          !SamplePool::GetInstance()->CheckSampleFits(samplePoolSize)) {
         SetColor(CD_WARN);
       }
     }
@@ -678,7 +691,7 @@ void ImportView::DrawView() {
   char tempBuffer[SCREEN_WIDTH];
   tempBuffer[SCREEN_WIDTH - 1] = '\0';
 
-  npf_snprintf(tempBuffer, sizeof(tempBuffer), "Size:%i/%i", filesize,
+  npf_snprintf(tempBuffer, sizeof(tempBuffer), "Size:%u/%u", samplePoolSize,
                availableSpace);
 
   // pad status line buffer with trailing space chars to ensure the invert
@@ -711,6 +724,13 @@ void ImportView::OnFocus() {
 
   toInstr_ = viewData_->currentInstrumentID_;
 
+  const bool enteringProjectPool =
+      viewData_->isShowingSampleEditorProjectPool && !inProjectSampleDir_;
+  if (enteringProjectPool) {
+    savedImportIndex_ = currentIndex_;
+    savedImportTopIndex_ = topIndex_;
+  }
+
   inProjectSampleDir_ = viewData_->isShowingSampleEditorProjectPool;
 
   if (inProjectSampleDir_) {
@@ -732,27 +752,57 @@ void ImportView::OnFocus() {
   }
 };
 
-void ImportView::warpToNextSample(bool goUp) {
-  if (goUp) {
-    if (currentIndex_ > 0) {
-      currentIndex_--;
-      // if we have scrolled off the top, page the file list up if not
-      // already at  very top of the list
-      if (currentIndex_ < topIndex_) {
-        topIndex_ = currentIndex_;
-      }
-    }
-  } else {
-    if (currentIndex_ < fileEntries_.size() - 1) {
-      currentIndex_++;
-      // if we have scrolled off the bottom, page the file list down if not
-      // at end of the list
-      if (currentIndex_ >= (topIndex_ + LIST_PAGE_SIZE)) {
-        topIndex_++;
-      }
-    }
-  }
+void ImportView::warpToNextSample(bool goUp, bool page) {
+  BrowserPaging::Warp(currentIndex_, topIndex_, fileEntries_.size(),
+                      LIST_PAGE_SIZE, goUp, page);
   isDirty_ = true;
+}
+
+bool ImportView::getSelectedSamplePoolSize(uint32_t &sampleSize) {
+  if (samplePoolSizeIndex_ == currentIndex_) {
+    sampleSize = selectedSamplePoolSize_;
+    return selectedSamplePoolSizeValid_;
+  }
+
+  samplePoolSizeIndex_ = currentIndex_;
+  selectedSamplePoolSize_ = 0;
+  selectedSamplePoolSizeValid_ = false;
+
+  const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+  if (entry == nullptr || entry->type != PFT_FILE) {
+    return false;
+  }
+
+  FileSystemPath::PathString samplePath;
+  if (!resolveEntryPath(currentDir_, *entry, "/", samplePath)) {
+    return false;
+  }
+
+  WavFile wav;
+  const auto wavResult = wav.Open(samplePath.c_str());
+  if (!wavResult) {
+    return false;
+  }
+
+  const int32_t sourceFrameCount = wav.GetSize(-1);
+  const int32_t sourceSampleRate = wav.GetSampleRate(-1);
+  const int32_t sourceChannelCount = wav.GetChannelCount(-1);
+  if (sourceFrameCount > 0 && sourceSampleRate > 0 && sourceChannelCount > 0) {
+    selectedSamplePoolSizeValid_ = SamplePool::CalculateImportSampleSize(
+        static_cast<uint32_t>(sourceFrameCount),
+        static_cast<uint32_t>(sourceSampleRate),
+        static_cast<uint16_t>(sourceChannelCount), selectedSamplePoolSize_);
+  }
+  wav.Close();
+
+  sampleSize = selectedSamplePoolSize_;
+  return selectedSamplePoolSizeValid_;
+}
+
+void ImportView::invalidateSelectedSamplePoolSize() {
+  samplePoolSizeIndex_ = static_cast<size_t>(-1);
+  selectedSamplePoolSize_ = 0;
+  selectedSamplePoolSizeValid_ = false;
 }
 
 void ImportView::preview() {
@@ -770,7 +820,7 @@ void ImportView::preview() {
   const int32_t fileSize = static_cast<int32_t>(entry->size);
 
   // check for LGPT or AKWF standard file sizes
-  bool isSingleCycle = IS_SINGLE_CYCLE(fileSize);
+  bool isSingleCycle = IsSingleCycleWaveformFile(fileSize);
 
   // If a preview is already playing, stop it first.
   // Only stop the file streamer, not sequencer channels.
@@ -835,6 +885,8 @@ void ImportView::import() {
     return;
   }
 
+  const bool isSingleCycle = IsSingleCycleWaveformFile(entry->size);
+
   FileSystemPath::PathString samplePath;
   if (!resolveEntryPath(currentDir_, *entry, "/", samplePath)) {
     return;
@@ -875,27 +927,6 @@ void ImportView::import() {
     return;
   }
 
-  // Check if the sample would exceed available flash storage
-  const int32_t fileSize = static_cast<int32_t>(entry->size);
-
-  // Check if the sample would fit in available storage
-  if (!pool->CheckSampleFits(fileSize)) {
-    // Get available flash space for the message
-    uint32_t availableFlash =
-        SamplePool::GetInstance()->GetAvailableSampleStorageSpace();
-
-    // Show error dialog to inform the user
-    char message[SCREEN_WIDTH];
-
-    uint32_t availBytes = availableFlash;
-    npf_snprintf(message, sizeof(message), "Only %d bytes free", availBytes);
-    // pad with trailing spaces as dialog width based on title length
-    MessageBox *mb =
-        MessageBox::Create(*this, "Sample Too Large       ", message, MBBF_OK);
-    DoModal(mb);
-    return;
-  }
-
   // Check if wave file is in a supported format
   WavFile wav;
   auto wavRes = wav.Open(samplePath.c_str());
@@ -920,6 +951,34 @@ void ImportView::import() {
       break;
     }
   } else {
+    const int32_t sourceFrameCount = wav.GetSize(-1);
+    const int32_t sourceSampleRate = wav.GetSampleRate(-1);
+    const int32_t sourceChannelCount = wav.GetChannelCount(-1);
+    uint32_t convertedSampleSize = 0;
+    const bool hasValidConvertedSize =
+        sourceFrameCount > 0 && sourceSampleRate > 0 &&
+        sourceChannelCount > 0 &&
+        SamplePool::CalculateImportSampleSize(
+            static_cast<uint32_t>(sourceFrameCount),
+            static_cast<uint32_t>(sourceSampleRate),
+            static_cast<uint16_t>(sourceChannelCount), convertedSampleSize);
+
+    if (!hasValidConvertedSize) {
+      mb = MessageBox::Create(*this, "Import Failed", "Sample is too large",
+                              MBBF_OK);
+    } else if (!pool->CheckSampleFits(convertedSampleSize)) {
+      const uint32_t availableSpace = pool->GetAvailableSampleStorageSpace();
+      char message[SCREEN_WIDTH];
+      if (availableSpace >= convertedSampleSize) {
+        npf_snprintf(message, sizeof(message), "Cannot fit in sample memory");
+      } else {
+        npf_snprintf(message, sizeof(message), "Only %u bytes free",
+                     availableSpace);
+      }
+      // pad with trailing spaces as dialog width based on title length
+      mb = MessageBox::Create(*this, "Sample Too Large       ", message,
+                              MBBF_OK);
+    }
     wav.Close();
   }
 
@@ -943,11 +1002,20 @@ void ImportView::import() {
       SampleInstrument *sinstr = static_cast<SampleInstrument *>(instr);
       sinstr->AssignSample(sampleID);
       sinstr->ClearSlices();
+      if (isSingleCycle) {
+        sinstr->FindVariable(FourCC::SampleInstrumentLoopMode)
+            ->SetInt(SILM_OSC);
+      }
     } else if (instr->GetType() == IT_SAMPLE_SOURCE) {
       SampleSourceInstrument *ssinstr =
           static_cast<SampleSourceInstrument *>(instr);
       ssinstr->AssignSample(sampleID);
       ssinstr->ClearSlices();
+      if (isSingleCycle) {
+        ssinstr->FindVariable(FourCC::SampleSourceInstrumentLoopMode)
+            ->SetInt(SSLM_OSC);
+        ssinstr->ResetOscillatorLoopModeIfSampleTooLarge();
+      }
     }
 
     if (importedFilename.empty()) {
@@ -1057,6 +1125,9 @@ void ImportView::setCurrentFolder(FileSystem *fs, const char *name,
     // The project pool listing has no subdirectory navigation, so there is
     // nothing to remember or restore.
     currentIndex_ = 0;
+  } else if (nav == FolderNav::ResumeImport) {
+    currentIndex_ = savedImportIndex_;
+    topIndex_ = savedImportTopIndex_;
   } else if (nav == FolderNav::Up) {
     // Going up: restore the selection position we had in the parent dir.
     if (dirIndexDepth_ > 0) {
@@ -1284,6 +1355,7 @@ void ImportView::onConfirmRemoveProjectSample(View &, ModalView &dialog) {
 }
 
 void ImportView::refreshFileIndexList(FileSystem *fs) {
+  invalidateSelectedSamplePoolSize();
   if (fs == nullptr || currentDir_.empty()) {
     fileEntries_.clear();
     topIndex_ = 0;

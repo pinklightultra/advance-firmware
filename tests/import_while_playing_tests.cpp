@@ -22,6 +22,7 @@
 #include "Application/Player/Player.h"
 #include "Application/Player/PlayerMixer.h"
 #include "Application/Views/BaseClasses/PlaybackStatusIndicator.h"
+#include "Application/Views/SampleImportUtils.h"
 #include "System/FileSystem/FakeFileSystem.h"
 #include "doctest/doctest.h"
 #include <algorithm>
@@ -54,7 +55,7 @@ public:
     unlockReleased_ = false;
   }
 
-  bool CheckSampleFits(int) override { return true; }
+  bool CheckSampleFits(uint32_t) override { return true; }
   uint32_t GetAvailableSampleStorageSpace() override { return 0xFFFFFFFF; }
 
   bool unloadSample(uint32_t index) override {
@@ -172,6 +173,16 @@ bool operationLogHasNoChdir(const FakeFileSystem &fs) {
 }
 
 } // namespace
+
+TEST_CASE("Single-cycle imports recognize LGPT and AKWF waveforms") {
+  CHECK(IsSingleCycleWaveformFile(300));
+  CHECK(IsSingleCycleWaveformFile(1244));
+  CHECK(IsSingleCycleWaveformFile(1344));
+  CHECK(IsSingleCycleWaveformFile(1376));
+  CHECK_FALSE(IsSingleCycleWaveformFile(299));
+  CHECK_FALSE(IsSingleCycleWaveformFile(1243));
+  CHECK_FALSE(IsSingleCycleWaveformFile(1377));
+}
 
 // ============================================================================
 // ImportSample — basic functionality

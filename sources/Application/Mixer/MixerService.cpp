@@ -14,6 +14,7 @@
 #include "MixerService.h"
 #include "Application/AppWindow.h"
 #include "Application/Application.h"
+#include "Application/Effects/OutputEffectDefinitions.h"
 #include "Application/Model/Config.h"
 #include "Application/Model/Project.h"
 #include "Application/Persistency/PersistenceConstants.h"
@@ -38,18 +39,21 @@ namespace {
 
 __attribute__((aligned(32))) __attribute__((section(".DTCMRAM")))
 AudioSample gOutputEffectWetBuffers[OUTPUT_EFFECT_COUNT][MAX_SAMPLE_COUNT * 2];
+
 constexpr uint16_t kProfileOrderOutputFx1 = 60;
 constexpr uint16_t kProfileOrderOutputFx2 = 61;
 constexpr uint16_t kProfileOrderOutputFx3 = 62;
-constexpr uint16_t kProfileOrderOutputFxTotal = 63;
+constexpr uint16_t kProfileOrderOutputFx4 = 63;
+constexpr uint16_t kProfileOrderOutputFxTotal = 64;
 constexpr uint32_t kOutputEffectsBudgetPctX1000 = 40000U;
-constexpr uint32_t kOutputEffectBudgetPctX1000 = ComputeDWTBudgetSharePctX1000(
-    kOutputEffectsBudgetPctX1000, OUTPUT_EFFECT_COUNT);
+constexpr uint32_t kDelayBudgetPctX1000 = 10000U;
+constexpr uint32_t kReverbBudgetPctX1000 = 30000U;
 
 DWTProfileStats gOutputEffectProfiles[OUTPUT_EFFECT_COUNT] = {
-    {.name_ = "ofx1", .budgetPctX1000_ = kOutputEffectBudgetPctX1000},
-    {.name_ = "ofx2", .budgetPctX1000_ = kOutputEffectBudgetPctX1000},
-    {.name_ = "ofx3", .budgetPctX1000_ = kOutputEffectBudgetPctX1000},
+    {.name_ = "ofx1"},
+    {.name_ = "ofx2"},
+    {.name_ = "delay", .budgetPctX1000_ = kDelayBudgetPctX1000},
+    {.name_ = "reverb", .budgetPctX1000_ = kReverbBudgetPctX1000},
 };
 DWTProfileStats gOutputEffectTotalProfile = {
     .name_ = "fx total",
@@ -65,11 +69,13 @@ void registerOutputEffectProfiles() {
   gOutputEffectProfiles[0].displayOrder_ = kProfileOrderOutputFx1;
   gOutputEffectProfiles[1].displayOrder_ = kProfileOrderOutputFx2;
   gOutputEffectProfiles[2].displayOrder_ = kProfileOrderOutputFx3;
+  gOutputEffectProfiles[3].displayOrder_ = kProfileOrderOutputFx4;
   gOutputEffectTotalProfile.displayOrder_ = kProfileOrderOutputFxTotal;
   gOutputEffectTotalProfile.aggregateChildren_[0] = &gOutputEffectProfiles[0];
   gOutputEffectTotalProfile.aggregateChildren_[1] = &gOutputEffectProfiles[1];
   gOutputEffectTotalProfile.aggregateChildren_[2] = &gOutputEffectProfiles[2];
-  gOutputEffectTotalProfile.aggregateChildCount_ = 3;
+  gOutputEffectTotalProfile.aggregateChildren_[3] = &gOutputEffectProfiles[3];
+  gOutputEffectTotalProfile.aggregateChildCount_ = OUTPUT_EFFECT_COUNT;
 
   for (int i = 0; i < OUTPUT_EFFECT_COUNT; ++i) {
     RegisterDWTProfileStats(&gOutputEffectProfiles[i]);
@@ -78,31 +84,12 @@ void registerOutputEffectProfiles() {
   registered = true;
 }
 
-float ToUnitRange(int value, int maxValue) {
-  if (value < 0) {
-    value = 0;
-  }
-  if (value > maxValue) {
-    value = maxValue;
-  }
-
-  return static_cast<float>(value) / static_cast<float>(maxValue);
-}
-
 } // namespace
 
-MixerService::MixerService()
-    : master_(), silentOutputEffect_(), reverbOutputEffects_(),
-      outputEffects_{
-          OutputEffectSlot(gOutputEffectWetBuffers[kReverbEffectIndex],
-                           &silentOutputEffect_),
-          OutputEffectSlot(gOutputEffectWetBuffers[kDelayEffectIndex],
-                           &silentOutputEffect_),
-          OutputEffectSlot(gOutputEffectWetBuffers[kReservedEffectIndex],
-                           &silentOutputEffect_)},
-      sync_(platform_mutex()) {
+MixerService::MixerService() : master_(), sync_(platform_mutex()) {
   registerOutputEffectProfiles();
   master_.SetProfileMixMath(true);
+  OutputEffectSlot::SetMixProfileStats(AudioMixer::GetMixProfileStats());
   out_ = 0;
   project_ = NULL;
   mode_ = MSM_AUDIO;
@@ -119,16 +106,34 @@ MixerService::MixerService()
   for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
     effectReturnRouting_[fx].returnGain = kAudioSampleOne;
   }
-
-  for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-    outputEffects_[fx].SetEffect(
-        GetProcessorForSlot(fx, kDefaultOutputEffectTypes[fx]));
-  }
 };
 
 MixerService::~MixerService(){};
 
-bool MixerService::Init() {
+bool MixerService::Init(Project *project) {
+  NAssert(project);
+  if (project == nullptr) {
+    return false;
+  }
+
+  for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
+    OutputEffect *effect = project->GetOutputEffect(fx);
+    if (effect == nullptr) {
+      Trace::Error("[MixerService::Init] Missing fixed output effect %d", fx);
+      return false;
+    }
+    outputEffects_[fx].emplace(gOutputEffectWetBuffers[fx], *effect);
+  }
+
+  // Send destinations are fixed for the lifetime of the mixer. Keeping them
+  // valid at zero gain gives every rendered channel the same four-send path.
+  for (int channel = 0; channel < SONG_CHANNEL_COUNT; ++channel) {
+    for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
+      channelRouting_[channel].sendBuffer[fx] =
+          OutputEffectSlotAt(fx).GetAccumulationBuffer();
+    }
+  }
+
   out_ = 0;
   // Create the output depending on rendering mode
   Audio *audio = Audio::GetInstance();
@@ -137,6 +142,9 @@ bool MixerService::Init() {
   bool result = false;
 
   char buffer[5];
+  // Master renders modules in insertion order. Track and stream buses must
+  // fill all direct sends first, followed by FX1, FX2, delay, and reverb so
+  // each effect can add its wet output to later effects in the same pass.
   for (int i = 0; i < MAX_BUS_COUNT; i++) {
     if (i < TRACK_MIX_BUS_COUNT) {
       hex2char(i, buffer);
@@ -149,7 +157,7 @@ bool MixerService::Init() {
       npf_snprintf(buffer, sizeof(buffer), "F%d", fxIndex + 1);
       bus_[i].SetName(etl::string<12>(buffer));
       bus_[i].SetRenderProfileStats(&gOutputEffectProfiles[fxIndex]);
-      bus_[i].AddModule(outputEffects_[fxIndex]);
+      bus_[i].AddModule(OutputEffectSlotAt(fxIndex));
     }
     master_.AddModule(bus_[i]);
     master_.SetName("Master");
@@ -215,34 +223,33 @@ const ChannelOutputRouting &MixerService::GetChannelRouting(int channel) const {
 }
 
 OutputEffectSlot *MixerService::GetOutputEffectSlot(int index) {
-  if (index < 0 || index >= OUTPUT_EFFECT_COUNT) {
+  if (index < 0 || index >= OUTPUT_EFFECT_COUNT ||
+      !outputEffects_[index].has_value()) {
     return nullptr;
   }
-  return &outputEffects_[index];
+  return &outputEffects_[index].value();
 }
 
-bool MixerService::SetOutputEffect(int index, OutputEffectProcessor *effect) {
-  if (index < 0 || index >= OUTPUT_EFFECT_COUNT) {
-    return false;
-  }
-
-  Lock();
-  outputEffects_[index].SetEffect(effect);
-  Unlock();
-  return true;
-}
-
-OutputEffectProcessor *MixerService::GetOutputEffect(int index) const {
-  if (index < 0 || index >= OUTPUT_EFFECT_COUNT) {
+OutputEffect *MixerService::GetOutputEffect(int index) {
+  OutputEffectSlot *slot = GetOutputEffectSlot(index);
+  if (slot == nullptr) {
     return nullptr;
   }
-  return outputEffects_[index].GetEffect();
+  return &slot->GetEffect();
+}
+
+const OutputEffect *MixerService::GetOutputEffect(int index) const {
+  if (index < 0 || index >= OUTPUT_EFFECT_COUNT ||
+      !outputEffects_[index].has_value()) {
+    return nullptr;
+  }
+  return &outputEffects_[index].value().GetEffect();
 }
 
 bool MixerService::HasOutputEffectTail() const {
   for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-    if (effectReturnRouting_[fx].returnGain != kAudioSampleZero &&
-        outputEffects_[fx].IsTailActive()) {
+    if (outputEffects_[fx].has_value() &&
+        outputEffects_[fx].value().IsTailActive()) {
       return true;
     }
   }
@@ -257,7 +264,9 @@ void MixerService::ClearOutputEffectTails() {
 
 void MixerService::ClearOutputEffectTailsLocked() {
   for (int i = 0; i < OUTPUT_EFFECT_COUNT; ++i) {
-    outputEffects_[i].ResetState();
+    if (outputEffects_[i].has_value()) {
+      outputEffects_[i].value().ResetState();
+    }
   }
 }
 
@@ -267,10 +276,13 @@ void MixerService::Update(Observable &o, I_ObservableData *d) {
   AudioDriver::Event *event = (AudioDriver::Event *)d;
   if (event->type_ == AudioDriver::Event::ADET_BUFFERNEEDED) {
     Lock();
+    // The sequencer can stop rendering during NotifyObservers(), resetting
+    // mode_. Keep the final stem buffer silent even after that transition.
+    const bool wasRenderingStems = mode_ == MSM_FILESPLIT;
     SetChanged();
     NotifyObservers();
 
-    out_->Trigger();
+    out_->Trigger(wasRenderingStems || mode_ == MSM_FILESPLIT);
     Unlock();
   }
 }
@@ -284,38 +296,6 @@ AudioSample MixerService::ToLogVolume(int vol, int unityPoint) {
 
   float normalizedVol = float(vol) / float(unityPoint);
   return normalizedVol * normalizedVol;
-}
-
-OutputEffectProcessor *MixerService::GetProcessorForSlot(int slot, int type) {
-  NAssert(slot >= 0 && slot < OUTPUT_EFFECT_COUNT);
-
-  switch (ClampOutputEffectTypeIndex(type)) {
-  case kOutputEffectReverb:
-    return &reverbOutputEffects_[slot];
-  case kOutputEffectNone:
-  default:
-    return &silentOutputEffect_;
-  }
-}
-
-void MixerService::SyncOutputEffects(Project *project) {
-  NAssert(project);
-
-  const float inputGain = ToUnitRange(project->GetReverbInputGain(), 99);
-  const float time = ToUnitRange(project->GetReverbTime(), 99);
-  const float diffusion = ToUnitRange(project->GetReverbDiffusion(), 99);
-  const float lowPass = ToUnitRange(project->GetReverbLowPass(), 99);
-
-  for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-    reverbOutputEffects_[fx].SetParameters(inputGain, time, diffusion, lowPass);
-
-    OutputEffectProcessor *effect =
-        GetProcessorForSlot(fx, project->GetFXSlotType(fx));
-    if (outputEffects_[fx].GetEffect() != effect) {
-      outputEffects_[fx].SetEffect(effect);
-      outputEffects_[fx].ResetState();
-    }
-  }
 }
 
 AudioSample MixerService::GetOutputRenderGain() const {
@@ -341,24 +321,19 @@ void MixerService::RefreshMixRouting(Project *project) {
   NAssert(project);
   project_ = project;
 
-  master_.SetVolume(ToLogVolume(project->GetMasterVolume(), 100));
-  SyncOutputEffects(project);
+  master_.SetVolume(
+      ToLogVolume(project->GetMasterVolume(), Project::MixerVolumeMaximum));
 
   for (int i = 0; i < TRACK_MIX_BUS_COUNT; ++i) {
     bus_[i].SetVolume(kAudioSampleOne);
     channelRouting_[i].channelGain =
-        ToLogVolume(project->GetChannelVolume(i), 99);
+        ToLogVolume(project->GetChannelVolume(i), Project::MixerVolumeMaximum);
 
     for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-      AudioSample sendMix = ToLogVolume(project->GetChannelFXSend(i, fx), 99);
+      AudioSample sendMix = ToLogVolume(project->GetChannelFXSend(i, fx),
+                                        OutputEffectSendMaximum);
       AudioSample sendGain = channelRouting_[i].channelGain * sendMix;
       channelRouting_[i].sendGain[fx] = sendGain;
-      if (sendGain != kAudioSampleZero) {
-        channelRouting_[i].sendBuffer[fx] =
-            outputEffects_[fx].GetAccumulationBuffer();
-      } else {
-        channelRouting_[i].sendBuffer[fx] = nullptr;
-      }
     }
   }
 
@@ -367,7 +342,19 @@ void MixerService::RefreshMixRouting(Project *project) {
   for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
     bus_[OUTPUT_EFFECT_BUS_BASE + fx].SetVolume(kAudioSampleOne);
     effectReturnRouting_[fx].returnGain =
-        ToLogVolume(project->GetFXReturnVolume(fx), 99);
+        ToLogVolume(project->GetFXReturnVolume(fx), OutputEffectReturnMaximum);
+
+    // Re-add every legal forward route even at zero gain so effect routing
+    // always executes the maximum work supported by this slot's position.
+    OutputEffectSlotAt(fx).ClearSendRouting();
+    for (int destination = fx + 1; destination < OUTPUT_EFFECT_COUNT;
+         ++destination) {
+      const AudioSample sendGain = ToLogVolume(
+          project->GetFXSend(fx, destination), OutputEffectSendMaximum);
+      const bool routeAdded = OutputEffectSlotAt(fx).AddSendRouting(
+          OutputEffectSlotAt(destination).GetAccumulationBuffer(), sendGain);
+      NAssert(routeAdded);
+    }
   }
 
   project->ClearMixRoutingDirty();
@@ -381,9 +368,22 @@ void MixerService::PrepareRenderPass(Project *project) {
   }
 
   for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-    outputEffects_[fx].ClearAccumulationBuffer();
-    outputEffects_[fx].BeginRenderCycle(effectReturnRouting_[fx].returnGain);
+    OutputEffectSlotAt(fx).ClearAccumulationBuffer();
+    OutputEffectSlotAt(fx).BeginRenderCycle(
+        effectReturnRouting_[fx].returnGain);
   }
+}
+
+OutputEffectSlot &MixerService::OutputEffectSlotAt(int index) {
+  NAssert(index >= 0 && index < OUTPUT_EFFECT_COUNT);
+  NAssert(outputEffects_[index].has_value());
+  return outputEffects_[index].value();
+}
+
+const OutputEffectSlot &MixerService::OutputEffectSlotAt(int index) const {
+  NAssert(index >= 0 && index < OUTPUT_EFFECT_COUNT);
+  NAssert(outputEffects_[index].has_value());
+  return outputEffects_[index].value();
 }
 
 int MixerService::GetPlayedBufferPercentage() {
@@ -426,6 +426,9 @@ void MixerService::setRenderingMode(MixerServiceMode mode) {
       bus_[i].EnableRendering(true);
     };
     for (int i = 0; i < OUTPUT_EFFECT_COUNT; ++i) {
+      if (i != kOutputEffectDelayIndex && i != kOutputEffectReverbIndex) {
+        continue;
+      }
       bus_[OUTPUT_EFFECT_BUS_BASE + i].SetRenderGain(kAudioSampleOne);
       bus_[OUTPUT_EFFECT_BUS_BASE + i].EnableRendering(true);
     }
@@ -495,8 +498,11 @@ bool MixerService::configureRenderPaths() {
     bus_[i].SetFileRenderer(path);
   }
   for (int i = 0; i < OUTPUT_EFFECT_COUNT; ++i) {
-    npf_snprintf(path, sizeof(path), "/renders/%s-fx%d.wav", projectname,
-                 i + 1);
+    if (i != kOutputEffectDelayIndex && i != kOutputEffectReverbIndex) {
+      continue;
+    }
+    npf_snprintf(path, sizeof(path), "/renders/%s-%s.wav", projectname,
+                 GetOutputEffectFileStemForSlot(i));
     bus_[OUTPUT_EFFECT_BUS_BASE + i].SetFileRenderer(path);
   }
   return true;

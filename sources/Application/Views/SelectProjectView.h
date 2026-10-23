@@ -38,7 +38,7 @@ public:
   void ClearAutoSave();
 
 protected:
-  void warpToNextProject(bool goUp);
+  void warpToNextProject(bool goUp, bool page = false);
 
 private:
   static const int numButtons_ = 2;

@@ -16,6 +16,7 @@
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Utils/DrawUtils.h"
 #include "Application/Views/BaseClasses/BrowserEntrySort.h"
+#include "Application/Views/BaseClasses/BrowserPaging.h"
 #include "Application/Views/ModalDialogs/MessageBox.h"
 #include "BaseClasses/ViewEvent.h"
 #include "Externals/etl/include/etl/string.h"
@@ -334,9 +335,9 @@ void SelectProjectView::ProcessButtonMask(unsigned short mask, bool pressed) {
     if (mask & EPBM_ENTER)
       AttemptDeletingSelectedProject();
     if (mask & EPBM_UP)
-      warpToNextProject(true);
+      warpToNextProject(true, true);
     if (mask & EPBM_DOWN)
-      warpToNextProject(false);
+      warpToNextProject(false, true);
   } else {
     // A modifier
     if (mask & EPBM_ENTER) {
@@ -373,27 +374,9 @@ void SelectProjectView::ProcessButtonMask(unsigned short mask, bool pressed) {
   }
 }
 
-void SelectProjectView::warpToNextProject(bool goUp) {
-
-  if (goUp) {
-    if (currentIndex_ > 0) {
-      currentIndex_--;
-      // if we have scrolled off the top, page the file list up if not
-      // already at  very top of the list
-      if (currentIndex_ < topIndex_) {
-        topIndex_ = currentIndex_;
-      }
-    }
-  } else {
-    if (currentIndex_ < fileEntries_.size() - 1) {
-      currentIndex_++;
-      // if we have scrolled off the bottom, page the file list down if not
-      // at end of the list
-      if (currentIndex_ >= (topIndex_ + LIST_PAGE_SIZE)) {
-        topIndex_++;
-      }
-    }
-  }
+void SelectProjectView::warpToNextProject(bool goUp, bool page) {
+  BrowserPaging::Warp(currentIndex_, topIndex_, fileEntries_.size(),
+                      LIST_PAGE_SIZE, goUp, page);
   isDirty_ = true;
 }
 
@@ -566,14 +549,15 @@ void SelectProjectView::AttemptLoadingProject() {
 }
 
 void SelectProjectView::ClearAutoSave() {
-  auto var = viewData_->project_->FindVariable(FourCC::VarProjectName);
-  etl::string<MAX_PROJECT_NAME_LENGTH> projectName = var->GetString();
   PersistencyService *ps = PersistencyService::GetInstance();
-  if (!projectName.empty()) {
-    if (!ps->ClearAutosave(projectName.c_str())) {
+  // Clear the autosave for the original directory to prevent orphaning it
+  // if the user had modified the project name without saving.
+  const auto &originalName = AppWindow::GetInstance()->originalProjectName_;
+  if (!originalName.empty()) {
+    if (!ps->ClearAutosave(originalName.c_str())) {
       Trace::Log("SELECTPROJECTVIEW",
                  "Autosave clear failed or missing for project: %s",
-                 projectName.c_str());
+                 originalName.c_str());
     }
   }
 }

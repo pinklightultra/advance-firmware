@@ -18,6 +18,7 @@
 #include "Application/ScreenConstants.h"
 #include "Application/Views/BaseClasses/View.h"
 #include "Application/Views/ViewData.h"
+#include "Externals/etl/include/etl/string.h"
 #include "Foundation/Observable.h"
 #include "System/Process/SysMutex.h"
 #include "System/io/Status.h"
@@ -62,6 +63,7 @@ public:
                                   SelectionOutputIntent outputIntent) const;
 
   char projectName_[MAX_PROJECT_NAME_LENGTH + 1];
+  etl::string<MAX_PROJECT_NAME_LENGTH> originalProjectName_;
 
 protected: // GUIWindow implementation
   virtual bool onEvent(GUIEvent &event);

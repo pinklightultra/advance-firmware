@@ -12,6 +12,7 @@
  */
 
 #include "MixerView.h"
+#include "Application/Effects/OutputEffectDefinitions.h"
 #include "Application/Mixer/MixerService.h"
 #include "Application/Utils/mathutils.h"
 #include "Application/Views/SampleEditorView.h"
@@ -25,22 +26,19 @@ constexpr int MixerStripX = 5;
 constexpr int MixerStripStride = 3;
 // VU meters grow upwards from a baseline at (anchorY + height - 1). The strip
 // labels sit one row below the baseline and the VOL field one row below that.
-#if SHOW_FX_SCREEN
+// The meters leave room for the permanent FX send rows above the bottom map.
 constexpr int MixerVuMeterHeight = 9;
 constexpr int MixerStripLabelY = 12;
 constexpr int MixerFieldBaseY = 13;
-#else
-// With the FX send rows gated off the meters are made tall enough to fill the
-// space those rows used to occupy above the bottom nav map.
-constexpr int MixerVuMeterHeight = 14;
-constexpr int MixerStripLabelY = 17;
-constexpr int MixerFieldBaseY = 18;
-#endif
 constexpr int MixerRowLabelX = 1;
 constexpr int MixerMasterStripIndex = SONG_CHANNEL_COUNT;
 constexpr int MixerVolumeRow = 0;
 constexpr int MixerFirstEffectRow = 1;
-constexpr int MixerEffectRowEnd = MixerFirstEffectRow + OUTPUT_EFFECT_COUNT;
+// Keep FX1 and FX2 available in the model while hiding their Mixer rows.
+constexpr int MixerFirstVisibleEffectIndex = kOutputEffectDelayIndex;
+constexpr int MixerVisibleEffectCount =
+    OUTPUT_EFFECT_COUNT - MixerFirstVisibleEffectIndex;
+constexpr int MixerEffectRowEnd = MixerFirstEffectRow + MixerVisibleEffectCount;
 
 int GetMixerStripX(int strip) { return MixerStripX + strip * MixerStripStride; }
 
@@ -61,10 +59,9 @@ FourCC GetChannelVolumeFourCC(int channel) {
   return ids[channel];
 }
 
-#if SHOW_FX_SCREEN
 FourCC GetChannelSendFourCC(int channel, int fx) {
   switch (fx) {
-  case kReverbEffectIndex: {
+  case kOutputEffectSlot1Index: {
     static const FourCC ids[] = {
         FourCC::VarChannel1FX1Send, FourCC::VarChannel2FX1Send,
         FourCC::VarChannel3FX1Send, FourCC::VarChannel4FX1Send,
@@ -72,7 +69,7 @@ FourCC GetChannelSendFourCC(int channel, int fx) {
         FourCC::VarChannel7FX1Send, FourCC::VarChannel8FX1Send};
     return ids[channel];
   }
-  case kDelayEffectIndex: {
+  case kOutputEffectSlot2Index: {
     static const FourCC ids[] = {
         FourCC::VarChannel1FX2Send, FourCC::VarChannel2FX2Send,
         FourCC::VarChannel3FX2Send, FourCC::VarChannel4FX2Send,
@@ -80,12 +77,20 @@ FourCC GetChannelSendFourCC(int channel, int fx) {
         FourCC::VarChannel7FX2Send, FourCC::VarChannel8FX2Send};
     return ids[channel];
   }
-  case kReservedEffectIndex: {
+  case kOutputEffectSlot3Index: {
     static const FourCC ids[] = {
         FourCC::VarChannel1FX3Send, FourCC::VarChannel2FX3Send,
         FourCC::VarChannel3FX3Send, FourCC::VarChannel4FX3Send,
         FourCC::VarChannel5FX3Send, FourCC::VarChannel6FX3Send,
         FourCC::VarChannel7FX3Send, FourCC::VarChannel8FX3Send};
+    return ids[channel];
+  }
+  case kOutputEffectSlot4Index: {
+    static const FourCC ids[] = {
+        FourCC::VarChannel1FX4Send, FourCC::VarChannel2FX4Send,
+        FourCC::VarChannel3FX4Send, FourCC::VarChannel4FX4Send,
+        FourCC::VarChannel5FX4Send, FourCC::VarChannel6FX4Send,
+        FourCC::VarChannel7FX4Send, FourCC::VarChannel8FX4Send};
     return ids[channel];
   }
   default:
@@ -94,29 +99,14 @@ FourCC GetChannelSendFourCC(int channel, int fx) {
   }
 }
 
-FourCC GetFXReturnFourCC(int fx) {
-  switch (fx) {
-  case kReverbEffectIndex:
-    return FourCC::VarFX1Volume;
-  case kDelayEffectIndex:
-    return FourCC::VarFX2Volume;
-  case kReservedEffectIndex:
-    return FourCC::VarFX3Volume;
-  default:
-    NAssert(false);
-    return FourCC::VarFX1Volume;
-  }
-}
-
 int GetEffectIndexForMixerRow(int row) {
   if (row >= MixerFirstEffectRow && row < MixerEffectRowEnd) {
-    return row - MixerFirstEffectRow;
+    return MixerFirstVisibleEffectIndex + row - MixerFirstEffectRow;
   }
 
   NAssert(false);
-  return kReverbEffectIndex;
+  return kOutputEffectSlot1Index;
 }
-#endif
 
 void CopyShortName(const char *source, char *destination) {
   NAssert(destination != nullptr);
@@ -154,7 +144,6 @@ void MixerView::Reset() {
       fieldGrid_[strip][row] = nullptr;
     }
   }
-
   selectedStrip_ = 0;
   selectedRow_ = 0;
   initMixerFields();
@@ -167,6 +156,14 @@ void MixerView::OnFocus() {
   // that shared cursor here to keep the opposite direction in sync as well.
   selectedStrip_ = std::clamp(viewData_->songX_, 0, MixerStripCount - 1);
 
+  if (viewData_ && selectedRow_ >= MixerFirstEffectRow &&
+      selectedRow_ < MixerEffectRowEnd) {
+    const int effectIndex =
+        std::clamp(ClampOutputEffectSlotIndex(viewData_->currentFXSlot_),
+                   kOutputEffectDelayIndex, kOutputEffectReverbIndex);
+    selectedRow_ =
+        MixerFirstEffectRow + effectIndex - MixerFirstVisibleEffectIndex;
+  }
   syncFocusToSelection();
 }
 
@@ -211,13 +208,6 @@ void MixerView::syncFocusToSelection() {
 
 void MixerView::updateCursor(int dx, int dy) {
   selectedStrip_ += dx;
-  if (selectedStrip_ < 0) {
-    selectedStrip_ = 0;
-  }
-  if (selectedStrip_ >= MixerStripCount) {
-    selectedStrip_ = MixerStripCount - 1;
-  }
-
   selectedRow_ += dy;
   if (selectedRow_ < 0) {
     selectedRow_ = 0;
@@ -226,12 +216,19 @@ void MixerView::updateCursor(int dx, int dy) {
     selectedRow_ = MixerRowCount - 1;
   }
 
+  if (selectedStrip_ < 0) {
+    selectedStrip_ = 0;
+  }
+  if (selectedStrip_ >= MixerStripCount) {
+    selectedStrip_ = MixerStripCount - 1;
+  }
+
   syncFocusToSelection();
   isDirty_ = true;
 }
 
 void MixerView::switchSoloMode() {
-  if (selectedStrip_ >= SONG_CHANNEL_COUNT) {
+  if (selectedStrip_ < 0 || selectedStrip_ >= SONG_CHANNEL_COUNT) {
     return;
   }
 
@@ -249,7 +246,7 @@ void MixerView::unMuteAll() {
 };
 
 void MixerView::toggleMute() {
-  if (selectedStrip_ >= SONG_CHANNEL_COUNT) {
+  if (selectedStrip_ < 0 || selectedStrip_ >= SONG_CHANNEL_COUNT) {
     return;
   }
 
@@ -285,12 +282,14 @@ void MixerView::ProcessButtonMask(unsigned short mask, bool pressed) {
   }
 
   if ((mask & EPBM_NAV) && (mask & EPBM_DOWN)) {
-#if SHOW_FX_SCREEN
+    if (viewData_ && selectedRow_ >= MixerFirstEffectRow &&
+        selectedRow_ < MixerEffectRowEnd) {
+      viewData_->currentFXSlot_ = GetEffectIndexForMixerRow(selectedRow_);
+    }
     ViewType vt = VT_MASTER_EFFECTS;
     ViewEvent ve(VET_SWITCH_VIEW, &vt);
     SetChanged();
     NotifyObservers(&ve);
-#endif
     return;
   }
 
@@ -318,6 +317,14 @@ void MixerView::ProcessButtonMask(unsigned short mask, bool pressed) {
 
   if (mask & (EPBM_ENTER | EPBM_EDIT)) {
     FieldView::ProcessButtonMask(mask, pressed);
+    SetDirty(true);
+    return;
+  }
+
+  // Keep the solo state while NAV is pressed ahead of ENTER. Otherwise the
+  // NAV-down event clears it and NAV+ENTER starts a new solo instead of
+  // restoring the snapshot.
+  if (viewMode_ == VM_SOLOON && mask == EPBM_NAV) {
     SetDirty(true);
     return;
   }
@@ -359,14 +366,13 @@ void MixerView::initMixerFields() {
     GUIPoint volumePos(GetMixerStripX(channel), MixerFieldBaseY);
     Variable *volume = project->FindVariable(GetChannelVolumeFourCC(channel));
     if (volume) {
-      channelVolumeFields_.emplace_back(volumePos, *volume, "%2.2d", 0, 99, 1,
-                                        5);
+      channelVolumeFields_.emplace_back(volumePos, *volume, "%2.2X", 0,
+                                        Project::MixerVolumeMaximum, 1, 0x10);
       UIField *field = &(*channelVolumeFields_.rbegin());
       fieldGrid_[channel][0] = field;
       fieldList_.insert(fieldList_.end(), field);
     }
 
-#if SHOW_FX_SCREEN
     // the columns for the fx to master send levels
     for (int row = MixerFirstEffectRow; row < MixerEffectRowEnd; ++row) {
       int effectIndex = GetEffectIndexForMixerRow(row);
@@ -374,39 +380,37 @@ void MixerView::initMixerFields() {
       Variable *send =
           project->FindVariable(GetChannelSendFourCC(channel, effectIndex));
       if (send) {
-        channelSendFields_.emplace_back(sendPos, *send, "%2.2d", 0, 99, 1, 5);
+        channelSendFields_.emplace_back(sendPos, *send, "%2.2X", 0,
+                                        OutputEffectSendMaximum, 1, 0x10);
         UIField *field = &(*channelSendFields_.rbegin());
         fieldGrid_[channel][row] = field;
         fieldList_.insert(fieldList_.end(), field);
       }
     }
-#endif
   }
 
-#if SHOW_FX_SCREEN
   // the column for the fx to master return level
   for (int row = MixerFirstEffectRow; row < MixerEffectRowEnd; ++row) {
     int effectIndex = GetEffectIndexForMixerRow(row);
     GUIPoint returnPos(GetMixerStripX(MixerMasterStripIndex),
                        MixerFieldBaseY + row);
     Variable *returnVolume =
-        project->FindVariable(GetFXReturnFourCC(effectIndex));
+        project->FindVariable(GetOutputEffectReturnVariableId(effectIndex));
     if (returnVolume) {
-      fxReturnFields_.emplace_back(returnPos, *returnVolume, "%2.2d", 0, 99, 1,
-                                   5);
+      fxReturnFields_.emplace_back(returnPos, *returnVolume, "%2.2X", 0,
+                                   OutputEffectReturnMaximum, 1, 0x10);
       UIField *field = &(*fxReturnFields_.rbegin());
       fieldGrid_[MixerMasterStripIndex][row] = field;
       fieldList_.insert(fieldList_.end(), field);
     }
   }
-#endif
 
   GUIPoint masterPos(GetMixerStripX(MixerMasterStripIndex),
                      MixerFieldBaseY + MixerVolumeRow);
   Variable *masterVolume = project->FindVariable(FourCC::VarMasterVolume);
   if (masterVolume) {
-    masterVolumeField_.emplace_back(masterPos, *masterVolume, "%2.2d", 0, 100,
-                                    1, 5);
+    masterVolumeField_.emplace_back(masterPos, *masterVolume, "%2.2X", 0,
+                                    Project::MixerVolumeMaximum, 1, 0x10);
     UIField *field = &(*masterVolumeField_.begin());
     fieldGrid_[MixerMasterStripIndex][MixerVolumeRow] = field;
     fieldList_.insert(fieldList_.end(), field);
@@ -420,13 +424,10 @@ void MixerView::drawMixerLabels(Player *player, GUITextProperties props) {
     char rowLabel[4];
     if (row == MixerVolumeRow) {
       CopyShortName("VOL", rowLabel);
-#if SHOW_FX_SCREEN
     } else {
-      OutputEffectProcessor *effect =
-          MixerService::GetInstance()->GetOutputEffect(
-              GetEffectIndexForMixerRow(row));
-      CopyShortName(effect ? effect->GetShortName() : "---", rowLabel);
-#endif
+      CopyShortName(
+          GetOutputEffectShortNameForSlot(GetEffectIndexForMixerRow(row)),
+          rowLabel);
     }
 
     if (row == selectedRow_) {

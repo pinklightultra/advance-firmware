@@ -515,12 +515,23 @@ void SongView::onStart() {
   Player *player = Player::GetInstance();
   unsigned char from = viewData_->songX_;
   unsigned char to = from;
+  SongLoopRange songLoopRange;
   if (selection_.active_) {
     GUIRect r = getSelectionRect();
     from = r.Left();
     to = r.Right();
+    if (player->GetSequencerMode() == SM_SONG) {
+      songLoopRange = {
+          .active = true,
+          .startRow = static_cast<uint8_t>(r.Top()),
+          .endRow = static_cast<uint8_t>(r.Bottom()),
+          .startChannel = from,
+          .endChannel = to,
+      };
+    }
   }
-  player->OnSongStartButton(from, to, false, false);
+  player->OnSongStartButton(from, to, false, false, MSM_AUDIO, false, -1,
+                            songLoopRange);
 };
 
 void SongView::startCurrentRow() {

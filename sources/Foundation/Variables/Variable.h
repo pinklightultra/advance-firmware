@@ -35,27 +35,27 @@ public:
 
   virtual ~Variable();
 
-  FourCC GetID();
-  const char *GetName();
+  FourCC GetID() const;
+  const char *GetName() const;
 
-  Type GetType();
+  Type GetType() const;
   void SetInt(int value, bool notify = true);
   // Set the current value and adopt it as the default (baseline) value, so
   // IsModified()/Reset() treat this value as the instrument's clean state
   // rather than a user modification. Used for per-instrument initial values
   // that differ from the variable's constructed default.
   void SetIntAsDefault(int32_t value);
-  int GetInt();
+  int GetInt() const;
   void SetFloat(float value, bool notify = true);
-  float GetFloat();
+  float GetFloat() const;
   virtual void SetString(const char *string, bool notify = true);
   virtual etl::string<MAX_VARIABLE_STRING_LENGTH> GetString();
   void SetBool(bool value, bool notify = true);
-  bool GetBool();
+  bool GetBool() const;
   virtual void CopyFrom(Variable &other);
   // Not very clean !
-  uint8_t GetListSize();
-  const char *const *GetListPointer();
+  uint8_t GetListSize() const;
+  const char *const *GetListPointer() const;
   virtual void Reset();
 
   // Check if the current value differs from the default value

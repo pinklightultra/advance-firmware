@@ -24,6 +24,7 @@
 #include "SelectionResampleRequest.h"
 #include "Services/Midi/ControlSurface/ControlSurfaceState.h"
 #include "Services/Midi/MidiNoteTracker.h"
+#include "SongLoopRange.h"
 #include "SyncMaster.h"
 #include "System/Timer/Timer.h"
 #include "config/StringLimits.h"
@@ -108,7 +109,8 @@ public:
   // basic interface
 
   void Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
-             bool stopAtEnd = false);
+             bool stopAtEnd = false,
+             SongLoopRange songLoopRange = SongLoopRange());
   void Stop(PlayerStopMode stopMode = PSM_RELEASE);
   void Panic() { Stop(PSM_PANIC); }
   void Kill();
@@ -127,7 +129,8 @@ public:
   void OnSongStartButton(unsigned int from, unsigned int to, bool requestStop,
                          bool forceImmediate,
                          MixerServiceMode msmMode = MSM_AUDIO,
-                         bool stopAtEnd = false, int useStartRow = -1);
+                         bool stopAtEnd = false, int useStartRow = -1,
+                         SongLoopRange songLoopRange = SongLoopRange());
   bool ToggleLiveStartStop(MixerServiceMode msmMode = MSM_AUDIO);
   bool IsPlaying();
 
@@ -135,6 +138,7 @@ public:
   bool IsAuditioning() const;
   bool IsMidiInputPlaying() const;
   bool IsMidiInputChannelPlaying(uint8_t channel) const;
+  bool IsInstrumentInUse(const I_Instrument *instrument);
   bool IsTailPlaying();
   bool GetStopAtEnd() { return stopAtEnd_; }
 
@@ -224,8 +228,6 @@ protected:
 
   void triggerLiveChains();
 
-  void SetAudioActive(bool active);
-
   bool isPlayable(int row, int col, int chainPos = 0);
   bool findPlayable(uchar *row, int col, uchar chainPos = 0);
 
@@ -291,6 +293,7 @@ private:
 
   bool retrigAllImmediate_;
   unsigned char retrigPos_;
+  SongLoopRange songLoopRange_;
   SelectionRenderState selectionRender_;
   bool selectionRenderSongRowAdvanced_ = false;
   PlayerLastActiveCommandState lastActiveCommands_[SONG_CHANNEL_COUNT];

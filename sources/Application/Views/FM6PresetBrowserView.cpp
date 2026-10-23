@@ -17,6 +17,7 @@
 #include "Application/Instruments/FM6Instrument.h"
 #include "Application/Instruments/I_Instrument.h"
 #include "Application/Player/Player.h"
+#include "Application/Views/BaseClasses/BrowserPaging.h"
 #include "Application/Views/InstrumentImportView.h"
 #include "Externals/etl/include/etl/string.h"
 #include "ModalDialogs/MessageBox.h"
@@ -160,12 +161,9 @@ void FM6PresetBrowserView::ProcessButtonMask(unsigned short mask,
 
   if (mask & EPBM_UP) {
     if (patchFocus_) {
-      if (patchIndex_ > 0) {
-        patchIndex_--;
-        if (patchIndex_ < patchTop_) {
-          patchTop_ = patchIndex_;
-        }
-      }
+      const bool page = (mask & EPBM_EDIT) != 0;
+      BrowserPaging::Warp(patchIndex_, patchTop_, fm6::Dx7PresetBankSize,
+                          LIST_PAGE_SIZE, true, page);
     } else if (bankRow_ > 0) {
       bankRow_--;
       patchIndex_ = 0;
@@ -177,13 +175,9 @@ void FM6PresetBrowserView::ProcessButtonMask(unsigned short mask,
 
   if (mask & EPBM_DOWN) {
     if (patchFocus_) {
-      const size_t count = fm6::Dx7PresetBankSize;
-      if (patchIndex_ + 1 < count) {
-        patchIndex_++;
-        if (patchIndex_ >= patchTop_ + LIST_PAGE_SIZE) {
-          patchTop_ = patchIndex_ - LIST_PAGE_SIZE + 1;
-        }
-      }
+      const bool page = (mask & EPBM_EDIT) != 0;
+      BrowserPaging::Warp(patchIndex_, patchTop_, fm6::Dx7PresetBankSize,
+                          LIST_PAGE_SIZE, false, page);
     } else if (bankRow_ < bankCount) {
       bankRow_++;
       patchIndex_ = 0;

@@ -16,6 +16,7 @@
 #include "Application/Model/Config.h"
 #include "Application/Persistency/PersistenceConstants.h"
 #include "Application/Views/BaseClasses/BrowserEntrySort.h"
+#include "Application/Views/BaseClasses/BrowserPaging.h"
 #include "Application/Views/BaseClasses/BrowserPathUtils.h"
 #include "Application/Views/ModalDialogs/MessageBox.h"
 #include "Externals/etl/include/etl/string.h"
@@ -98,9 +99,11 @@ void ThemeImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
 
     // handle moving up and down the file list
   } else if (mask & EPBM_UP) {
-    warpToNextTheme(true);
+    const bool page = (mask & EPBM_EDIT) != 0;
+    warpToNextTheme(true, page);
   } else if (mask & EPBM_DOWN) {
-    warpToNextTheme(false);
+    const bool page = (mask & EPBM_EDIT) != 0;
+    warpToNextTheme(false, page);
   } else if ((mask & EPBM_LEFT) && (mask & EPBM_NAV)) {
     // Go to back "left" to theme screen
     ViewType vt = VT_THEME;
@@ -187,25 +190,9 @@ void ThemeImportView::OnFocus() {
   setCurrentFolder(fs, THEMES_DIR);
 }
 
-void ThemeImportView::warpToNextTheme(bool goUp) {
-  if (fileEntries_.empty())
-    return;
-
-  if (goUp) {
-    if (currentIndex_ > 0) {
-      currentIndex_--;
-      if (currentIndex_ < topIndex_) {
-        topIndex_ = currentIndex_;
-      }
-    }
-  } else {
-    if (currentIndex_ < fileEntries_.size() - 1) {
-      currentIndex_++;
-      if (currentIndex_ >= (topIndex_ + LIST_PAGE_SIZE)) {
-        topIndex_++;
-      }
-    }
-  }
+void ThemeImportView::warpToNextTheme(bool goUp, bool page) {
+  BrowserPaging::Warp(currentIndex_, topIndex_, fileEntries_.size(),
+                      LIST_PAGE_SIZE, goUp, page);
   isDirty_ = true;
 }
 

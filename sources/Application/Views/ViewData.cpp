@@ -35,6 +35,7 @@ void ViewData::Load(Project *project) {
   currentTable_ = 0;
   currentInstrumentID_ = 0;
   currentGroove_ = 0;
+  currentFXSlot_ = 0;
   playMode_ = PM_SONG;
   phraseCurPos_ = 0;
 

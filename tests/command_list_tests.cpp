@@ -67,6 +67,14 @@ TEST_CASE("Commands declare whether phrase and table contexts support them") {
                                       CommandContext::Phrase));
   CHECK(CommandList::IsCommandAllowed(TrackerCommand::InstrumentCommandVolume,
                                       CommandContext::Table));
+  CHECK(CommandList::IsCommandAllowed(
+      TrackerCommand::InstrumentCommandDelayTime, CommandContext::Phrase));
+  CHECK(CommandList::IsCommandAllowed(
+      TrackerCommand::InstrumentCommandDelayTime, CommandContext::Table));
+  CHECK(CommandList::IsCommandAllowed(
+      TrackerCommand::InstrumentCommandDelayFeedback, CommandContext::Phrase));
+  CHECK(CommandList::IsCommandAllowed(
+      TrackerCommand::InstrumentCommandDelayFeedback, CommandContext::Table));
 }
 
 TEST_CASE("Command navigation only returns commands supported by its context") {
@@ -78,4 +86,20 @@ TEST_CASE("Command navigation only returns commands supported by its context") {
     CheckReverseNavigation(context, CommandList::GetNextAlpha,
                            CommandList::GetPrevAlpha);
   }
+}
+
+TEST_CASE("Delay effect commands clamp only their target byte") {
+  CHECK(CommandList::RangeLimitCommandParam(
+            TrackerCommand::InstrumentCommandDelayTime, 0xAA00) == 0xAA01);
+  CHECK(CommandList::RangeLimitCommandParam(
+            TrackerCommand::InstrumentCommandDelayTime, 0xAA60) == 0xAA60);
+  CHECK(CommandList::RangeLimitCommandParam(
+            TrackerCommand::InstrumentCommandDelayTime, 0xAAFF) == 0xAA60);
+
+  CHECK(CommandList::RangeLimitCommandParam(
+            TrackerCommand::InstrumentCommandDelayFeedback, 0xAA00) == 0xAA00);
+  CHECK(CommandList::RangeLimitCommandParam(
+            TrackerCommand::InstrumentCommandDelayFeedback, 0xAA3F) == 0xAA3F);
+  CHECK(CommandList::RangeLimitCommandParam(
+            TrackerCommand::InstrumentCommandDelayFeedback, 0xAAFF) == 0xAAFF);
 }

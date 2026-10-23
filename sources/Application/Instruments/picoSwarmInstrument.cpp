@@ -299,11 +299,11 @@ bool picoSwarmInstrument::Init() {
 }
 
 bool picoSwarmInstrument::Start(int channel, unsigned char note,
-                                bool retrigger) {
+                                InstrumentStartMode mode) {
   if (channel < 0 || channel >= SONG_CHANNEL_COUNT) {
     return false;
   }
-  voices_[channel].Start(note, retrigger);
+  voices_[channel].Start(note, mode != InstrumentStartMode::TiedNote);
   return true;
 }
 

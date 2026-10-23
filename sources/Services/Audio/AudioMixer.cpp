@@ -20,7 +20,7 @@
 
 namespace {
 
-constexpr uint16_t kProfileOrderMixerTotal = 64;
+constexpr uint16_t kProfileOrderMixerTotal = 65;
 
 DWTProfileStats gAudioMixerRenderProfile = {
     .name_ = "mixer total",
@@ -50,6 +50,10 @@ AudioMixer::AudioMixer(const char *name)
 };
 
 AudioMixer::~AudioMixer() {}
+
+DWTProfileStats *AudioMixer::GetMixProfileStats() {
+  return &gAudioMixerRenderProfile;
+}
 
 void AudioMixer::SetFileRenderer(const char *path) { renderPath_ = path; };
 

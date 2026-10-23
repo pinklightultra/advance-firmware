@@ -100,7 +100,8 @@ public:
   ~picoSwarmInstrument() override;
 
   bool Init() override;
-  bool Start(int channel, unsigned char note, bool retrigger = true) override;
+  bool Start(int channel, unsigned char note,
+             InstrumentStartMode mode = InstrumentStartMode::NewNote) override;
   void Release(int channel) override;
   void Stop(int channel) override;
   bool Render(int channel, AudioSample *buffer, int size,

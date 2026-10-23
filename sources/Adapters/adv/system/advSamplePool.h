@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef _ADVSAMPLEPOOL_H_
 #define _ADVSAMPLEPOOL_H_
@@ -22,7 +26,7 @@ public:
   advSamplePool();
   virtual void Reset();
   ~advSamplePool() {}
-  virtual bool CheckSampleFits(int sampleSize);
+  virtual bool CheckSampleFits(uint32_t sampleSize);
   virtual uint32_t GetAvailableSampleStorageSpace();
   virtual bool unloadSample(uint32_t i);
 

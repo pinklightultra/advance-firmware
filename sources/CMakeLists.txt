@@ -34,7 +34,6 @@ add_compile_options(
 
 message("picoTracker Advance Build")
 add_definitions(-DADV)
-add_definitions(-DSHOW_FX_SCREEN=0)
   
 # Enable basic control REPL over serial port on non-Release ADV builds.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

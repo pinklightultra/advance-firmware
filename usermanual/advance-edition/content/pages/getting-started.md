@@ -65,9 +65,9 @@ For a list of all the controls, see the [Controls & Moves reference](keypadcombo
 
 When selecting a sample wav file or project file you enter the file browser view.
 
-When in the Project File Browser view, use the arrow keys <span class="minikeys">UP</span>/<span class="minikeys">Down</span> to navigate through the list of project available and press <span class="minikeys">ENTER</span> to open the currently selected (highlighted) a project. 
+When in the Project File Browser view, use the arrow keys <span class="minikeys">UP</span>/<span class="minikeys">Down</span> to navigate through the list of project available and press <span class="minikeys">ENTER</span> to open the currently selected (highlighted) a project. You can page through the list using <span class="minikeys">EDIT</span>+<span class="minikeys">UP</span>/<span class="minikeys">DOWN</span>.
 
-When in the wave sample File Browser, use the arrow keys <span class="minikeys">UP</span>/<span class="minikeys">DOWN</span> to navigate through the list of available sample files and subdirectories, subdirectories are indicated with a `/` prefix. Press <span class="minikeys">ENTER</span> to enter a subdirectory, you can go back to the parent directory by navigating to the `[up]` entry and pressing <span class="minikeys">ENTER</span> or by pressing <span class="minikeys">NAV</span>+<span class="minikeys">UP</span>. Press <span class="minikeys">PLAY</span> to audition the currently selected sample wave file. To import the currently selected wave file press <span class="minikeys">ALT</span>+<span class="minikeys">PLAY</span>. At any time, you can return to the instrument screen from the sample file browser by pressing <span class="minikeys">NAV</span>+<span class="minikeys">LEFT</span>.
+When in the wave sample File Browser, use the arrow keys <span class="minikeys">UP</span>/<span class="minikeys">DOWN</span> to navigate through the list of available sample files and subdirectories, subdirectories are indicated with a `/` prefix. You can page through the list using <span class="minikeys">EDIT</span>+<span class="minikeys">UP</span>/<span class="minikeys">DOWN</span>. Press <span class="minikeys">ENTER</span> to enter a subdirectory, you can go back to the parent directory by navigating to the `[up]` entry and pressing <span class="minikeys">ENTER</span> or by pressing <span class="minikeys">NAV</span>+<span class="minikeys">UP</span>. Press <span class="minikeys">PLAY</span> to audition the currently selected sample wave file. To import the currently selected wave file press <span class="minikeys">ALT</span>+<span class="minikeys">PLAY</span>. At any time, you can return to the instrument screen from the sample file browser by pressing <span class="minikeys">NAV</span>+<span class="minikeys">LEFT</span>.
 
 
 ## Shutdown and Saving
@@ -75,6 +75,10 @@ When in the wave sample File Browser, use the arrow keys <span class="minikeys">
 
 The state is backed up anytime you hold the power button for 3 seconds to power off the Advance.
 
-The current state of your project is also backed up automatically every 60 seconds. Should the Advance ever crash or you force a reboot (by holding the power button for approximately 8 seconds) without first using the `Save` action field on the Project Screen you will automatically recover to the last backup point when you restart the Advance and so lose at most 60 seconds of prior changes.
+The current state of your project is also backed up automatically every 60 seconds.
+
+{% callout type=warn %}
+If your Advance ever freezes or crashes, press and hold the **power button** for approximately **8 seconds** to force it to reboot. When you restart, the Advance automatically recovers to the last backup point, so you will lose at most 60 seconds of changes made since you last used the `Save` action field on the Project Screen. If the Advance does not boot normally afterwards, force it into _bootloader_ mode with the boot button as described in [Updating Firmware](device.html#updating-firmware).
+{% endcallout %}
 
 If you ever wish to reset back to the last state of your project that you **explicitly** saved, you can open your current project via the Project screen Project `Open` action field and select in the browser the **current** project to be re-opened.

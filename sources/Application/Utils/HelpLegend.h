@@ -129,6 +129,42 @@ inline HelpLegendPair getHelpLegend(TrackerCommand command) {
     result[0] = "Delay: ---b";
     result[1] = "delay b+1 ticks";
     break;
+  case TrackerCommand::InstrumentCommandDelayTime:
+    result[0] = "DeLay Time: --bb";
+    result[1] = "set delay TIM to bb ticks";
+    break;
+  case TrackerCommand::InstrumentCommandDelayFeedback:
+    result[0] = "DeLay Feedback: --bb";
+    result[1] = "set delay FDB to bb";
+    break;
+  case TrackerCommand::InstrumentCommandReverbPreDelay:
+    result[0] = "ReVerb Pre-delay: --bb";
+    result[1] = "set reverb pre-delay to bb";
+    break;
+  case TrackerCommand::InstrumentCommandReverbInputTone:
+    result[0] = "ReVerb Input tone: --bb";
+    result[1] = "set reverb input tone to bb";
+    break;
+  case TrackerCommand::InstrumentCommandReverbDiffuse:
+    result[0] = "ReVerb diFfuse: --bb";
+    result[1] = "set reverb diffusion to bb";
+    break;
+  case TrackerCommand::InstrumentCommandReverbDecay:
+    result[0] = "ReVerb Decay: --bb";
+    result[1] = "set decay; FF holds tail";
+    break;
+  case TrackerCommand::InstrumentCommandReverbTailTone:
+    result[0] = "ReVerb Tail tone: --bb";
+    result[1] = "set reverb tail tone to bb";
+    break;
+  case TrackerCommand::InstrumentCommandReverbModulationSpeed:
+    result[0] = "ReVerb mod Speed: --bb";
+    result[1] = "set reverb movement speed";
+    break;
+  case TrackerCommand::InstrumentCommandReverbModulationLevel:
+    result[0] = "ReVerb mod Level: --bb";
+    result[1] = "set reverb movement level";
+    break;
   case TrackerCommand::InstrumentCommandRandom:
     result[0] = "RaNDom: --bb";
     result[1] = "target left col; bb depth";

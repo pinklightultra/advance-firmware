@@ -705,8 +705,15 @@ void advEventManager::ProcessInputEvent(void *) {
       time_ = millis();
 
       Event ev(BUTTON_CHANGE, sendMask, newMask);
-      xQueueSend(eventQueue, &ev, 0);
-      buttonMask_ = newMask;
+      if (xQueueSend(eventQueue, &ev, 0) == pdPASS) {
+        // Only acknowledge the sampled state after its transition is queued.
+        // Project loading can block the consumer long enough for CLOCK events
+        // to fill the queue. If a button release is dropped but committed
+        // here, AppWindow retains that button forever. Leaving buttonMask_
+        // unchanged makes the input task retry the transition on its next
+        // scan once queue space is available.
+        buttonMask_ = newMask;
+      }
       //            Trace::Debug("%d: mask=%x",gTime_,sendMask) ;
       //                Trace::Debug("~Pe") ;
     }

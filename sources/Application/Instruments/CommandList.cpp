@@ -12,6 +12,7 @@
  */
 
 #include "CommandList.h"
+#include "Application/Effects/DelayOutputEffect.h"
 #include <algorithm>
 #include <stddef.h>
 
@@ -22,6 +23,8 @@ static TrackerCommand _all[] = {
     TrackerCommand::InstrumentCommandArpeggiator,
     TrackerCommand::InstrumentCommandChance,
     TrackerCommand::InstrumentCommandCrush,
+    TrackerCommand::InstrumentCommandDelayFeedback,
+    TrackerCommand::InstrumentCommandDelayTime,
     TrackerCommand::InstrumentCommandDelay,
     TrackerCommand::InstrumentCommandFilterCut,
     TrackerCommand::InstrumentCommandLowPassFilter,
@@ -42,6 +45,13 @@ static TrackerCommand _all[] = {
     TrackerCommand::InstrumentCommandOff,
     TrackerCommand::InstrumentCommandRandom,
     TrackerCommand::InstrumentCommandRetrigger,
+    TrackerCommand::InstrumentCommandReverbPreDelay,
+    TrackerCommand::InstrumentCommandReverbInputTone,
+    TrackerCommand::InstrumentCommandReverbDiffuse,
+    TrackerCommand::InstrumentCommandReverbDecay,
+    TrackerCommand::InstrumentCommandReverbTailTone,
+    TrackerCommand::InstrumentCommandReverbModulationSpeed,
+    TrackerCommand::InstrumentCommandReverbModulationLevel,
     TrackerCommand::InstrumentCommandStop,
     TrackerCommand::InstrumentCommandTable,
     TrackerCommand::InstrumentCommandGateLength,
@@ -103,6 +113,17 @@ ushort CommandList::RangeLimitCommandParam(TrackerCommand command,
   if (command == TrackerCommand::InstrumentCommandPan) {
     // PAN targets the shared panlaw table, which is indexed 0..0xFE.
     return (paramValue & 0xFF00) | std::min<ushort>(paramValue & 0x00FF, 0xFE);
+  }
+  if (command == TrackerCommand::InstrumentCommandDelayTime) {
+    const ushort target =
+        std::clamp<ushort>(paramValue & 0x00FF, DelayOutputEffect::MinimumTime,
+                           DelayOutputEffect::MaximumTime);
+    return (paramValue & 0xFF00) | target;
+  }
+  if (command == TrackerCommand::InstrumentCommandDelayFeedback) {
+    const ushort target = std::min<ushort>(paramValue & 0x00FF,
+                                           DelayOutputEffect::MaximumFeedback);
+    return (paramValue & 0xFF00) | target;
   }
   // Add more command-specific limits here as needed
   // Example:

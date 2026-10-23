@@ -26,7 +26,8 @@
 UIIntVarField::UIIntVarField(const GUIPoint &position, Variable &v,
                              const char *format, int min, int max, int xOffset,
                              int yOffset, int displayOffset,
-                             UIIntVarFieldDisplayMode displayMode)
+                             UIIntVarFieldDisplayMode displayMode,
+                             int displayDivisor)
     : UIField(position), src_(v) {
   format_ = format;
   min_ = min;
@@ -35,6 +36,7 @@ UIIntVarField::UIIntVarField(const GUIPoint &position, Variable &v,
   yOffset_ = yOffset;
   displayOffset_ = displayOffset;
   displayMode_ = displayMode;
+  displayDivisor_ = displayDivisor > 0 ? displayDivisor : 1;
 };
 
 void UIIntVarField::Draw(GUIWindow &w, int offset) {
@@ -61,7 +63,16 @@ void UIIntVarField::Draw(GUIWindow &w, int offset) {
       }
       npf_snprintf(buffer, sizeof(buffer), format_, value);
     } else {
-      npf_snprintf(buffer, sizeof(buffer), format_, ivalue, ivalue);
+      if (displayDivisor_ == 1) {
+        npf_snprintf(buffer, sizeof(buffer), format_, ivalue, ivalue);
+      } else {
+        const int whole = ivalue / displayDivisor_;
+        int fraction = ivalue % displayDivisor_;
+        if (fraction < 0) {
+          fraction = -fraction;
+        }
+        npf_snprintf(buffer, sizeof(buffer), format_, whole, fraction);
+      }
     }
   } break;
   case Variable::CHAR_LIST:

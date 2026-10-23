@@ -225,7 +225,8 @@ void FM6Instrument::SetPreviewPatch(const uint8_t *record) {
 
 void FM6Instrument::ClearPreviewPatch() { previewActive_ = false; }
 
-bool FM6Instrument::Start(int channel, unsigned char note, bool retrigger) {
+bool FM6Instrument::Start(int channel, unsigned char note,
+                          InstrumentStartMode mode) {
   if (channel < 0 || channel >= SONG_CHANNEL_COUNT) {
     return false;
   }
@@ -234,7 +235,8 @@ bool FM6Instrument::Start(int channel, unsigned char note, bool retrigger) {
   // copy) without restarting the operator envelopes, matching the SID
   // instrument's non-retrigger behaviour. An inactive voice still gets a full
   // start so legato phrases can begin from silence.
-  if (!retrigger && renderParams_[channel].voice.active) {
+  if (mode == InstrumentStartMode::TiedNote &&
+      renderParams_[channel].voice.active) {
     fm6::SetVoiceNote(renderParams_[channel].voice, note);
     return true;
   }

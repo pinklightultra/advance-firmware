@@ -43,6 +43,7 @@ protected:
   void pasteLast();
 
   void extendSelection();
+  bool interpolateSelection();
 
   GUIRect getSelectionRect() const;
   bool buildSelectionResampleRequest(SelectionResampleRequest &request) const;

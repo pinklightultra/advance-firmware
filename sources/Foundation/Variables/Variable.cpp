@@ -51,12 +51,12 @@ Variable::Variable(FourCC id, const char *const *list, int size, int index)
 
 Variable::~Variable(){};
 
-Variable::Type Variable::GetType() { return type_; };
+Variable::Type Variable::GetType() const { return type_; };
 
 PICOTRACKER_FAST_CODE("variable_get_id")
-FourCC Variable::GetID() { return id_; };
+FourCC Variable::GetID() const { return id_; };
 
-const char *Variable::GetName() { return FourCC(id_).c_str(); };
+const char *Variable::GetName() const { return FourCC(id_).c_str(); };
 
 void Variable::SetFloat(float value, bool notify) {
   switch (type_) {
@@ -152,7 +152,7 @@ void Variable::SetBool(bool value, bool notify) {
   }
 };
 
-float Variable::GetFloat() {
+float Variable::GetFloat() const {
   switch (type_) {
   case FLOAT:
     return value_.float_;
@@ -169,7 +169,7 @@ float Variable::GetFloat() {
 };
 
 PICOTRACKER_FAST_CODE("variable_get_int")
-int Variable::GetInt() {
+int Variable::GetInt() const {
   switch (type_) {
   case FLOAT:
     return int(value_.float_);
@@ -185,7 +185,7 @@ int Variable::GetInt() {
   return 0;
 };
 
-bool Variable::GetBool() {
+bool Variable::GetBool() const {
   switch (type_) {
   case FLOAT:
     return bool(value_.float_ != 0);
@@ -273,12 +273,12 @@ void Variable::CopyFrom(Variable &other) {
   onChange();
 }
 
-const char *const *Variable::GetListPointer() {
+const char *const *Variable::GetListPointer() const {
   NAssert(type_ == CHAR_LIST);
   return list_.char_;
 };
 
-uint8_t Variable::GetListSize() {
+uint8_t Variable::GetListSize() const {
   NAssert(type_ == CHAR_LIST);
   return listSize_;
 };

@@ -119,7 +119,7 @@ bool Player::ToggleLiveStartStop(MixerServiceMode msmMode) {
 void Player::OnSongStartButton(unsigned int from, unsigned int to,
                                bool requestStop, bool forceImmediate,
                                MixerServiceMode msmMode, bool stopAtEnd,
-                               int useStartRow) {
+                               int useStartRow, SongLoopRange songLoopRange) {
   (void)from;
   (void)to;
   (void)requestStop;
@@ -127,6 +127,7 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
   (void)msmMode;
   (void)stopAtEnd;
   (void)useStartRow;
+  (void)songLoopRange;
   gPlayerSongStartButtonCallCount++;
   isRunning_ = true;
 }
@@ -350,7 +351,8 @@ ViewData::ViewData(Project *project)
     : Observable(&observers_), project_(project), song_(nullptr), songX_(0),
       songY_(0), songOffset_(0), chainRow_(0), chainCol_(0), currentChain_(0),
       currentPhrase_(0), currentInstrumentID_(0), currentTable_(0),
-      currentGroove_(0), playMode_(PM_SONG), phraseCurPos_(0) {}
+      currentGroove_(0), currentFXSlot_(0), playMode_(PM_SONG),
+      phraseCurPos_(0) {}
 
 ViewData::~ViewData() {}
 

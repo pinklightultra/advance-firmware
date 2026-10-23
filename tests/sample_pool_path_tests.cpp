@@ -1,6 +1,7 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-only
  *
+ * Copyright (c) 2024 xiphonics, inc.
  * Copyright (c) 2026 xiphonics, inc.
  */
 
@@ -33,7 +34,10 @@ public:
     }
   }
 
-  bool CheckSampleFits(int) override { return true; }
+  bool CheckSampleFits(uint32_t sampleSize) override {
+    lastCheckedSampleSize_ = sampleSize;
+    return sampleSize <= maximumSampleSize_;
+  }
   uint32_t GetAvailableSampleStorageSpace() override { return 0; }
 
   bool unloadSample(uint32_t index) override {
@@ -50,6 +54,12 @@ public:
   }
 
   void SeedLoadedSample(const char *name) { SeedLoadedSamples(1, name); }
+
+  void SetMaximumSampleSize(uint32_t maximumSampleSize) {
+    maximumSampleSize_ = maximumSampleSize;
+  }
+
+  uint32_t LastCheckedSampleSize() const { return lastCheckedSampleSize_; }
 
   void SeedLoadedSamples(uint32_t count, const char *name) {
     count_ = count;
@@ -86,6 +96,8 @@ protected:
   }
 
 private:
+  uint32_t maximumSampleSize_ = UINT32_MAX;
+  uint32_t lastCheckedSampleSize_ = 0;
   std::vector<std::string> loadedPaths_;
   std::vector<uint32_t> unloadRequests_;
 };
@@ -377,6 +389,47 @@ TEST_CASE("SamplePool resamples non-44.1 kHz imports to 44.1 kHz") {
   REQUIRE(header.has_value());
   CHECK(header->sampleRate == 44100);
   CHECK(header->dataChunkSize > 0);
+}
+
+TEST_CASE("SamplePool checks the converted sample size before importing") {
+  FakeFileSystem fs;
+  FileSystemInstallGuard installGuard(&fs);
+  fs.AddDirectory("/imports");
+  fs.AddDirectory("/projects/demo/samples");
+
+  static const std::array<int16_t, 3840> sourceSamples = {};
+  writeTestWav(fs, "/imports/ConvertedSize.wav", 384000, 1,
+               sourceSamples.data(), sourceSamples.size());
+
+  TestSamplePool pool;
+  pool.SetMaximumSampleSize(900);
+  const int sampleIndex =
+      pool.ImportSample("/imports/ConvertedSize.wav", "demo");
+
+  REQUIRE(sampleIndex == 0);
+  CHECK(pool.LastCheckedSampleSize() == 882);
+}
+
+TEST_CASE("SamplePool rejects an import before copying when its converted size "
+          "does not fit") {
+  FakeFileSystem fs;
+  FileSystemInstallGuard installGuard(&fs);
+  fs.AddDirectory("/imports");
+  fs.AddDirectory("/projects/demo/samples");
+
+  static const std::array<int16_t, 3840> sourceSamples = {};
+  writeTestWav(fs, "/imports/ConvertedSize.wav", 384000, 1,
+               sourceSamples.data(), sourceSamples.size());
+
+  TestSamplePool pool;
+  pool.SetMaximumSampleSize(881);
+  const int sampleIndex =
+      pool.ImportSample("/imports/ConvertedSize.wav", "demo");
+
+  CHECK(sampleIndex == SamplePool::ImportError);
+  CHECK(pool.LastCheckedSampleSize() == 882);
+  CHECK_FALSE(fs.exists("/projects/demo/samples/ConvertedSize.wav"));
+  CHECK(pool.loadedPaths().empty());
 }
 
 TEST_CASE("SamplePool preserves stereo imports") {

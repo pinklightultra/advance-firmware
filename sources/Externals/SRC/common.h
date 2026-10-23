@@ -54,8 +54,8 @@
 #define LIBSAMPLERATE_DLL_PRIVATE
 #endif
 
-#define SRC_MAX_RATIO 6 // 7350Hz min and 264600Hz max
-#define SRC_MAX_RATIO_STR "6"
+#define SRC_MAX_RATIO 9 // 4900Hz min and 396900Hz max
+#define SRC_MAX_RATIO_STR "9"
 
 #define SRC_MIN_RATIO_DIFF (1e-20)
 

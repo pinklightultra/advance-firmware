@@ -38,6 +38,9 @@ int gPlayerLastMidiChannel = -1;
 int gPlayerLastMidiInstrument = -1;
 int gPlayerLastMidiNote = -1;
 int gPlayerLastMidiInputSource = -1;
+const I_Instrument *playerInstrumentInUse = nullptr;
+int selectedMidiInputChannel = -1;
+int selectedMidiInputProgram = -1;
 bool gPlayerRunning = false;
 } // namespace
 
@@ -59,7 +62,17 @@ void ResetPlayerMidiInputTestState() {
   gPlayerLastMidiInstrument = -1;
   gPlayerLastMidiNote = -1;
   gPlayerLastMidiInputSource = -1;
+  playerInstrumentInUse = nullptr;
   gPlayerRunning = false;
+}
+
+void SetPlayerInstrumentInUseForTest(const I_Instrument *instrument) {
+  playerInstrumentInUse = instrument;
+}
+
+void SetMidiInputProgramForTest(int midiChannel, int program) {
+  selectedMidiInputChannel = midiChannel;
+  selectedMidiInputProgram = program;
 }
 
 int GetPlayerSongStartButtonCallCount() {
@@ -100,6 +113,12 @@ void MidiService::QueueMessage(MidiMessage &message) {
 }
 
 void MidiService::RegisterActiveChannel(uint8_t channel) { (void)channel; }
+
+bool MidiService::IsInputProgramSelected(int midiChannel,
+                                         uint8_t program) const {
+  return midiChannel == selectedMidiInputChannel &&
+         program == selectedMidiInputProgram;
+}
 
 void MidiService::registerControlSurfaceInputs(IControlSurface &surface) {
   (void)surface;
@@ -157,7 +176,7 @@ void Player::Update(Observable &o, I_ObservableData *d) {
 void Player::OnSongStartButton(unsigned int from, unsigned int to,
                                bool requestStop, bool forceImmediate,
                                MixerServiceMode msmMode, bool stopAtEnd,
-                               int useStartRow) {
+                               int useStartRow, SongLoopRange songLoopRange) {
   (void)from;
   (void)to;
   (void)requestStop;
@@ -165,11 +184,16 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
   (void)msmMode;
   (void)stopAtEnd;
   (void)useStartRow;
+  (void)songLoopRange;
   gPlayerSongStartButtonCallCount++;
   gPlayerRunning = true;
 }
 
 bool Player::IsRunning() { return gPlayerRunning; }
+
+bool Player::IsInstrumentInUse(const I_Instrument *instrument) {
+  return instrument != nullptr && instrument == playerInstrumentInUse;
+}
 
 void Player::Stop(PlayerStopMode stopMode) {
   (void)stopMode;

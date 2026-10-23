@@ -27,6 +27,10 @@ set(BRAIDS_SOURCES
 add_executable(picoTracker_tests
   adv_usb_host_power_policy_tests.cpp
   audio_voice_tests.cpp
+  audio_output_silence_tests.cpp
+  ../sources/Services/Audio/AudioDriver.cpp
+  delay_output_effect_tests.cpp
+  dattorro_reverb_tests.cpp
   midi_in_device_tests.cpp
   midi_instrument_tests.cpp
   sample_source_instrument_tests.cpp
@@ -40,10 +44,11 @@ add_executable(picoTracker_tests
   insert_effect_slot_tests.cpp
   model_allocation_tests.cpp
   project_channel_count_tests.cpp
-  project_output_effect_type_tests.cpp
+  project_output_effect_tests.cpp
   stubs/application_link_stubs.cpp
   stubs/nanoprintf_impl.c
   browser_entry_sort_tests.cpp
+  browser_paging_tests.cpp
   browser_path_tests.cpp
   big_hex_field_tests.cpp
   filesystem_api_contract_tests.cpp
@@ -51,20 +56,22 @@ add_executable(picoTracker_tests
   foundation_types_tests.cpp
   charger_host_power_tests.cpp
   charger_watchdog_tests.cpp
+  i2c_recovery_tests.cpp
   command_list_tests.cpp
   instrument_pool_tests.cpp
   output_effect_slot_tests.cpp
   play_button_behavior_tests.cpp
   pitch_offset_field_tests.cpp
   player_channel_wet_dry_tests.cpp
-  reverb_output_effect_tests.cpp
   voice_filter_graph_tests.cpp
   voice_envelope_graph_tests.cpp
   voice_screen_utils_tests.cpp
   sample_slicer_tests.cpp
   row_fx_tests.cpp
   sample_pool_path_tests.cpp
+  sample_storage_tests.cpp
   selection_button_behavior_tests.cpp
+  song_loop_range_tests.cpp
   import_while_playing_tests.cpp
   test_main.cpp
   wavheader_tests.cpp
@@ -86,8 +93,11 @@ add_executable(picoTracker_tests
   ../sources/Application/Instruments/WavFile.cpp
   ../sources/Application/Instruments/WavFileWriter.cpp
   ../sources/Application/Instruments/AdvanceFM6/FM6Dx7Patch.cpp
-  ../sources/Application/Mixer/OutputEffectSlot.cpp
-  ../sources/Application/Mixer/ReverbOutputEffect.cpp
+  ../sources/Application/Effects/DelayOutputEffect.cpp
+  ../sources/Application/Effects/DattorroReverb.cpp
+  ../sources/Application/Effects/OutputEffect.cpp
+  ../sources/Application/Effects/OutputEffectSlot.cpp
+  ../sources/Application/Effects/DattorroReverbOutputEffect.cpp
   ../sources/Application/Model/Chain.cpp
   ../sources/Application/Model/Config.cpp
   ../sources/Application/Model/Groove.cpp
@@ -145,7 +155,6 @@ target_include_directories(picoTracker_tests PRIVATE
 
 target_compile_definitions(picoTracker_tests PRIVATE
   HOST_TEST
-  REVERB_OUTPUT_EFFECT_ALGORITHM=1
   HAVE_STDBOOL_H
   PACKAGE="picoTrackerHostTests"
   VERSION="test"
@@ -190,7 +199,8 @@ add_executable(picoTracker_boundary_tests
   boundary_stubs/System/Console/nanoprintf.cpp
   stubs/System/FileSystem/FakeFileSystem.cpp
   ../sources/Application/Instruments/WavHeader.cpp
-  ../sources/Application/Mixer/OutputEffectSlot.cpp
+  ../sources/Application/Effects/OutputEffect.cpp
+  ../sources/Application/Effects/OutputEffectSlot.cpp
   ../sources/Application/Model/Config.cpp
   ../sources/Application/Persistency/PersistencyDocument.cpp
   ../sources/Application/Persistency/PersistencyService.cpp
@@ -263,8 +273,11 @@ add_executable(picoTracker_instr_import_e2e_tests
   ../sources/Application/Instruments/AdvanceFM6/FM6Dx7Patch.cpp
   ../sources/Application/Instruments/AdvanceFM6/FM6Voice.cpp
   ../sources/Application/Instruments/AdvanceSID/AdvanceSID.cpp
-  ../sources/Application/Mixer/OutputEffectSlot.cpp
-  ../sources/Application/Mixer/ReverbOutputEffect.cpp
+  ../sources/Application/Effects/DattorroReverb.cpp
+  ../sources/Application/Effects/DelayOutputEffect.cpp
+  ../sources/Application/Effects/OutputEffect.cpp
+  ../sources/Application/Effects/OutputEffectSlot.cpp
+  ../sources/Application/Effects/DattorroReverbOutputEffect.cpp
   ../sources/Application/Model/Chain.cpp
   ../sources/Application/Model/Config.cpp
   ../sources/Application/Model/Groove.cpp
@@ -315,7 +328,6 @@ target_include_directories(picoTracker_instr_import_e2e_tests PRIVATE
 )
 target_compile_definitions(picoTracker_instr_import_e2e_tests PRIVATE
   HOST_TEST
-  REVERB_OUTPUT_EFFECT_ALGORITHM=1
   HAVE_STDBOOL_H
   PACKAGE="picoTrackerHostTests"
   VERSION="test"

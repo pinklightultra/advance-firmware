@@ -1,13 +1,18 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "RowFx.h"
+#include "Application/Effects/DelayOutputEffect.h"
 #include "Application/Instruments/CommandList.h"
 #include "Application/Model/Project.h"
 #include "Application/Model/Song.h"
@@ -172,6 +177,16 @@ static ushort RandomizeCommandParam(TrackerCommand command,
         originalParam, static_cast<uint8_t>(amount & 0x0F), system);
     break;
 
+  case TrackerCommand::InstrumentCommandDelayTime:
+    randomized = RandomizeLowBytePreservingUpper(
+        originalParam, lowAmount, DelayOutputEffect::MaximumTime, system);
+    break;
+
+  case TrackerCommand::InstrumentCommandDelayFeedback:
+    randomized = RandomizeLowBytePreservingUpper(
+        originalParam, lowAmount, DelayOutputEffect::MaximumFeedback, system);
+    break;
+
   case TrackerCommand::InstrumentCommandOff:
   case TrackerCommand::InstrumentCommandInstrumentRetrigger:
   case TrackerCommand::InstrumentCommandKill:
@@ -188,6 +203,13 @@ static ushort RandomizeCommandParam(TrackerCommand command,
     break;
 
   case TrackerCommand::InstrumentCommandGroove:
+  case TrackerCommand::InstrumentCommandReverbPreDelay:
+  case TrackerCommand::InstrumentCommandReverbInputTone:
+  case TrackerCommand::InstrumentCommandReverbDiffuse:
+  case TrackerCommand::InstrumentCommandReverbDecay:
+  case TrackerCommand::InstrumentCommandReverbTailTone:
+  case TrackerCommand::InstrumentCommandReverbModulationSpeed:
+  case TrackerCommand::InstrumentCommandReverbModulationLevel:
     randomized =
         RandomizeLowBytePreservingUpper(originalParam, lowAmount, 0xFF, system);
     break;

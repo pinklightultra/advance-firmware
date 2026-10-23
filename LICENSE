@@ -114,6 +114,14 @@ subject to its own license. Below is a summary of included external code:
    Original notices: sources/Application/Instruments/AdvanceFM6/NOTICE
    Other original project files retain their individual GPL notices.
 
+18. DattorroReverbNode
+   Adapted files: sources/Application/Effects/DattorroReverb.cpp and .h
+   Original author: Khoi Nguyen
+   Original source: https://github.com/khoin/DattorroReverbNode
+   Original terms: LICENSES/LicenseRef-Dattorro-PD.txt
+   The original implementation has a public-domain dedication and disclaimer.
+   New original xiphonics contributions are GPL-3.0-only, as stated in headers.
+
 The license texts for the above components are available in their respective
 folders. Original component licenses remain applicable to their respective portions;
 file-specific notices identify any separately licensed project contributions.

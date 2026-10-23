@@ -760,6 +760,98 @@ void PhraseView::updateSelectionValue(ViewUpdateDirection direction) { // HERE
   col_ = saveCol_;
 }
 
+bool PhraseView::interpolateSelection() {
+  GUIRect r = getSelectionRect();
+  if ((r.Width() != 0) || (r.Height() < 2)) {
+    return false;
+  }
+
+  const uint8_t startRow = static_cast<uint8_t>(r.Top());
+  const uint8_t endRow = static_cast<uint8_t>(r.Bottom());
+  const uint8_t rowCount = static_cast<uint8_t>(r.Height() + 1);
+  const uint16_t currentPhraseOffset =
+      static_cast<uint16_t>(16 * viewData_->currentPhrase_);
+  const uint16_t startIndex = currentPhraseOffset + startRow;
+  const uint16_t endIndex = currentPhraseOffset + endRow;
+
+  switch (r.Left()) {
+  case 0: {
+    uint8_t *notes = phrase_->note_;
+    if ((notes[startIndex] == NO_NOTE) || (notes[startIndex] == NOTE_OFF) ||
+        (notes[endIndex] == NO_NOTE) || (notes[endIndex] == NOTE_OFF)) {
+      return false;
+    }
+
+    const int16_t startValue = notes[startIndex];
+    const int16_t delta = static_cast<int16_t>(notes[endIndex] - startValue);
+    const int16_t divisor = static_cast<int16_t>(rowCount - 1);
+    for (uint8_t i = 1; i < rowCount - 1; i++) {
+      int16_t numerator = static_cast<int16_t>(delta * i);
+      if (numerator >= 0) {
+        numerator = static_cast<int16_t>(numerator + (divisor / 2));
+      } else {
+        numerator = static_cast<int16_t>(numerator - (divisor / 2));
+      }
+      int16_t value = static_cast<int16_t>(startValue + (numerator / divisor));
+      if (value < 0) {
+        value = 0;
+      } else if (value > HIGHEST_NOTE) {
+        value = HIGHEST_NOTE;
+      }
+      notes[currentPhraseOffset + startRow + i] = static_cast<uchar>(value);
+    }
+    lastNote_ = notes[endIndex];
+    startAudition(false);
+    break;
+  }
+  case 3:
+  case 5: {
+    TrackerCommand *commands = r.Left() == 3 ? phrase_->cmd1_ : phrase_->cmd2_;
+    ushort *params = r.Left() == 3 ? phrase_->param1_ : phrase_->param2_;
+    if ((commands[startIndex] != TrackerCommand::InstrumentCommandVelocity) ||
+        (commands[endIndex] != TrackerCommand::InstrumentCommandVelocity)) {
+      return false;
+    }
+
+    const int16_t startValue =
+        static_cast<int16_t>(CommandList::RangeLimitCommandParam(
+            commands[startIndex], params[startIndex]));
+    const int16_t endValue =
+        static_cast<int16_t>(CommandList::RangeLimitCommandParam(
+            commands[endIndex], params[endIndex]));
+    const int16_t delta = static_cast<int16_t>(endValue - startValue);
+    const int16_t divisor = static_cast<int16_t>(rowCount - 1);
+    for (uint8_t i = 1; i < rowCount - 1; i++) {
+      const uint16_t index = currentPhraseOffset + startRow + i;
+      commands[index] = TrackerCommand::InstrumentCommandVelocity;
+      int16_t numerator = static_cast<int16_t>(delta * i);
+      if (numerator >= 0) {
+        numerator = static_cast<int16_t>(numerator + (divisor / 2));
+      } else {
+        numerator = static_cast<int16_t>(numerator - (divisor / 2));
+      }
+      const int16_t value =
+          static_cast<int16_t>(startValue + (numerator / divisor));
+      params[index] = CommandList::RangeLimitCommandParam(
+          commands[index], static_cast<ushort>(value));
+    }
+    params[startIndex] = CommandList::RangeLimitCommandParam(
+        commands[startIndex], params[startIndex]);
+    params[endIndex] = CommandList::RangeLimitCommandParam(commands[endIndex],
+                                                           params[endIndex]);
+    lastCmd_ = TrackerCommand::InstrumentCommandVelocity;
+    lastParam_ = params[endIndex];
+    break;
+  }
+  default:
+    return false;
+  }
+
+  updateCursor(0, 0);
+  isDirty_ = true;
+  return true;
+}
+
 void PhraseView::extendSelection() {
   GUIRect rect = getSelectionRect();
   if (rect.Left() > 0 || rect.Right() < 5) {
@@ -1371,6 +1463,11 @@ void PhraseView::processSelectionButtonMask(unsigned short mask) {
     // A Modifer
 
     if (mask & EPBM_ENTER) {
+      if (mask == EPBM_ENTER) {
+        // Disabled until interpolation is reviewed in v3.4
+        // see: https://github.com/xiphonics/advance/issues/553
+        // interpolateSelection();
+      }
 
       if (mask & EPBM_DOWN)
         updateSelectionValue(VUD_DOWN);

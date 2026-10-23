@@ -123,11 +123,7 @@ void View::Unlock() { locked_ = false; }
 void View::drawMap() {
   GUIPoint anchor = GetAnchor();
 
-#if SHOW_FX_SCREEN
   int mapYOffset = View::songRowCount_;
-#else
-  int mapYOffset = View::songRowCount_ + 1;
-#endif
   GUIPoint pos(View::margin_, anchor._y + mapYOffset);
   GUITextProperties props;
   I_Instrument *currentInstrument = nullptr;
@@ -160,11 +156,9 @@ void View::drawMap() {
   strcpy(buffer, "M TT ");
   DrawString(pos._x, pos._y, buffer, props);
   pos._y++;
-#if SHOW_FX_SCREEN
   // row5
   strcpy(buffer, "X    ");
   DrawString(pos._x, pos._y, buffer, props);
-#endif
 
   // draw current screen on map
   SetColor(CD_HILITE2);
@@ -218,12 +212,10 @@ void View::drawMap() {
     pos._y += 3;
     DrawString(pos._x, pos._y, "M", props);
     break;
-#if SHOW_FX_SCREEN
   case VT_MASTER_EFFECTS:
     pos._y += 4;
     DrawString(pos._x, pos._y, "X", props);
     break;
-#endif
   default: // VT_SONG
     pos._y += 2;
     DrawString(pos._x, pos._y, "S", props);
@@ -679,19 +671,19 @@ void View::drawTitlebar(GUITextProperties &props) {
 }
 
 void View::drawStatusIndicators(GUITextProperties &props) {
-  // Layout: columns 23-27 (5 chars for status indicators)
-  //   23: playing indicator (>)
-  //   24: audition/MIDI/sample/phrase/chain/tail indicator (A/M/S/P/C/T)
-  //   25: live mode indicator (music note glyph)
-  //   26: USB host MIDI indicator (host glyph)
+  // Layout: columns 21-27 for status indicators before the battery widget.
+  //   21: playing indicator (>)
+  //   22: audition/MIDI/sample/phrase/chain/tail indicator (A/M/S/P/C/T)
+  //   23: separator
+  //   24-26: project BPM
   //   27: gap (space)
-  constexpr int kStatusWidgetStartX = SCREEN_WIDTH - 9; // column 23
+  constexpr int kStatusWidgetStartX = SCREEN_WIDTH - 11; // column 21
   GUIPoint statusPos(0, 0);
 
   GUITextProperties normalProps = props;
   normalProps.invert_ = false;
 
-  // Status indicators at columns 23-26 (each draws space when inactive)
+  // Status indicators at columns 21-22 (each draws space when inactive)
   Player *player = Player::GetInstance();
   const bool isRunning = player != nullptr && player->IsRunning();
   const bool isAuditioning = player != nullptr && player->IsAuditioning();
@@ -705,7 +697,7 @@ void View::drawStatusIndicators(GUITextProperties &props) {
   const PlaybackStatusIndicator playbackStatus = ResolvePlaybackStatusIndicator(
       isRunning, isAuditioning, isMidiInputPlaying, isSamplePreviewing,
       isTailPlaying, playMode);
-  int indicatorX = kStatusWidgetStartX; // column 23
+  int indicatorX = kStatusWidgetStartX; // column 21
 
   // Playing indicator: ">" while any playback status is active.
   if (ShowsPlaybackIcon(playbackStatus)) {
@@ -726,27 +718,15 @@ void View::drawStatusIndicators(GUITextProperties &props) {
   DrawString(indicatorX, statusPos._y, statusSuffix, normalProps);
   indicatorX++;
 
-  // Live mode indicator: music note glyph when in live sequencer mode, space
-  // otherwise
-  if (player != nullptr && player->GetSequencerMode() == SM_LIVE) {
-    SetColor(CD_INFO);
-    DrawString(indicatorX, statusPos._y, char_symbol_note_s, normalProps);
-  } else {
-    DrawString(indicatorX, statusPos._y, " ", normalProps);
-  }
-  indicatorX++;
-
-  // USB Host MIDI indicator: glyph when a MIDI device is connected, "!" on
-  // error
-  if (usbHostEnumerationTimedOut() || usbHostStartupFailed()) {
-    SetColor(CD_ERROR);
-    DrawString(indicatorX, statusPos._y, "!", normalProps);
-  } else if (usbHostMidiMounted()) {
-    SetColor(CD_INFO);
-    DrawString(indicatorX, statusPos._y, char_status_usb_host_s, normalProps);
-  } else {
-    DrawString(indicatorX, statusPos._y, " ", normalProps);
-  }
+  // Show the project tempo, including nudging, even while playback is stopped.
+  char bpmText[4];
+  const int tempo =
+      viewData_ && viewData_->project_ ? viewData_->project_->GetTempo() : 0;
+  npf_snprintf(bpmText, sizeof(bpmText), "%3d", tempo);
+  SetColor(CD_WARN);
+  DrawString(indicatorX, statusPos._y, " ", normalProps);
+  DrawString(indicatorX + 1, statusPos._y, bpmText, normalProps);
+  DrawString(indicatorX + 4, statusPos._y, " ", normalProps);
 
   // Battery at far right
   drawBattery(props);
@@ -834,6 +814,7 @@ void View::printHelpLegend(TrackerCommand command, GUITextProperties props) {
     return;
   }
 
+  SetColor(CD_NORMAL);
   HelpLegendPair helpLegend = getHelpLegend(command);
   // clear top two lines (including title bar)
   DrawString(0, 0, "                           ", props);

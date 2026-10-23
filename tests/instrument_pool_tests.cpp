@@ -31,7 +31,7 @@ using TestInstrumentPool =
 class LegacySelectionTestSamplePool : public SamplePool {
 public:
   void Reset() override { count_ = 0; }
-  bool CheckSampleFits(int) override { return true; }
+  bool CheckSampleFits(uint32_t) override { return true; }
   uint32_t GetAvailableSampleStorageSpace() override { return 0; }
   bool unloadSample(uint32_t index) override {
     if (index >= count_) {

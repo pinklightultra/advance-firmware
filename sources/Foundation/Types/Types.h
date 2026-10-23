@@ -51,7 +51,16 @@ struct TrackerCommand {
     InstrumentCommandGateLength = 28,          // TLN
     InstrumentCommandNone = 45,                // ----
     InstrumentCommandMidiChord = 143,
-    InstrumentCommandRandom = 189, // RND
+    InstrumentCommandRandom = 189,                // RND
+    InstrumentCommandDelayTime = 190,             // DLT
+    InstrumentCommandDelayFeedback = 191,         // DLF
+    InstrumentCommandReverbPreDelay = 192,        // RVP
+    InstrumentCommandReverbInputTone = 193,       // RVI
+    InstrumentCommandReverbDiffuse = 194,         // RVF
+    InstrumentCommandReverbDecay = 195,           // RVD
+    InstrumentCommandReverbTailTone = 196,        // RVT
+    InstrumentCommandReverbModulationSpeed = 197, // RVS
+    InstrumentCommandReverbModulationLevel = 198, // RVL
     Invalid = 255,
   };
   ETL_DECLARE_ENUM_TYPE(TrackerCommand, uint8_t)
@@ -83,6 +92,15 @@ struct TrackerCommand {
   ETL_ENUM_TYPE(InstrumentCommandNone, "---")
   ETL_ENUM_TYPE(InstrumentCommandPitchFineTune, "PFT")
   ETL_ENUM_TYPE(InstrumentCommandDelay, "DLY")
+  ETL_ENUM_TYPE(InstrumentCommandDelayTime, "DLT")
+  ETL_ENUM_TYPE(InstrumentCommandDelayFeedback, "DLF")
+  ETL_ENUM_TYPE(InstrumentCommandReverbPreDelay, "RVP")
+  ETL_ENUM_TYPE(InstrumentCommandReverbInputTone, "RVI")
+  ETL_ENUM_TYPE(InstrumentCommandReverbDiffuse, "RVF")
+  ETL_ENUM_TYPE(InstrumentCommandReverbDecay, "RVD")
+  ETL_ENUM_TYPE(InstrumentCommandReverbTailTone, "RVT")
+  ETL_ENUM_TYPE(InstrumentCommandReverbModulationSpeed, "RVS")
+  ETL_ENUM_TYPE(InstrumentCommandReverbModulationLevel, "RVL")
   ETL_ENUM_TYPE(InstrumentCommandInstrumentRetrigger, "IRT")
   ETL_ENUM_TYPE(InstrumentCommandMidiChord, "MCH")
   ETL_END_ENUM_TYPE
@@ -246,16 +264,24 @@ struct FourCC {
     VarChannel6FX3Send,
     VarChannel7FX3Send,
     VarChannel8FX3Send,
+    VarChannel1FX4Send,
+    VarChannel2FX4Send,
+    VarChannel3FX4Send,
+    VarChannel4FX4Send,
+    VarChannel5FX4Send,
+    VarChannel6FX4Send,
+    VarChannel7FX4Send,
+    VarChannel8FX4Send,
     VarFX1Volume,
     VarFX2Volume,
     VarFX3Volume,
-    VarFX1Type,
-    VarFX2Type,
-    VarFX3Type,
-    VarReverbInputGain,
-    VarReverbTime,
-    VarReverbDiffusion,
-    VarReverbLowPass,
+    VarFX4Volume,
+    VarFX1ToFX2Send,
+    VarFX1ToFX3Send,
+    VarFX1ToFX4Send,
+    VarFX2ToFX3Send,
+    VarFX2ToFX4Send,
+    VarFX3ToFX4Send,
     VarThemeName, // Variable for storing the current theme name
 
     VarInstrumentType,
@@ -386,6 +412,44 @@ struct FourCC {
     picoSwarmInstrumentTableAutomation,
     // Keep new persisted IDs at the end so existing numeric IDs do not move.
     VarInstrumentAudition,
+    VarDelayTime,
+    VarDelayFeedback,
+    VarPlatePreDelay,
+    VarPlateSize,
+    VarPlateDiffusion,
+    VarPlateDecay,
+    VarPlateInputLowCut,
+    VarPlateInputHighCut,
+    VarPlateTankLowCut,
+    VarPlateTankHighCut,
+    VarPlateModulationRate,
+    VarPlateModulationDepth,
+    VarPlateModulationShape,
+    VarPlatePitchMode,
+    VarPlateInputDiffusion,
+    VarPlateFreeze,
+    // Keep new persisted IDs at the end so existing numeric IDs do not move.
+    VarDattorroPreDelay,
+    VarDattorroBandwidth,
+    VarDattorroInputDiffusion1,
+    VarDattorroInputDiffusion2,
+    VarDattorroDecay,
+    VarDattorroDecayDiffusion1,
+    VarDattorroDecayDiffusion2,
+    VarDattorroDamping,
+    VarDattorroExcursionRate,
+    VarDattorroExcursionDepth,
+    // Keep new persisted IDs at the end so existing numeric IDs do not move.
+    VarReverbPreDelay,
+    VarReverbInputTone,
+    VarReverbPreDiffusion1,
+    VarReverbPreDiffusion2,
+    VarReverbDecay,
+    VarReverbDecayDiffusion,
+    VarReverbTailTone,
+    VarReverbModulationRate,
+    VarReverbModulationDepth,
+    VarReverbDiffuse,
   };
   ETL_DECLARE_ENUM_TYPE(FourCC, uint16_t)
   // Not all enums need reflection. Only cases where we need reflection is the
@@ -496,21 +560,21 @@ struct FourCC {
   ETL_ENUM_TYPE(VarReserved3Color, "RESERVED3COLOR")
   ETL_ENUM_TYPE(VarReserved4Color, "RESERVED4COLOR")
   ETL_ENUM_TYPE(VarTempo, "tempo")
-  ETL_ENUM_TYPE(VarMasterVolume, "master")
+  ETL_ENUM_TYPE(VarMasterVolume, "mastervolume")
   ETL_ENUM_TYPE(VarPreviewVolume, "preview")
   ETL_ENUM_TYPE(VarWrap, "wrap")
   ETL_ENUM_TYPE(VarTranspose, "transpose")
   ETL_ENUM_TYPE(VarScale, "scale")
   ETL_ENUM_TYPE(VarProjectName, "projectname")
   ETL_ENUM_TYPE(VarInstrumentType, "INSTRUMENTTYPE")
-  ETL_ENUM_TYPE(VarChannel1Volume, "channel1vol")
-  ETL_ENUM_TYPE(VarChannel2Volume, "channel2vol")
-  ETL_ENUM_TYPE(VarChannel3Volume, "channel3vol")
-  ETL_ENUM_TYPE(VarChannel4Volume, "channel4vol")
-  ETL_ENUM_TYPE(VarChannel5Volume, "channel5vol")
-  ETL_ENUM_TYPE(VarChannel6Volume, "channel6vol")
-  ETL_ENUM_TYPE(VarChannel7Volume, "channel7vol")
-  ETL_ENUM_TYPE(VarChannel8Volume, "channel8vol")
+  ETL_ENUM_TYPE(VarChannel1Volume, "channel1volume")
+  ETL_ENUM_TYPE(VarChannel2Volume, "channel2volume")
+  ETL_ENUM_TYPE(VarChannel3Volume, "channel3volume")
+  ETL_ENUM_TYPE(VarChannel4Volume, "channel4volume")
+  ETL_ENUM_TYPE(VarChannel5Volume, "channel5volume")
+  ETL_ENUM_TYPE(VarChannel6Volume, "channel6volume")
+  ETL_ENUM_TYPE(VarChannel7Volume, "channel7volume")
+  ETL_ENUM_TYPE(VarChannel8Volume, "channel8volume")
   ETL_ENUM_TYPE(VarChannel1FX1Send, "channel1fx1send")
   ETL_ENUM_TYPE(VarChannel2FX1Send, "channel2fx1send")
   ETL_ENUM_TYPE(VarChannel3FX1Send, "channel3fx1send")
@@ -535,16 +599,60 @@ struct FourCC {
   ETL_ENUM_TYPE(VarChannel6FX3Send, "channel6fx3send")
   ETL_ENUM_TYPE(VarChannel7FX3Send, "channel7fx3send")
   ETL_ENUM_TYPE(VarChannel8FX3Send, "channel8fx3send")
+  ETL_ENUM_TYPE(VarChannel1FX4Send, "channel1fx4send")
+  ETL_ENUM_TYPE(VarChannel2FX4Send, "channel2fx4send")
+  ETL_ENUM_TYPE(VarChannel3FX4Send, "channel3fx4send")
+  ETL_ENUM_TYPE(VarChannel4FX4Send, "channel4fx4send")
+  ETL_ENUM_TYPE(VarChannel5FX4Send, "channel5fx4send")
+  ETL_ENUM_TYPE(VarChannel6FX4Send, "channel6fx4send")
+  ETL_ENUM_TYPE(VarChannel7FX4Send, "channel7fx4send")
+  ETL_ENUM_TYPE(VarChannel8FX4Send, "channel8fx4send")
   ETL_ENUM_TYPE(VarFX1Volume, "fx1vol")
   ETL_ENUM_TYPE(VarFX2Volume, "fx2vol")
   ETL_ENUM_TYPE(VarFX3Volume, "fx3vol")
-  ETL_ENUM_TYPE(VarFX1Type, "fx1type")
-  ETL_ENUM_TYPE(VarFX2Type, "fx2type")
-  ETL_ENUM_TYPE(VarFX3Type, "fx3type")
-  ETL_ENUM_TYPE(VarReverbInputGain, "revin")
-  ETL_ENUM_TYPE(VarReverbTime, "revtim")
-  ETL_ENUM_TYPE(VarReverbDiffusion, "revdif")
-  ETL_ENUM_TYPE(VarReverbLowPass, "revlp")
+  ETL_ENUM_TYPE(VarFX4Volume, "fx4vol")
+  ETL_ENUM_TYPE(VarFX1ToFX2Send, "fx1to2send")
+  ETL_ENUM_TYPE(VarFX1ToFX3Send, "fx1to3send")
+  ETL_ENUM_TYPE(VarFX1ToFX4Send, "fx1to4send")
+  ETL_ENUM_TYPE(VarFX2ToFX3Send, "fx2to3send")
+  ETL_ENUM_TYPE(VarFX2ToFX4Send, "fx2to4send")
+  ETL_ENUM_TYPE(VarFX3ToFX4Send, "fx3to4send")
+  ETL_ENUM_TYPE(VarDelayTime, "delaytime")
+  ETL_ENUM_TYPE(VarDelayFeedback, "delayfeedback")
+  ETL_ENUM_TYPE(VarPlatePreDelay, "platepre")
+  ETL_ENUM_TYPE(VarPlateSize, "platesize")
+  ETL_ENUM_TYPE(VarPlateDiffusion, "platedif")
+  ETL_ENUM_TYPE(VarPlateDecay, "platedec")
+  ETL_ENUM_TYPE(VarPlateInputLowCut, "plateilow")
+  ETL_ENUM_TYPE(VarPlateInputHighCut, "plateihigh")
+  ETL_ENUM_TYPE(VarPlateTankLowCut, "platetlow")
+  ETL_ENUM_TYPE(VarPlateTankHighCut, "platethigh")
+  ETL_ENUM_TYPE(VarPlateModulationRate, "platerate")
+  ETL_ENUM_TYPE(VarPlateModulationDepth, "platedepth")
+  ETL_ENUM_TYPE(VarPlateModulationShape, "plateshape")
+  ETL_ENUM_TYPE(VarPlatePitchMode, "platepitch")
+  ETL_ENUM_TYPE(VarPlateInputDiffusion, "plateearly")
+  ETL_ENUM_TYPE(VarPlateFreeze, "platefreeze")
+  ETL_ENUM_TYPE(VarDattorroPreDelay, "dattpre")
+  ETL_ENUM_TYPE(VarDattorroBandwidth, "dattbw")
+  ETL_ENUM_TYPE(VarDattorroInputDiffusion1, "dattindif1")
+  ETL_ENUM_TYPE(VarDattorroInputDiffusion2, "dattindif2")
+  ETL_ENUM_TYPE(VarDattorroDecay, "dattdec")
+  ETL_ENUM_TYPE(VarDattorroDecayDiffusion1, "dattdecdif1")
+  ETL_ENUM_TYPE(VarDattorroDecayDiffusion2, "dattdecdif2")
+  ETL_ENUM_TYPE(VarDattorroDamping, "dattdamp")
+  ETL_ENUM_TYPE(VarDattorroExcursionRate, "dattrate")
+  ETL_ENUM_TYPE(VarDattorroExcursionDepth, "dattdepth")
+  ETL_ENUM_TYPE(VarReverbPreDelay, "reverbpre")
+  ETL_ENUM_TYPE(VarReverbInputTone, "reverbintone")
+  ETL_ENUM_TYPE(VarReverbPreDiffusion1, "reverbprediff1")
+  ETL_ENUM_TYPE(VarReverbPreDiffusion2, "reverbprediff2")
+  ETL_ENUM_TYPE(VarReverbDecay, "reverbdecay")
+  ETL_ENUM_TYPE(VarReverbDecayDiffusion, "reverbdecdiff")
+  ETL_ENUM_TYPE(VarReverbTailTone, "reverbtone")
+  ETL_ENUM_TYPE(VarReverbModulationRate, "reverbmodrate")
+  ETL_ENUM_TYPE(VarReverbModulationDepth, "reverbmoddepth")
+  ETL_ENUM_TYPE(VarReverbDiffuse, "reverbdiffuse")
 
   ETL_ENUM_TYPE(ActionEdit, "edit")
   ETL_ENUM_TYPE(ActionExport, "export")
@@ -634,15 +742,10 @@ static_assert(sizeof(FourCC) == sizeof(uint16_t),
 
 static_assert(FourCC::VarChannel8Volume == FourCC::VarChannel1Volume + 7,
               "Channel volume IDs must remain contiguous");
-static_assert(FourCC::VarChannel8FX3Send == FourCC::VarChannel1FX1Send + 23,
+static_assert(FourCC::VarChannel8FX4Send == FourCC::VarChannel1FX1Send + 31,
               "Channel FX send IDs must remain contiguous");
-static_assert(FourCC::VarFX3Volume == FourCC::VarFX1Volume + 2,
+static_assert(FourCC::VarFX4Volume == FourCC::VarFX1Volume + 3,
               "FX return volume IDs must remain contiguous");
-static_assert(FourCC::VarFX3Type == FourCC::VarFX1Type + 2,
-              "FX type IDs must remain contiguous");
-static_assert(FourCC::VarReverbLowPass == FourCC::VarReverbInputGain + 3,
-              "Reverb IDs must remain contiguous");
-
 typedef unsigned short ushort;
 typedef unsigned int uint;
 typedef unsigned char uchar;

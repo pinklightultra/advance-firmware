@@ -16,17 +16,15 @@
 
 #include "Application/Audio/AudioSample.h"
 #include "Application/Commands/ApplicationCommandDispatcher.h" // Would be better done externally and call an API here
+#include "Application/Effects/OutputEffectConstants.h"
+#include "Application/Effects/OutputEffectSlot.h"
+#include "Externals/etl/include/etl/optional.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Foundation/Observable.h"
 #include "Foundation/T_Singleton.h"
 #include "MixBus.h"
-#include "OutputEffectConstants.h"
-#include "OutputEffectDefinitions.h"
-#include "OutputEffectSlot.h"
-#include "ReverbOutputEffect.h"
 #include "Services/Audio/AudioMixer.h"
 #include "Services/Audio/AudioOut.h"
-#include "SilentOutputEffect.h"
 #include "System/Process/SysMutex.h"
 
 enum MixerServiceMode {
@@ -60,7 +58,7 @@ public:
   MixerService();
   virtual ~MixerService();
 
-  bool Init();
+  bool Init(Project *project);
   void Close();
 
   bool Start();
@@ -87,8 +85,8 @@ public:
   MixerServiceMode GetMode() const { return mode_; }
   const ChannelOutputRouting &GetChannelRouting(int channel) const;
   OutputEffectSlot *GetOutputEffectSlot(int index);
-  bool SetOutputEffect(int index, OutputEffectProcessor *effect);
-  OutputEffectProcessor *GetOutputEffect(int index) const;
+  OutputEffect *GetOutputEffect(int index);
+  const OutputEffect *GetOutputEffect(int index) const;
   bool HasOutputEffectTail() const;
   void ClearOutputEffectTails();
   void ClearOutputEffectTailsLocked();
@@ -104,15 +102,13 @@ protected:
 
 private:
   bool configureRenderPaths();
-  OutputEffectProcessor *GetProcessorForSlot(int slot, int type);
-  void SyncOutputEffects(Project *project);
+  OutputEffectSlot &OutputEffectSlotAt(int index);
+  const OutputEffectSlot &OutputEffectSlotAt(int index) const;
 
   AudioOut *out_;
   MixBus master_;
   MixBus bus_[MAX_BUS_COUNT];
-  SilentOutputEffect silentOutputEffect_;
-  ReverbOutputEffect reverbOutputEffects_[OUTPUT_EFFECT_COUNT];
-  OutputEffectSlot outputEffects_[OUTPUT_EFFECT_COUNT];
+  etl::optional<OutputEffectSlot> outputEffects_[OUTPUT_EFFECT_COUNT];
   ChannelOutputRouting channelRouting_[SONG_CHANNEL_COUNT];
   EffectReturnRouting effectReturnRouting_[OUTPUT_EFFECT_COUNT];
   SysMutex *sync_;

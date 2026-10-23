@@ -26,10 +26,11 @@ PlayerChannel::PlayerChannel(int index)
 PlayerChannel::~PlayerChannel() {}
 
 void PlayerChannel::StartInstrument(I_Instrument *instr, unsigned char note,
-                                    bool retrigger) {
-  const bool reuseMidiInstrument = (midiInstrument_ == instr) && !retrigger;
+                                    InstrumentStartMode mode) {
+  const bool reuseMidiInstrument =
+      (midiInstrument_ == instr) && mode == InstrumentStartMode::TiedNote;
   const bool reuseVoiceInstrument =
-      (voice_.GetInstrument() == instr) && !retrigger;
+      (voice_.GetInstrument() == instr) && mode != InstrumentStartMode::NewNote;
 
   if ((voice_.GetInstrument() || midiInstrument_) && !reuseMidiInstrument &&
       !reuseVoiceInstrument) {
@@ -43,13 +44,13 @@ void PlayerChannel::StartInstrument(I_Instrument *instr, unsigned char note,
   // shared voice pipeline, but they still need to remain addressable for
   // later commands, note-off, and retriggers on the channel.
   if (instr->GetType() == IT_MIDI) {
-    if (instr->Start(index_, note, retrigger)) {
+    if (instr->Start(index_, note, mode)) {
       midiInstrument_ = instr;
     }
     return;
   }
 
-  voice_.StartInstrument(instr, note, retrigger);
+  voice_.StartInstrument(instr, note, mode);
 };
 
 void PlayerChannel::StopInstrument() {
@@ -119,10 +120,12 @@ bool PlayerChannel::Render(AudioSample *buffer, int samplecount) {
   AudioSample *send0 = routing.sendBuffer[0];
   AudioSample *send1 = routing.sendBuffer[1];
   AudioSample *send2 = routing.sendBuffer[2];
+  AudioSample *send3 = routing.sendBuffer[3];
   const AudioSample channelGain = routing.channelGain;
   const AudioSample sendGain0 = routing.sendGain[0];
   const AudioSample sendGain1 = routing.sendGain[1];
   const AudioSample sendGain2 = routing.sendGain[2];
+  const AudioSample sendGain3 = routing.sendGain[3];
 
   const int count = samplecount * 2;
   ScopedDWTProfile outputProfile(
@@ -133,7 +136,7 @@ bool PlayerChannel::Render(AudioSample *buffer, int samplecount) {
   // channel gain, so channel volume affects both the dry path and FX sends.
   PlayerChannelWetDry::ApplyWetDryRouting(buffer, count, channelGain, send0,
                                           sendGain0, send1, sendGain1, send2,
-                                          sendGain2);
+                                          sendGain2, send3, sendGain3);
 
   return true;
 };

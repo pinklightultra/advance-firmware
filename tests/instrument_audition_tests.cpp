@@ -25,7 +25,7 @@ class AuditionTestSamplePool : public SamplePool {
 public:
   void Reset() override { count_ = 0; }
 
-  bool CheckSampleFits(int sampleSize) override {
+  bool CheckSampleFits(uint32_t sampleSize) override {
     (void)sampleSize;
     return true;
   }

@@ -50,6 +50,12 @@ public:
   static bool GetProjectSampleFilename(
       const char *sourcePath,
       etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &projectSampleFilename);
+  // Calculate the memory required after import conversion to 44.1 kHz,
+  // 16-bit PCM. The channel count is preserved by the importer.
+  static bool CalculateImportSampleSize(uint32_t sourceFrameCount,
+                                        uint32_t sourceSampleRate,
+                                        uint16_t channelCount,
+                                        uint32_t &sampleSize);
   // Returned by ImportSample() when the pool already holds a sample with the
   // filename the import would be stored under.
   static constexpr int ImportError = -1;
@@ -59,7 +65,7 @@ public:
 
   int LoadProjectSample(const char *path);
   void PurgeSample(int i, const char *projectName);
-  virtual bool CheckSampleFits(int sampleSize) = 0;
+  virtual bool CheckSampleFits(uint32_t sampleSize) = 0;
   virtual uint32_t GetAvailableSampleStorageSpace() = 0;
   virtual bool unloadSample(uint32_t i) = 0;
   int32_t ReloadSample(uint8_t index, const char *name);

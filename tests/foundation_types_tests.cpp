@@ -19,9 +19,52 @@ TEST_CASE("TrackerCommand stable persisted enum values") {
   CHECK(TrackerCommand::InstrumentCommandDelay == 4);
   CHECK(TrackerCommand::InstrumentCommandNone == 45);
   CHECK(TrackerCommand::InstrumentCommandRandom == 189);
+  CHECK(TrackerCommand::InstrumentCommandDelayTime == 190);
+  CHECK(TrackerCommand::InstrumentCommandDelayFeedback == 191);
   CHECK(TrackerCommand::InstrumentCommandTable == 58);
   CHECK(TrackerCommand::InstrumentCommandOff == 92);
   CHECK(TrackerCommand::InstrumentCommandMidiChord == 143);
+}
+
+TEST_CASE("Delay effect command mnemonics stay stable") {
+  CHECK(std::strcmp(
+            TrackerCommand(TrackerCommand::InstrumentCommandDelayTime).c_str(),
+            "DLT") == 0);
+  CHECK(
+      std::strcmp(TrackerCommand(TrackerCommand::InstrumentCommandDelayFeedback)
+                      .c_str(),
+                  "DLF") == 0);
+}
+
+TEST_CASE("Reverb effect command mnemonics stay stable") {
+  CHECK(std::strcmp(
+            TrackerCommand(TrackerCommand::InstrumentCommandReverbPreDelay)
+                .c_str(),
+            "RVP") == 0);
+  CHECK(std::strcmp(
+            TrackerCommand(TrackerCommand::InstrumentCommandReverbInputTone)
+                .c_str(),
+            "RVI") == 0);
+  CHECK(
+      std::strcmp(TrackerCommand(TrackerCommand::InstrumentCommandReverbDiffuse)
+                      .c_str(),
+                  "RVF") == 0);
+  CHECK(
+      std::strcmp(
+          TrackerCommand(TrackerCommand::InstrumentCommandReverbDecay).c_str(),
+          "RVD") == 0);
+  CHECK(std::strcmp(
+            TrackerCommand(TrackerCommand::InstrumentCommandReverbTailTone)
+                .c_str(),
+            "RVT") == 0);
+  CHECK(std::strcmp(TrackerCommand(
+                        TrackerCommand::InstrumentCommandReverbModulationSpeed)
+                        .c_str(),
+                    "RVS") == 0);
+  CHECK(std::strcmp(TrackerCommand(
+                        TrackerCommand::InstrumentCommandReverbModulationLevel)
+                        .c_str(),
+                    "RVL") == 0);
 }
 
 TEST_CASE("Off command mnemonic is REL") {

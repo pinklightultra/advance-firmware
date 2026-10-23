@@ -45,7 +45,7 @@ PlayerMixer::PlayerMixer() {
 bool PlayerMixer::Init(Project *project) {
 
   MixerService *ms = MixerService::GetInstance();
-  if (!ms->Init()) {
+  if (!ms->Init(project)) {
     return false;
   }
 
@@ -77,6 +77,7 @@ bool PlayerMixer::Init(Project *project) {
 void PlayerMixer::BindProject(Project *project) {
   project_ = project;
   fileStreamer_.SetProject(project);
+  MixerService::GetInstance()->RefreshMixRouting(project);
 
   for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
     lastInstrument_[i] = 0;
@@ -156,8 +157,9 @@ void PlayerMixer::Update(Observable &o, I_ObservableData *d) {
 };
 
 void PlayerMixer::StartInstrument(int channel, I_Instrument *instrument,
-                                  unsigned char note, bool retrigger) {
-  channel_[channel]->StartInstrument(instrument, note, retrigger);
+                                  unsigned char note,
+                                  InstrumentStartMode mode) {
+  channel_[channel]->StartInstrument(instrument, note, mode);
   lastInstrument_[channel] = instrument;
   notes_[channel] = note;
 };

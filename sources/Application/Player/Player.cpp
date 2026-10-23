@@ -12,6 +12,7 @@
  */
 
 #include "Player.h"
+#include "Application/Effects/DelayOutputEffect.h"
 #include "Application/Instruments/I_Instrument.h"
 #include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
@@ -32,6 +33,27 @@
 #include <string.h>
 
 namespace {
+
+FourCC GetReverbCommandParameterId(TrackerCommand command) {
+  switch (command) {
+  case TrackerCommand::InstrumentCommandReverbPreDelay:
+    return FourCC::VarReverbPreDelay;
+  case TrackerCommand::InstrumentCommandReverbInputTone:
+    return FourCC::VarReverbInputTone;
+  case TrackerCommand::InstrumentCommandReverbDiffuse:
+    return FourCC::VarReverbDiffuse;
+  case TrackerCommand::InstrumentCommandReverbDecay:
+    return FourCC::VarReverbDecay;
+  case TrackerCommand::InstrumentCommandReverbTailTone:
+    return FourCC::VarReverbTailTone;
+  case TrackerCommand::InstrumentCommandReverbModulationSpeed:
+    return FourCC::VarReverbModulationRate;
+  case TrackerCommand::InstrumentCommandReverbModulationLevel:
+    return FourCC::VarReverbModulationDepth;
+  default:
+    return FourCC::Default;
+  }
+}
 
 DWTProfileStats gPlayerControlProfile = {
     .name_ = "player control total",
@@ -136,7 +158,7 @@ bool Player::IsChannelMuted(int channel) {
 };
 
 void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
-                   bool stopAtEnd) {
+                   bool stopAtEnd, SongLoopRange songLoopRange) {
 
   mixer_.Lock();
   directNoteAuditionState_.Clear();
@@ -157,12 +179,20 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
 
   viewData_->playMode_ = (forceSongMode ? PM_SONG : mode);
 
+  songLoopRange_ = SongLoopRange();
+  if (!selectionRender_.active && viewData_->playMode_ == PM_SONG &&
+      IsSongLoopRangeValid(songLoopRange)) {
+    songLoopRange_ = songLoopRange;
+  }
+
   // See if we start from current song position
   // or from last stored
 
   unsigned playPos = viewData_->songY_ + viewData_->songOffset_;
   if (selectionRender_.active) {
     playPos = selectionRender_.startSongRow;
+  } else if (songLoopRange_.active) {
+    playPos = songLoopRange_.startRow;
   }
 
   if (forceSongMode == false) {
@@ -194,9 +224,7 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
   // Let's get started !
 
   SyncMaster::GetInstance()->Start();
-  // keep analog output muted during stem rendering to avoid
-  // audible glitches while multiple stem files are being written.
-  SetAudioActive(msmMode != MSM_FILESPLIT);
+  // Playback and file rendering leave the codec output enabled.
 
   firstPlayCycle_ = true;
   mode_ = viewData_->playMode_;
@@ -211,7 +239,8 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
   switch (viewData_->playMode_) {
   case PM_SONG: {
     for (int i = 0; i < channelCount; i++) {
-      if (viewData_->song_->IsMidiInputChannelAssigned(i)) {
+      if (!ShouldPlaySongLoopChannel(songLoopRange_, i) ||
+          viewData_->song_->IsMidiInputChannelAssigned(i)) {
         viewData_->currentPlayChain_[i] = EMPTY_SONG_VALUE;
         viewData_->currentPlayPhrase_[i] = EMPTY_SONG_VALUE;
         continue;
@@ -288,11 +317,7 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
 }
 
 void Player::stopLocked(PlayerStopMode stopMode) {
-  // This checks whether audio is still active in the mixer right now, not
-  // whether the sequencer will still be running after this stop call. We
-  // sample it before releasing channels so analog output stays enabled long
-  // enough for voice release and FX tails.
-  bool keepAudioActive = mixer_.IsPlaying();
+  // Leave the codec output enabled so voice releases and FX tails can finish.
 
   if (stopMode == PSM_PANIC) {
     mixer_.Panic();
@@ -317,6 +342,7 @@ void Player::stopLocked(PlayerStopMode stopMode) {
   mixer_.OnPlayerStop();
 
   SyncMaster::GetInstance()->Stop();
+  songLoopRange_ = SongLoopRange();
   ClearSelectionRender();
   directNoteAuditionState_.Clear();
   midiInputNoteState_.Clear();
@@ -325,9 +351,6 @@ void Player::stopLocked(PlayerStopMode stopMode) {
   SetChanged();
   PlayerEvent pe(PET_STOP);
   NotifyObservers(&pe);
-  if (!keepAudioActive) {
-    SetAudioActive(false);
-  }
 }
 
 void Player::Stop(PlayerStopMode stopMode) {
@@ -345,7 +368,6 @@ void Player::Kill() {
     directNoteAuditionState_.Clear();
     midiInputNoteState_.Clear();
     midiNoteTracker_.clear();
-    SetAudioActive(false);
   }
   mixer_.Unlock();
 }
@@ -470,6 +492,9 @@ const char *Player::GetLiveIndicator(int channel) {
 
 void Player::SetSequencerMode(SequencerMode mode) {
   const bool modeChanged = (sequencerMode_ != mode);
+  if (mode == SM_LIVE) {
+    songLoopRange_ = SongLoopRange();
+  }
   if (isRunning_) {
     switch (mode) {
     case SM_LIVE:
@@ -537,7 +562,7 @@ void Player::OnStartButton(PlayMode origin, unsigned int from,
 void Player::OnSongStartButton(unsigned int from, unsigned int to,
                                bool requestStop, bool forceImmediate,
                                MixerServiceMode msmMode, bool stopAtEnd,
-                               int useStartRow) {
+                               int useStartRow, SongLoopRange songLoopRange) {
 
   switch (GetSequencerMode()) {
 
@@ -558,7 +583,7 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
       for (int i = 0; i < channelCount; i++) {
         liveQueueingMode_[i] = QM_NONE;
       };
-      Start(PM_SONG, false, msmMode);
+      Start(PM_SONG, false, msmMode, false, songLoopRange);
     }
     break;
 
@@ -1056,6 +1081,44 @@ bool Player::ProcessChannelCommand(int channel, TrackerCommand cmd,
     return true;
     break;
   }
+  case TrackerCommand::InstrumentCommandDelayTime: {
+    const int32_t target = std::clamp<int32_t>(
+        static_cast<int32_t>(param & 0xFF), DelayOutputEffect::MinimumTime,
+        DelayOutputEffect::MaximumTime);
+    Variable *variable = project_->FindVariable(FourCC::VarDelayTime);
+    NAssert(variable != nullptr);
+    if (variable != nullptr) {
+      variable->SetInt(target);
+    }
+    return true;
+  }
+  case TrackerCommand::InstrumentCommandDelayFeedback: {
+    const int32_t target =
+        std::clamp<int32_t>(static_cast<int32_t>(param & 0xFF), 0,
+                            DelayOutputEffect::MaximumFeedback);
+    Variable *variable = project_->FindVariable(FourCC::VarDelayFeedback);
+    NAssert(variable != nullptr);
+    if (variable != nullptr) {
+      variable->SetInt(target);
+    }
+    return true;
+  }
+  case TrackerCommand::InstrumentCommandReverbPreDelay:
+  case TrackerCommand::InstrumentCommandReverbInputTone:
+  case TrackerCommand::InstrumentCommandReverbDiffuse:
+  case TrackerCommand::InstrumentCommandReverbDecay:
+  case TrackerCommand::InstrumentCommandReverbTailTone:
+  case TrackerCommand::InstrumentCommandReverbModulationSpeed:
+  case TrackerCommand::InstrumentCommandReverbModulationLevel: {
+    const FourCC parameterId = GetReverbCommandParameterId(cmd);
+    NAssert(parameterId != FourCC::Default);
+    Variable *variable = project_->FindVariable(parameterId);
+    NAssert(variable != nullptr);
+    if (variable != nullptr) {
+      variable->SetInt(static_cast<int32_t>(param & 0xFF));
+    }
+    return true;
+  }
   case TrackerCommand::InstrumentCommandTable: {
     TableHolder *th = TableHolder::GetInstance();
     TablePlayback &tpb = TablePlayback::GetTablePlayback(channel);
@@ -1228,12 +1291,12 @@ void Player::playCursorPosition(int channel) {
 
       // get instrument for next note
 
-      bool shouldRetrigger = false;
+      InstrumentStartMode startMode = InstrumentStartMode::TiedNote;
 
       I_Instrument *instrument;
       if (instr != 0xFF) {
         instrument = bank->GetInstrument(instr);
-        shouldRetrigger = true;
+        startMode = InstrumentStartMode::NewNote;
       } else {
         instrument = mixer_.GetLastInstrument(channel);
       }
@@ -1271,16 +1334,17 @@ void Player::playCursorPosition(int channel) {
         // Check if note is in acceptable midi range
 
         if (note < 128) {
-          if (shouldRetrigger) {
+          if (startMode == InstrumentStartMode::NewNote) {
             mixer_.StopInstrument(channel);
           }
-          mixer_.StartInstrument(channel, instrument, note, shouldRetrigger);
+          mixer_.StartInstrument(channel, instrument, note, startMode);
           int instrTable = instrument->GetTable();
 
           // If an instrument number has been specified && instrument has table,
           // we trigger the table.
 
-          if ((instrTable != VAR_OFF) && (shouldRetrigger)) {
+          if (instrTable != VAR_OFF &&
+              startMode == InstrumentStartMode::NewNote) {
             Table &table = th->GetTable(instrTable);
             bool automated = instrument->GetTableAutomation();
             if (automated) {
@@ -1292,7 +1356,7 @@ void Player::playCursorPosition(int channel) {
             }
           } else {
             // if there was an instrument number, we stop the table
-            if (shouldRetrigger) {
+            if (startMode == InstrumentStartMode::NewNote) {
               atp.Stop();
               tpb.Stop();
             }
@@ -1389,12 +1453,8 @@ void Player::RetriggerChannelInstrumentAtNote(int channel, int note,
   }
   // clear pending release before stopping
   timeToRelease_[channel] = 0;
-  mixer_.StopInstrument(channel);
-  // Legacy SampleInstrument is locked to its historical IRT behavior, which
-  // restarts playback without resetting its instrument-owned command state.
-  // Every other instrument treats IRT like a normal clean retrigger.
-  const bool retrigger = instrument->GetType() != IT_SAMPLE;
-  mixer_.StartInstrument(channel, instrument, note, retrigger);
+  mixer_.StartInstrument(channel, instrument, note,
+                         InstrumentStartMode::Retrigger);
 
   if (stepAutomationTable) {
     StepAutomationTableForRetrigger(channel, instrument);
@@ -1652,6 +1712,10 @@ void Player::moveToNextChain(int channel, int hop) {
         loopBack = (step == 0xFF);
       };
     }
+    if (ShouldWrapSongLoop(songLoopRange_, pos, loopBack)) {
+      pos = songLoopRange_.startRow;
+      loopBack = false;
+    }
     if (loopBack) {
       if (stopAtEnd_) {
         // If stopAtEnd is enabled and we need to loop back, stop playback
@@ -1722,49 +1786,22 @@ unsigned int PlayerEvent::GetTickCount() { return tickCount_; };
 
 void Player::StartStreaming(const char *name, int startSample) {
   mixer_.StartStreaming(name, startSample);
-  if (!isRunning_) {
-    SetAudioActive(true);
-  }
 }
 
 void Player::StartLoopingStreaming(const char *name) {
   mixer_.StartLoopingStreaming(name);
-  if (!isRunning_) {
-    SetAudioActive(true);
-  }
 }
 
-void Player::StopStreaming() {
-  mixer_.StopStreaming();
-  if (!isRunning_ && !mixer_.IsPlaying()) {
-    SetAudioActive(false);
-  }
-}
+void Player::StopStreaming() { mixer_.StopStreaming(); }
 
 bool Player::IsStreamingActive() { return mixer_.IsStreamingActive(); }
 
 void Player::StartRecordStreaming(uint16_t *srcBuffer, uint32_t size,
                                   bool stereo) {
   mixer_.StartRecordStreaming(srcBuffer, size, stereo);
-  if (!isRunning_) {
-    SetAudioActive(true);
-  }
 }
 
-void Player::StopRecordStreaming() {
-  mixer_.StopRecordStreaming();
-  if (!isRunning_ && !mixer_.IsPlaying()) {
-    SetAudioActive(false);
-  }
-}
-
-void Player::SetAudioActive(bool active) {
-  MixerService *ms = MixerService::GetInstance();
-  AudioOut *out = (ms != nullptr) ? ms->GetAudioOut() : nullptr;
-  if (out) {
-    out->SetAudioActive(active);
-  }
-}
+void Player::StopRecordStreaming() { mixer_.StopRecordStreaming(); }
 
 bool Player::IsPlaying() { return mixer_.IsPlaying(); }
 
@@ -1779,6 +1816,19 @@ bool Player::IsMidiInputPlaying() const {
 
 bool Player::IsMidiInputChannelPlaying(uint8_t channel) const {
   return midiInputNoteState_.IsChannelActive(channel);
+}
+
+bool Player::IsInstrumentInUse(const I_Instrument *instrument) {
+  if (instrument == nullptr) {
+    return false;
+  }
+
+  for (uint8_t channel = 0; channel < SONG_CHANNEL_COUNT; channel++) {
+    if (mixer_.GetInstrument(channel) == instrument) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool Player::IsTailPlaying() {
@@ -1843,11 +1893,9 @@ void Player::PlayDirectNote(unsigned short instrumentIndex,
     timeToRelease_[playerChannel] = 0;
     hex2char(static_cast<uint8_t>(instrumentIndex),
              instrumentOnChannel_[playerChannel]);
-    mixer_.StartInstrument(playerChannel, instrument, note, true);
+    mixer_.StartInstrument(playerChannel, instrument, note,
+                           InstrumentStartMode::NewNote);
     state.StartChannel(static_cast<uint8_t>(playerChannel));
-    if (!isRunning_) {
-      SetAudioActive(true);
-    }
   }
 }
 
@@ -1865,9 +1913,6 @@ void Player::StopDirectNote(unsigned short channel,
   int playerChannel = channel % SONG_CHANNEL_COUNT;
   mixer_.StopInstrument(playerChannel);
   state.StopChannel(static_cast<uint8_t>(playerChannel));
-  if (!isRunning_ && !mixer_.IsPlaying()) {
-    SetAudioActive(false);
-  }
 }
 
 void Player::PlayMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
@@ -1915,9 +1960,6 @@ void Player::StopMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
     // project changes, and MIDI input assignment changes.
     mixer_.ReleaseInstrument(songChannel);
     midiInputNoteState_.StopChannel(static_cast<uint8_t>(songChannel));
-    if (!isRunning_ && !mixer_.IsPlaying()) {
-      SetAudioActive(false);
-    }
     SetChanged();
     PlayerEvent pe(PET_NOTE_UPDATE);
     NotifyObservers(&pe);
@@ -1942,12 +1984,8 @@ void Player::ReleaseMidiInputSource(MidiInputSource inputSource) {
       midiInputNoteState_.StopChannel(songChannel);
     }
   }
-  const bool keepAudioActive = isRunning_ || mixer_.IsPlaying();
   mixer_.Unlock();
 
-  if (!keepAudioActive) {
-    SetAudioActive(false);
-  }
   SetChanged();
   PlayerEvent pe(PET_NOTE_UPDATE);
   NotifyObservers(&pe);
@@ -1973,10 +2011,5 @@ void Player::OnMidiInputAssignmentChanged(uint8_t songChannel) {
     viewData_->currentPlayChain_[songChannel] = EMPTY_SONG_VALUE;
     viewData_->currentPlayPhrase_[songChannel] = EMPTY_SONG_VALUE;
   }
-  const bool keepAudioActive = isRunning_ || mixer_.IsPlaying();
   mixer_.Unlock();
-
-  if (!keepAudioActive) {
-    SetAudioActive(false);
-  }
 }

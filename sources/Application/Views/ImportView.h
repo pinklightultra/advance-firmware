@@ -42,13 +42,13 @@ public:
   //  - DrillDown: enter a subdirectory of the current one; the selection
   //    position of the directory being left is saved on the position stack.
   //  - Up: move to the parent directory; the saved position is restored.
-  //  - Jump: move to an unrelated directory (opening the browser, toggling
-  //    to/from the project pool); the whole position stack is discarded.
-  enum class FolderNav : uint8_t { DrillDown = 0, Up, Jump };
+  //  - Jump: open the browser in an unrelated directory and discard history.
+  //  - ResumeImport: return from the project pool to the saved import position.
+  enum class FolderNav : uint8_t { DrillDown = 0, Up, Jump, ResumeImport };
 
 protected:
   void setCurrentFolder(FileSystem *fs, const char *name, FolderNav nav);
-  void warpToNextSample(bool goUp);
+  void warpToNextSample(bool goUp, bool page = false);
   void import();
   void preview();
   void adjustPreviewVolume(int offset);
@@ -57,6 +57,8 @@ protected:
   void renameSample(const FileSystemEntry &entry, FileSystem *fs);
   void removeProjectSample(const FileSystemEntry &entry, FileSystem *fs);
   void refreshFileIndexList(FileSystem *fs);
+  bool getSelectedSamplePoolSize(uint32_t &sampleSize);
+  void invalidateSelectedSamplePoolSize();
 
 private:
   // Max number of drilled-down levels whose selection position is
@@ -65,8 +67,8 @@ private:
   // restores it, so navigating deep sample pack hierarchies does not reset
   // the position every level. Trees deeper than the stack simply drop the
   // oldest (shallowest) records; navigation itself is unbounded. The stack
-  // is discarded on Jump navigations (browser open, project pool toggle)
-  // and in Reset() (power cycle, project load / new project).
+  // is discarded on Jump navigations and in Reset() (power cycle, project
+  // load / new project). The project pool leaves this history intact.
   static constexpr size_t maxDirIndexStackDepth = 32;
 
   void onConfirmRenameSample(View &view, ModalView &dialog);
@@ -74,6 +76,8 @@ private:
 
   size_t topIndex_ = 0;
   size_t currentIndex_ = 0;
+  size_t savedImportTopIndex_ = 0;
+  size_t savedImportIndex_ = 0;
   size_t previewPlayingIndex_ = 0;
   short selectedButton_ = 0;
   int toInstr_ = 0;
@@ -90,6 +94,9 @@ private:
   FileSystemPath::PathString currentDir_;
   char pendingRenamePath_[PFILENAME_SIZE] = {};
   char pendingDeletePath_[PFILENAME_SIZE] = {};
+  size_t samplePoolSizeIndex_ = static_cast<size_t>(-1);
+  uint32_t selectedSamplePoolSize_ = 0;
+  bool selectedSamplePoolSizeValid_ = false;
   BrowserFileEntries &fileEntries_;
 };
 #endif

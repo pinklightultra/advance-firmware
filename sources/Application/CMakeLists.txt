@@ -1,3 +1,11 @@
+# SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+#
+# Copyright (c) 2026 xiphonics, inc.
+#
+# Inherited BSD-licensed material remains BSD-3-Clause.
+# New original contributions by xiphonics, inc. are GPL-3.0-only.
+# Previously granted BSD permissions are preserved. See LICENSING.md.
+
 add_library(application
   AppWindow.cpp
   Application.cpp
@@ -9,6 +17,7 @@ target_link_libraries(application PUBLIC
   system_process
   application_commands
   services_midi
+  application_effects
   application_instruments
   application_model
   application_persistency
@@ -24,6 +33,7 @@ target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 include_directories(${PROJECT_SOURCE_DIR})
 
+add_subdirectory(Effects)
 add_subdirectory(Model)
 add_subdirectory(Instruments)
 add_subdirectory(Player)

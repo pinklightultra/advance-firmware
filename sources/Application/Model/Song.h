@@ -16,6 +16,7 @@
 
 #include "Application/Persistency/Persistent.h"
 #include "Chain.h"
+#include "Externals/etl/include/etl/array.h"
 #include "Phrase.h"
 
 #define SONG_CHANNEL_COUNT 8
@@ -43,6 +44,8 @@
 
 class Song : Persistent {
 public:
+  using InstrumentUsageMap = etl::array<bool, MAX_INSTRUMENT_COUNT>;
+
   Song();
   ~Song();
   void Reset();
@@ -58,6 +61,7 @@ public:
   void SetMidiDefaultProgram(int midiChannel, uint8_t program);
   uint8_t GetMidiDefaultProgram(int midiChannel) const;
   uint8_t GetMidiDefaultInstrumentIndex(int midiChannel) const;
+  InstrumentUsageMap GetInstrumentUsage() const;
 
   unsigned char data_[SONG_CHANNEL_COUNT * SONG_ROW_COUNT];
   uint8_t midiInputChannels_[SONG_CHANNEL_COUNT];

@@ -36,6 +36,9 @@ namespace {
 
 using SampleLoadEntries = etl::vector<FileSystemEntry, MAX_FILE_INDEX_SIZE>;
 
+static constexpr uint32_t kImportOutputSampleRate = 44100;
+static constexpr uint32_t kImportOutputBytesPerSample = sizeof(int16_t);
+
 #if defined(HOST_TEST)
 #define SAMPLE_LOAD_ENTRIES_ATTRIBUTES __attribute__((aligned(32)))
 #else
@@ -259,6 +262,10 @@ bool SamplePool::RenameLoadedSample(
 #define IMPORT_CHUNK_SIZE 512
 static constexpr int32_t kImportInputSamples =
     IMPORT_CHUNK_SIZE / static_cast<int32_t>(sizeof(int16_t));
+// TODO (democloid): This output capacity comes from SRC_MAX_RATIO in the
+// bundled sample-rate converter. Separate the up/down limits or move these
+// import-only buffers to another memory region so high-rate downsampling does
+// not consume unnecessary main RAM.
 static constexpr int32_t kImportMaxOutputSamples =
     (kImportInputSamples * SRC_MAX_RATIO) + 8;
 static float importResampleIn_[kImportInputSamples];
@@ -280,6 +287,30 @@ bool SamplePool::GetProjectSampleFilename(
         projectSampleFilename.substr(0, MAX_INSTRUMENT_FILENAME_LENGTH - 4);
     projectSampleFilename.append(".wav");
   }
+  return true;
+}
+
+bool SamplePool::CalculateImportSampleSize(uint32_t sourceFrameCount,
+                                           uint32_t sourceSampleRate,
+                                           uint16_t channelCount,
+                                           uint32_t &sampleSize) {
+  if (sourceFrameCount == 0 || sourceSampleRate == 0 || channelCount == 0) {
+    return false;
+  }
+
+  // Round up so the preflight check never underestimates the number of frames
+  // that the streaming resampler may produce.
+  const uint64_t outputFrameCount =
+      (static_cast<uint64_t>(sourceFrameCount) * kImportOutputSampleRate +
+       sourceSampleRate - 1U) /
+      sourceSampleRate;
+  const uint64_t outputBytesPerFrame =
+      static_cast<uint64_t>(channelCount) * kImportOutputBytesPerSample;
+  if (outputFrameCount > UINT32_MAX / outputBytesPerFrame) {
+    return false;
+  }
+
+  sampleSize = static_cast<uint32_t>(outputFrameCount * outputBytesPerFrame);
   return true;
 }
 
@@ -311,6 +342,25 @@ int SamplePool::ImportSample(const char *name, const char *projectName) {
     return -1;
   }
 
+  const int32_t sourceFrameCount = wav.GetSize(-1);
+  const int32_t sourceSampleRate = wav.GetSampleRate(-1);
+  const int32_t sourceChannelCount = wav.GetChannelCount(-1);
+  uint32_t convertedSampleSize = 0;
+  if (sourceFrameCount <= 0 || sourceSampleRate <= 0 ||
+      sourceChannelCount <= 0 ||
+      !CalculateImportSampleSize(static_cast<uint32_t>(sourceFrameCount),
+                                 static_cast<uint32_t>(sourceSampleRate),
+                                 static_cast<uint16_t>(sourceChannelCount),
+                                 convertedSampleSize)) {
+    Trace::Error("Failed to calculate converted sample size for:%s", name);
+    return -1;
+  }
+  if (!CheckSampleFits(convertedSampleSize)) {
+    Trace::Error("Converted sample doesn't fit in sample storage (need: %u)",
+                 convertedSampleSize);
+    return -1;
+  }
+
   etl::string<MAX_PROJECT_SAMPLE_PATH_LENGTH> projectSamplePath("/projects/");
   projectSamplePath.append(projectName);
   projectSamplePath.append("/samples/");
@@ -324,12 +374,10 @@ int SamplePool::ImportSample(const char *name, const char *projectName) {
     return -1;
   };
 
-  const int32_t sourceSampleRate = wav.GetSampleRate(-1);
-  const int32_t sourceChannelCount = wav.GetChannelCount(-1);
   const int32_t importResampler =
       Config::GetInstance()->GetValue("IMPORTRESAMP");
   const bool shouldResample = sourceSampleRate != 44100;
-  const int32_t outputSampleRate = 44100;
+  const int32_t outputSampleRate = kImportOutputSampleRate;
 
   if (!WavHeaderWriter::WriteHeader(fout.get(), outputSampleRate,
                                     sourceChannelCount, 16)) {
@@ -369,8 +417,10 @@ int SamplePool::ImportSample(const char *name, const char *projectName) {
     src_reset(resampler);
   }
 
-  const double srcRatio =
-      shouldResample ? (44100.0 / static_cast<double>(sourceSampleRate)) : 1.0;
+  const double srcRatio = shouldResample
+                              ? (static_cast<double>(kImportOutputSampleRate) /
+                                 static_cast<double>(sourceSampleRate))
+                              : 1.0;
 
   while (true) {
     if (!shouldResample) {

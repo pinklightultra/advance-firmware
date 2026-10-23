@@ -12,69 +12,25 @@
  */
 
 #include "MasterEffectsView.h"
-#include "Application/Mixer/OutputEffectDefinitions.h"
+#include "Application/Effects/DattorroReverbOutputEffect.h"
+#include "Application/Effects/DelayOutputEffect.h"
+#include "Application/Effects/OutputEffect.h"
+#include "Application/Effects/OutputEffectDefinitions.h"
 #include "Application/Player/Player.h"
-#include <cstdint>
+#include "BaseClasses/ViewUtils.h"
+#include "System/Console/n_assert.h"
 
 namespace {
 
-constexpr int kSlotColumnX[OUTPUT_EFFECT_COUNT] = {0, 10, 20};
-constexpr int kSlotRowY = 2;
-constexpr int kParameterBaseY = 4;
-constexpr int kParameterRowCount = 4;
-
-struct ReverbParameterLayout {
-  FourCC id;
-  const char *format;
-  const char *placeholder;
-};
-
-constexpr ReverbParameterLayout kReverbParameters[kParameterRowCount] = {
-    {FourCC::VarReverbInputGain, "IN:[%2.2d]", "---:[--]"},
-    {FourCC::VarReverbTime, "TIM:[%2.2d]", "---:[--]"},
-    {FourCC::VarReverbDiffusion, "DIF:[%2.2d]", "---:[--]"},
-    {FourCC::VarReverbLowPass, "LPF:[%2.2d]", "---:[--]"},
-};
-
-FourCC GetFXTypeFourCC(int slot) {
-  switch (slot) {
-  case 0:
-    return FourCC::VarFX1Type;
-  case 1:
-    return FourCC::VarFX2Type;
-  case 2:
-    return FourCC::VarFX3Type;
-  default:
-    NAssert(false);
-    return FourCC::VarFX1Type;
-  }
-}
-
-const char *GetSlotFormat(int slot) {
-  switch (slot) {
-  case 0:
-    return "S1:[%s]";
-  case 1:
-    return "S2:[%s]";
-  case 2:
-    return "S3:[%s]";
-  default:
-    NAssert(false);
-    return "S1:[%s]";
-  }
-}
+constexpr int32_t DelayColumnX = 0;
+constexpr int32_t ReverbColumnX = 14;
+constexpr int32_t EffectHeaderY = 2;
+constexpr int32_t ParameterBaseY = 3;
 
 } // namespace
 
 MasterEffectsView::MasterEffectsView(GUIWindow &w, ViewData *viewData)
-    : FieldView(w, viewData), selectedColumn_(0), selectedRow_(0) {
-  for (int slot = 0; slot < SlotCount; ++slot) {
-    slotFields_[slot] = nullptr;
-    for (int parameter = 0; parameter < EffectParameterRowCount; ++parameter) {
-      effectParameterGrid_[slot][parameter] = nullptr;
-    }
-  }
-
+    : FieldView(w, viewData) {
   initFields();
 }
 
@@ -83,18 +39,8 @@ MasterEffectsView::~MasterEffectsView() {}
 void MasterEffectsView::Reset() {
   ClearFocus();
   fieldList_.clear();
-  slotTypeFields_.clear();
-  effectParameterFields_.clear();
-
-  for (int slot = 0; slot < SlotCount; ++slot) {
-    slotFields_[slot] = nullptr;
-    for (int parameter = 0; parameter < EffectParameterRowCount; ++parameter) {
-      effectParameterGrid_[slot][parameter] = nullptr;
-    }
-  }
-
-  selectedColumn_ = 0;
-  selectedRow_ = 0;
+  delayParameterFields_.clear();
+  reverbParameterFields_.clear();
   initFields();
 }
 
@@ -124,50 +70,20 @@ void MasterEffectsView::ProcessButtonMask(unsigned short mask, bool pressed) {
     return;
   }
 
-  if (mask & (EPBM_ENTER | EPBM_EDIT)) {
-    if (GetSelectedField()) {
-      FieldView::ProcessButtonMask(mask, pressed);
-      syncFocusToSelection();
-    }
-    SetDirty(true);
-    return;
-  }
-
   if (mask & EPBM_NAV) {
     return;
   }
 
-  if (mask & EPBM_LEFT) {
-    updateCursor(-1, 0);
-  }
-  if (mask & EPBM_RIGHT) {
-    updateCursor(1, 0);
-  }
-  if (mask & EPBM_UP) {
-    updateCursor(0, -1);
-  }
-  if (mask & EPBM_DOWN) {
-    updateCursor(0, 1);
+  if (!fieldList_.empty()) {
+    FieldView::ProcessButtonMask(mask, pressed);
   }
 }
 
 void MasterEffectsView::DrawView() {
   Clear();
-
-  GUITextProperties props;
-
-  // Draw title
-  setTitle(etl::string<23>("Master FX"));
-
-  props.invert_ = false;
-
-  for (int slot = 0; slot < SlotCount; ++slot) {
-    if (slotFields_[slot]) {
-      slotFields_[slot]->Draw(w_);
-    }
-    drawParameterColumn(slot, props);
-  }
-
+  setTitle(etl::string<23>("Master Effects"));
+  drawEffectHeaders();
+  FieldView::Redraw();
   drawMap();
 }
 
@@ -176,7 +92,12 @@ void MasterEffectsView::OnPlayerUpdate(PlayerEventType eventType,
   ScreenView::OnPlayerUpdate(eventType, tick);
 }
 
-void MasterEffectsView::OnFocus() { syncFocusToSelection(); }
+void MasterEffectsView::OnFocus() {
+  setTitle(etl::string<23>("Master Effects"));
+  if (!GetFocus() && !fieldList_.empty()) {
+    SetFocus(*fieldList_.begin());
+  }
+}
 
 void MasterEffectsView::AnimationUpdate() {
   ScreenView::AnimationUpdate();
@@ -189,102 +110,119 @@ void MasterEffectsView::initFields() {
     return;
   }
 
-  slotTypeFields_.clear();
-  effectParameterFields_.clear();
+  delayParameterFields_.clear();
+  reverbParameterFields_.clear();
 
-  for (int slot = 0; slot < SlotCount; ++slot) {
-    Variable *slotType = project->FindVariable(GetFXTypeFourCC(slot));
-    if (slotType) {
-      slotTypeFields_.emplace_back(
-          GUIPoint(kSlotColumnX[slot], kSlotRowY), *slotType,
-          GetSlotFormat(slot), kOutputEffectNone, kOutputEffectReverb, 1, 1);
-      slotFields_[slot] = &(*slotTypeFields_.rbegin());
-    }
-
-    for (int parameter = 0; parameter < EffectParameterRowCount; ++parameter) {
-      Variable *value = project->FindVariable(kReverbParameters[parameter].id);
-      if (!value) {
-        continue;
-      }
-
-      effectParameterFields_.emplace_back(
-          GUIPoint(kSlotColumnX[slot], kParameterBaseY + parameter), *value,
-          kReverbParameters[parameter].format, 0, 99, 1, 5);
-      effectParameterGrid_[slot][parameter] =
-          &(*effectParameterFields_.rbegin());
-    }
+  OutputEffect *reverb = project->GetOutputEffect(kOutputEffectReverbIndex);
+  OutputEffect *delay = project->GetOutputEffect(kOutputEffectDelayIndex);
+  NAssert(reverb != nullptr);
+  NAssert(delay != nullptr);
+  if (!reverb || !delay) {
+    return;
   }
 
-  syncFocusToSelection();
+  fillDelayFields(*delay);
+  fillReverbFields(*reverb);
+
+  NAssert(delayParameterFields_.size() == DelayParameterFieldCount);
+  NAssert(reverbParameterFields_.size() == ReverbParameterFieldCount);
+  if (!delayParameterFields_.empty()) {
+    SetFocus(&delayParameterFields_.front());
+  }
 }
 
-void MasterEffectsView::updateCursor(int dx, int dy) {
-  selectedColumn_ += dx;
-  if (selectedColumn_ < 0) {
-    selectedColumn_ = 0;
-  }
-  if (selectedColumn_ >= SlotCount) {
-    selectedColumn_ = SlotCount - 1;
-  }
+void MasterEffectsView::fillReverbFields(OutputEffect &effect) {
+  Variable *preDelay = effect.FindVariable(FourCC::VarReverbPreDelay);
+  NAssert(preDelay != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY), *preDelay, "Pre-delay:  %2.2X",
+      DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
 
-  selectedRow_ += dy;
-  if (selectedRow_ < 0) {
-    selectedRow_ = 0;
-  }
-  if (selectedRow_ >= GridRowCount) {
-    selectedRow_ = GridRowCount - 1;
-  }
+  Variable *inputTone = effect.FindVariable(FourCC::VarReverbInputTone);
+  NAssert(inputTone != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY + 1), *inputTone,
+      "Input tone: %2.2X", DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
 
-  syncFocusToSelection();
-  isDirty_ = true;
+  Variable *diffuse = effect.FindVariable(FourCC::VarReverbDiffuse);
+  NAssert(diffuse != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY + 2), *diffuse,
+      "Diffuse:    %2.2X", DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
+
+  Variable *decay = effect.FindVariable(FourCC::VarReverbDecay);
+  NAssert(decay != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY + 3), *decay, "Decay time: %2.2X",
+      DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
+
+  Variable *tailTone = effect.FindVariable(FourCC::VarReverbTailTone);
+  NAssert(tailTone != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY + 4), *tailTone,
+      "Tail tone:  %2.2X", DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
+
+  Variable *modulationRate =
+      effect.FindVariable(FourCC::VarReverbModulationRate);
+  NAssert(modulationRate != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY + 5), *modulationRate,
+      "Mod speed:  %2.2X", DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
+
+  Variable *modulationDepth =
+      effect.FindVariable(FourCC::VarReverbModulationDepth);
+  NAssert(modulationDepth != nullptr);
+  reverbParameterFields_.emplace_back(
+      GUIPoint(ReverbColumnX, ParameterBaseY + 6), *modulationDepth,
+      "Mod level:  %2.2X", DattorroReverbOutputEffect::MinimumParameterValue,
+      DattorroReverbOutputEffect::MaximumParameterValue, 1, 0x10);
+  fieldList_.push_back(&reverbParameterFields_.back());
 }
 
-void MasterEffectsView::syncFocusToSelection() { SetFocus(GetSelectedField()); }
+void MasterEffectsView::fillDelayFields(OutputEffect &effect) {
+  Project &project = *viewData_->project_;
 
-UIField *MasterEffectsView::GetSelectedField() {
-  if (selectedRow_ == 0) {
-    return slotFields_[selectedColumn_];
-  }
+  Variable *time = effect.FindVariable(FourCC::VarDelayTime);
+  NAssert(time != nullptr);
+  delayParameterFields_.emplace_back(
+      GUIPoint(DelayColumnX, ParameterBaseY), *time, "Time:     %2.2d",
+      DelayOutputEffect::MinimumTime, DelayOutputEffect::MaximumTime, 1,
+      DelayOutputEffect::TicksPerStep, 0);
+  fieldList_.push_back(&delayParameterFields_.back());
 
-  if (!SlotUsesReverb(selectedColumn_)) {
-    return nullptr;
-  }
+  Variable *feedback = effect.FindVariable(FourCC::VarDelayFeedback);
+  NAssert(feedback != nullptr);
+  delayParameterFields_.emplace_back(
+      GUIPoint(DelayColumnX, ParameterBaseY + 1), *feedback, "Feedback: %2.2X",
+      0, DelayOutputEffect::MaximumFeedback, 1, 0x10);
+  fieldList_.push_back(&delayParameterFields_.back());
 
-  return effectParameterGrid_[selectedColumn_][selectedRow_ - 1];
+  Variable *reverbSend = project.FindVariable(GetOutputEffectRouteVariableId(
+      kOutputEffectDelayIndex, kOutputEffectReverbIndex));
+  NAssert(reverbSend != nullptr);
+  delayParameterFields_.emplace_back(GUIPoint(DelayColumnX, ParameterBaseY + 2),
+                                     *reverbSend, "RVB send: %2.2X", 0,
+                                     OutputEffectSendMaximum, 1, 0x10);
+  fieldList_.push_back(&delayParameterFields_.back());
 }
 
-bool MasterEffectsView::SlotUsesReverb(int slot) const {
-  if (slot < 0 || slot >= SlotCount || viewData_ == nullptr ||
-      viewData_->project_ == nullptr) {
-    return false;
-  }
-
-  return ClampOutputEffectTypeIndex(viewData_->project_->GetFXSlotType(slot)) ==
-         kOutputEffectReverb;
-}
-
-void MasterEffectsView::drawParameterColumn(int slot, GUITextProperties props) {
-  const bool slotUsesReverb = SlotUsesReverb(slot);
-
-  for (int parameter = 0; parameter < EffectParameterRowCount; ++parameter) {
-    if (slotUsesReverb && effectParameterGrid_[slot][parameter]) {
-      effectParameterGrid_[slot][parameter]->Draw(w_);
-      continue;
-    }
-
-    const bool selected =
-        (selectedColumn_ == slot) && (selectedRow_ == parameter + 1);
-    if (selected) {
-      SetColor(CD_HILITE2);
-      props.invert_ = true;
-    } else {
-      SetColor(CD_NORMAL);
-      props.invert_ = false;
-    }
-
-    DrawString(kSlotColumnX[slot], kParameterBaseY + parameter,
-               kReverbParameters[parameter].placeholder, props);
-  }
+void MasterEffectsView::drawEffectHeaders() {
+  GUITextProperties properties;
+  SetColor(CD_HILITE2);
+  DrawString(DelayColumnX, EffectHeaderY, "Delay", properties);
+  DrawString(ReverbColumnX, EffectHeaderY, "Reverb", properties);
 }
 
 void MasterEffectsView::togglePlay() {

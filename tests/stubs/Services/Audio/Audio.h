@@ -10,13 +10,15 @@
 #ifndef _AUDIO_H_
 #define _AUDIO_H_
 
+#include "Services/Audio/AudioConstants.h"
+
 class Audio {
 public:
   static Audio *GetInstance() {
     static Audio instance;
     return &instance;
   }
-  int GetSampleRate() { return 44100; }
+  int GetSampleRate() { return kAudioSampleRateHz; }
 };
 
 #endif

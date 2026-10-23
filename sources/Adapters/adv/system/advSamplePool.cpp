@@ -11,6 +11,7 @@
  */
 
 #include "advSamplePool.h"
+#include "SamplePoolStorage.h"
 #include <cstring>
 #include <utility>
 
@@ -39,13 +40,16 @@ void advSamplePool::Reset() {
   writeOffset2_ = 0;
 };
 
-bool advSamplePool::CheckSampleFits(int sampleSize) {
-  return ((writeOffset1_ + sampleSize) <= storeLimit1_) ||
-         ((writeOffset2_ + sampleSize) <= storeLimit2_);
+bool advSamplePool::CheckSampleFits(uint32_t sampleSize) {
+  return AdvanceSampleStorage::FitsInEither(
+      writeOffset1_, storeLimit1_, writeOffset2_, storeLimit2_, sampleSize);
 }
 
 uint32_t advSamplePool::GetAvailableSampleStorageSpace() {
-  return storeLimit1_ - writeOffset1_ + storeLimit2_ - writeOffset2_;
+  return AdvanceSampleStorage::GetAvailableCapacity(writeOffset1_,
+                                                    storeLimit1_) +
+         AdvanceSampleStorage::GetAvailableCapacity(writeOffset2_,
+                                                    storeLimit2_);
 }
 
 bool advSamplePool::loadSample(const char *name) {
@@ -83,11 +87,14 @@ bool advSamplePool::Load(WavFile &wave) {
   // leave the biggest free space for any potential bigger future samples
   uint32_t *writeOffset = 0;
   uint8_t *sampleStore;
+  const uint32_t available1 =
+      AdvanceSampleStorage::GetAvailableCapacity(writeOffset1_, storeLimit1_);
+  const uint32_t available2 =
+      AdvanceSampleStorage::GetAvailableCapacity(writeOffset2_, storeLimit2_);
 
-  if ((writeOffset1_ + fileSize < storeLimit1_) &&
-      (writeOffset2_ + fileSize < storeLimit2_)) {
+  if (fileSize <= available1 && fileSize <= available2) {
     // fits both
-    if ((storeLimit1_ - writeOffset1_) < (storeLimit2_ - writeOffset2_)) {
+    if (available1 < available2) {
       writeOffset = &writeOffset1_;
       sampleStore = sampleStore1;
     } else {
@@ -96,21 +103,22 @@ bool advSamplePool::Load(WavFile &wave) {
     }
   }
   // Only one of them can potentially fit the sample
-  else if (writeOffset1_ + fileSize < storeLimit1_) {
+  else if (fileSize <= available1) {
     writeOffset = &writeOffset1_;
     sampleStore = sampleStore1;
-  } else if (writeOffset2_ + fileSize < storeLimit2_) {
+  } else if (fileSize <= available2) {
     writeOffset = &writeOffset2_;
     sampleStore = sampleStore2;
   } else {
-    Trace::Error("Sample doesn't fit in available sample storage (need: %i - "
-                 "avail: %i) ",
-                 fileSize, storeLimit1_ - writeOffset1_);
+    Trace::Error("Sample doesn't fit in available sample storage (need: %u - "
+                 "largest available: %u - total available: %u)",
+                 fileSize, available1 > available2 ? available1 : available2,
+                 available1 + available2);
     return false;
   }
 
   // Ensure 4-byte alignment for SDRAM access at start of each file
-  *writeOffset = (*writeOffset + 3) & ~3;
+  *writeOffset += AdvanceSampleStorage::GetAlignmentPadding(*writeOffset);
 
   // Set wave base
   wave.SetSampleBuffer((short *)(sampleStore + *writeOffset));

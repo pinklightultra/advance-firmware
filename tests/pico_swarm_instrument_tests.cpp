@@ -226,7 +226,7 @@ TEST_CASE("picoSwarm instrument renders packed mono through its source API") {
 
   REQUIRE(instrument.Init());
   CHECK(instrument.GetAudioBufferLayout(0) == AudioBufferLayout::MonoPacked);
-  REQUIRE(instrument.Start(0, 60, true));
+  REQUIRE(instrument.Start(0, 60, InstrumentStartMode::NewNote));
   for (AudioSample &sample : buffer) {
     sample = sentinel;
   }

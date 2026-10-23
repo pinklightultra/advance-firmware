@@ -28,7 +28,8 @@ public:
   UIIntVarField(
       const GUIPoint &position, Variable &v, const char *format, int min,
       int max, int xOffset, int yOffset, int displayOffset = 0,
-      UIIntVarFieldDisplayMode displayMode = UIIntVarFieldDisplayMode::Default);
+      UIIntVarFieldDisplayMode displayMode = UIIntVarFieldDisplayMode::Default,
+      int displayDivisor = 1);
 
   virtual ~UIIntVarField(){};
   virtual void Draw(GUIWindow &w, int offset = 0);
@@ -51,6 +52,7 @@ protected:
   int yOffset_;
   int displayOffset_;
   UIIntVarFieldDisplayMode displayMode_;
+  int displayDivisor_;
 };
 
 #endif

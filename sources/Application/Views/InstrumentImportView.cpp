@@ -18,6 +18,7 @@
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Player/Player.h"
 #include "Application/Views/BaseClasses/BrowserEntrySort.h"
+#include "Application/Views/BaseClasses/BrowserPaging.h"
 #include "Application/Views/BaseClasses/BrowserPathUtils.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Externals/etl/include/etl/to_string.h"
@@ -200,9 +201,11 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
 
     // handle moving up and down the file list
   } else if (mask & EPBM_UP) {
-    warpToNextInstrument(true);
+    const bool page = (mask & EPBM_EDIT) != 0;
+    warpToNextInstrument(true, page);
   } else if (mask & EPBM_DOWN) {
-    warpToNextInstrument(false);
+    const bool page = (mask & EPBM_EDIT) != 0;
+    warpToNextInstrument(false, page);
   } else if ((mask & EPBM_LEFT) && (mask & EPBM_NAV)) {
     stopPatchPreview();
     ViewType vt = VT_INSTRUMENT;
@@ -323,25 +326,9 @@ void InstrumentImportView::OnFocus() {
   setCurrentFolder(fs, mode_ != Mode::Instrument ? "/" : INSTRUMENTS_DIR);
 }
 
-void InstrumentImportView::warpToNextInstrument(bool goUp) {
-  if (fileEntries_.empty())
-    return;
-
-  if (goUp) {
-    if (currentIndex_ > 0) {
-      currentIndex_--;
-      if (currentIndex_ < topIndex_) {
-        topIndex_ = currentIndex_;
-      }
-    }
-  } else {
-    if (currentIndex_ < fileEntries_.size() - 1) {
-      currentIndex_++;
-      if (currentIndex_ >= topIndex_ + LIST_PAGE_SIZE) {
-        topIndex_ = currentIndex_ - LIST_PAGE_SIZE + 1;
-      }
-    }
-  }
+void InstrumentImportView::warpToNextInstrument(bool goUp, bool page) {
+  BrowserPaging::Warp(currentIndex_, topIndex_, fileEntries_.size(),
+                      LIST_PAGE_SIZE, goUp, page);
   isDirty_ = true;
 }
 

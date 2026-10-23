@@ -33,7 +33,7 @@ public:
 
 protected:
   void setCurrentFolder(FileSystem *fs, const char *name);
-  void warpToNextTheme(bool goUp);
+  void warpToNextTheme(bool goUp, bool page = false);
   void onImportTheme(const char *filename);
 
 private:

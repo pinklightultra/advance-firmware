@@ -44,7 +44,8 @@ public:
   virtual bool Init();
 
   // Start & stop the instument
-  virtual bool Start(int channel, unsigned char note, bool retrigger = true);
+  virtual bool Start(int channel, unsigned char note,
+                     InstrumentStartMode mode = InstrumentStartMode::NewNote);
   virtual void Stop(int channel);
 
   // size refers to the number of samples

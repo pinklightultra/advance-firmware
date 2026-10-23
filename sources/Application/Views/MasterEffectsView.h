@@ -14,10 +14,14 @@
 #ifndef _MASTER_EFFECTS_VIEW_H_
 #define _MASTER_EFFECTS_VIEW_H_
 
-#include "Application/Mixer/OutputEffectConstants.h"
 #include "BaseClasses/UIIntVarField.h"
 #include "FieldView.h"
 #include "ViewData.h"
+
+#include <cstddef>
+#include <cstdint>
+
+class OutputEffect;
 
 class MasterEffectsView : public FieldView {
 public:
@@ -32,26 +36,18 @@ public:
   virtual void AnimationUpdate();
 
 private:
-  static constexpr int SlotCount = OUTPUT_EFFECT_COUNT;
-  static constexpr int EffectParameterRowCount = 4;
-  static constexpr int GridRowCount = 1 + EffectParameterRowCount;
+  static constexpr size_t DelayParameterFieldCount = 3;
+  static constexpr size_t ReverbParameterFieldCount = 7;
 
   void initFields();
-  void updateCursor(int dx, int dy);
-  void syncFocusToSelection();
-  UIField *GetSelectedField();
-  bool SlotUsesReverb(int slot) const;
-  void drawParameterColumn(int slot, GUITextProperties props);
+  void fillReverbFields(OutputEffect &effect);
+  void fillDelayFields(OutputEffect &effect);
+  void drawEffectHeaders();
   void togglePlay();
   bool shouldDrawPlayTime() const override { return true; }
 
-  etl::vector<UIIntVarField, SlotCount> slotTypeFields_;
-  etl::vector<UIIntVarField, SlotCount * EffectParameterRowCount>
-      effectParameterFields_;
-  UIField *slotFields_[SlotCount];
-  UIField *effectParameterGrid_[SlotCount][EffectParameterRowCount];
-  int selectedColumn_;
-  int selectedRow_;
+  etl::vector<UIIntVarField, DelayParameterFieldCount> delayParameterFields_;
+  etl::vector<UIIntVarField, ReverbParameterFieldCount> reverbParameterFields_;
 };
 
 #endif
