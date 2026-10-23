@@ -38,6 +38,7 @@ public: // System implementation
   virtual void SystemReboot();
   virtual void SystemPutChar(int c);
   virtual uint32_t GetRandomNumber();
+  virtual uint32_t GetDeviceIdentitySeed();
   virtual uint32_t Micros();
   virtual uint32_t Millis();
 

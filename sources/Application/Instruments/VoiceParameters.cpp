@@ -98,6 +98,23 @@ void VoiceParameters::AppendTo(etl::ivector<Variable *> &variables) {
   }
 }
 
+void VoiceParameters::CaptureValues(ValueSnapshot &snapshot) {
+  size_t index = 0;
+  for (Variable *variable : variables_) {
+    snapshot[index++] = variable->GetInt();
+  }
+}
+
+bool VoiceParameters::ValuesDifferFrom(const ValueSnapshot &snapshot) {
+  size_t index = 0;
+  for (Variable *variable : variables_) {
+    if (snapshot[index++] != variable->GetInt()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void VoiceParameters::CopyFrom(const VoiceParameters &other) {
   auto src = other.variables_.begin();
   for (auto dst = variables_.begin();

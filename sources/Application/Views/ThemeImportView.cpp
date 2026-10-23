@@ -45,7 +45,7 @@ getCurrentEntry(const etl::ivector<FileSystemEntry> &entries,
 bool resolveEntryPath(const FileSystemPath::PathString &currentDir,
                       const FileSystemEntry &entry,
                       FileSystemPath::PathString &resolvedPath) {
-  if (entry.name == "..") {
+  if (entry.name == BrowserPathUtils::kParentDirectoryName) {
     return BrowserPathUtils::ResolveParentDirectory(currentDir.c_str(),
                                                     THEMES_DIR, resolvedPath);
   }
@@ -160,9 +160,13 @@ void ThemeImportView::DrawView() {
 
     const auto &entry = fileEntries_[i];
     if (entry.type == PFT_DIR) {
-      DrawString(x, y, "[", props);
-      DrawString(x + 1, y, entry.name.c_str(), props);
-      DrawString(x + entry.name.size() + 1, y, "]", props);
+      if (entry.name == BrowserPathUtils::kParentDirectoryName) {
+        DrawString(x, y, BrowserPathUtils::kParentDirectoryDisplayName, props);
+      } else {
+        DrawString(x, y, "[", props);
+        DrawString(x + 1, y, entry.name.c_str(), props);
+        DrawString(x + entry.name.size() + 1, y, "]", props);
+      }
     } else {
       char buffer[PFILENAME_SIZE] = {};
       std::strncpy(buffer, entry.name.c_str(), sizeof(buffer) - 1);
@@ -251,7 +255,7 @@ void ThemeImportView::setCurrentFolder(FileSystem *fs, const char *name) {
   }
 
   FileSystemPath::PathString nextDir;
-  if (std::strcmp(name, "..") == 0) {
+  if (std::strcmp(name, BrowserPathUtils::kParentDirectoryName) == 0) {
     if (!BrowserPathUtils::ResolveParentDirectory(currentDir_.c_str(),
                                                   THEMES_DIR, nextDir)) {
       return;

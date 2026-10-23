@@ -33,7 +33,9 @@ void ResetLaunchpadControlSurfaceTestState() {
   gSequencerMode = SM_SONG;
 }
 
-void SetPlayerSequencerModeForTest(SequencerMode mode) { gSequencerMode = mode; }
+void SetPlayerSequencerModeForTest(SequencerMode mode) {
+  gSequencerMode = mode;
+}
 
 int GetPlayerSongStartButtonCallCount() {
   return gPlayerSongStartButtonCallCount;
@@ -87,6 +89,13 @@ Player::Player()
     : Observable(&observers_), viewData_(nullptr), project_(nullptr),
       sequencerMode_(SM_SONG), isRunning_(false), stopAtEnd_(false) {}
 
+Player *Player::GetExistingInstance() {
+  if (!etl::singleton<Player>::is_valid()) {
+    return nullptr;
+  }
+  return &etl::singleton<Player>::instance();
+}
+
 void Player::Update(Observable &o, I_ObservableData *d) {
   (void)o;
   (void)d;
@@ -135,6 +144,33 @@ void Player::StopNote(unsigned short instrumentIndex, unsigned short channel) {
   (void)instrumentIndex;
   (void)channel;
   gPlayerStopNoteCallCount++;
+}
+
+void Player::PlayMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
+                          uint8_t instrumentIndex, uint8_t note,
+                          uint8_t velocity) {
+  (void)inputSource;
+  (void)midiChannel;
+  (void)instrumentIndex;
+  (void)note;
+  (void)velocity;
+  gPlayerPlayNoteCallCount++;
+}
+
+void Player::StopMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
+                          uint8_t note) {
+  (void)inputSource;
+  (void)midiChannel;
+  (void)note;
+  gPlayerStopNoteCallCount++;
+}
+
+void Player::ReleaseMidiInputSource(MidiInputSource inputSource) {
+  (void)inputSource;
+}
+
+void Player::OnMidiInputAssignmentChanged(uint8_t songChannel) {
+  (void)songChannel;
 }
 
 bool Player::IsChannelPlaying(int channel) {

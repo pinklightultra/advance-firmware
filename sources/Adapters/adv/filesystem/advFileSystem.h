@@ -66,9 +66,6 @@ public:
   virtual bool MoveFile(const char *srcFilename,
                         const char *destFilename) override;
   virtual bool isExFat() { return false; }; // not used on the Advance
-
-private:
-  BYTE fileBuffer_[512];
 };
 
 #endif

@@ -9,11 +9,9 @@
 #include "AudioVoice.h"
 #include "Application/Player/SyncMaster.h"
 #include "AudioVoiceFilterGLUT.h"
-#if !defined(HOST_TEST)
-#include "Application/Mixer/MixerService.h"
-#endif
 #include "Services/Audio/AudioDriver.h"
 #include "System/Profiler/DWTProfiler.h"
+#include "config/MemorySections.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -25,45 +23,39 @@ constexpr int kLFOControlQuantumSamples = 24; // ~500us
 constexpr float kMinFilterFrequencyHz = 20.0f;
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kEnvelopeEpsilon = 1.0e-6f;
-constexpr int kCommandKRateSampleCount = 100;
-constexpr uint16_t kProfileOrderLegacySample = 10;
-constexpr uint16_t kProfileOrderVoiceSource = 20;
-constexpr uint16_t kProfileOrderVoicePreInsert = 29;
-constexpr uint16_t kProfileOrderVoiceBandpass = 30;
-constexpr uint16_t kProfileOrderVoiceFilter = 31;
-constexpr uint16_t kProfileOrderVoiceAmp = 32;
-constexpr uint16_t kProfileOrderVoicePostInsert = 34;
-constexpr uint16_t kProfileOrderVoicePan = 35;
-constexpr uint16_t kProfileOrderVoiceLFO = 36;
-constexpr uint16_t kProfileOrderVoiceChain = 40;
-constexpr uint16_t kProfileOrderVoiceTotal = 50;
 constexpr int kMaxTriggerLengthSlices = 96;
+constexpr uint32_t kProfileComponentCount =
+    static_cast<uint32_t>(VoiceProfileComponent::Count);
+constexpr uint32_t kVoicesBudgetPctX1000 = 50000U;
+constexpr uint32_t kChannelBudgetPctX1000 =
+    ComputeDWTBudgetSharePctX1000(kVoicesBudgetPctX1000, SONG_CHANNEL_COUNT);
+constexpr uint32_t kInputEffectTotalBudgetPctX1000 = 4000U;
+constexpr uint32_t kInputEffectBudgetPctX1000 = ComputeDWTBudgetSharePctX1000(
+    kInputEffectTotalBudgetPctX1000, SONG_CHANNEL_COUNT);
 
-DWTProfileStats gSourceRenderProfile = {" voice source"};
-DWTProfileStats gLegacySampleRenderProfile = {"legacy sample"};
-DWTProfileStats gPreInsertProfile = {"  insert pre"};
-DWTProfileStats gBandpassProfile = {"  voice bw"};
-DWTProfileStats gStandardFilterProfile = {"  voice filter"};
-DWTProfileStats gAmpProfile = {"  voice amp"};
-DWTProfileStats gPostInsertProfile = {"  insert post"};
-DWTProfileStats gPanProfile = {"  voice pan"};
-DWTProfileStats gVoiceChainProfile = {" voice chain"};
-DWTProfileStats gVoiceLFOProfile = {"  chan lfo"};
-DWTProfileStats gVoiceRenderProfile = {"voice total"};
-
-inline int getProfileVoiceCount() {
-#if defined(HOST_TEST)
-  return SONG_CHANNEL_COUNT_STEREO;
-#else
-  MixerService *mixerService = MixerService::GetInstance();
-  Project *project = mixerService ? mixerService->GetProject() : nullptr;
-  if (project == nullptr) {
-    return SONG_CHANNEL_COUNT_STEREO;
-  }
-
-  return project->song_.GetChannelCount();
-#endif
-}
+DWTProfileStats gVoiceComponentProfiles[kProfileComponentCount]
+                                       [SONG_CHANNEL_COUNT] = {};
+DWTProfileStats gVoiceChannelTotalProfiles[SONG_CHANNEL_COUNT] = {};
+DWTProfileStats gVoicesTotalProfile = {};
+DWTProfileMatrixRow gVoiceProfileRows[kProfileComponentCount] = {
+    {.name_ = "Voice source"},
+    {.name_ = "Voice BW"},
+    {.name_ = "Voice filter"},
+    {.name_ = "Voice AMP"},
+    {.name_ = "Voice PAN"},
+    {.name_ = "Chan LFO"},
+    {.name_ = "ifx1", .budgetPctX1000_ = kInputEffectBudgetPctX1000},
+    {.name_ = "ifx2", .budgetPctX1000_ = kInputEffectBudgetPctX1000},
+    {.name_ = "Player control"},
+    {.name_ = "wet/dry"},
+};
+DWTProfileMatrix gVoiceProfileMatrix = {
+    .rows_ = gVoiceProfileRows,
+    .rowCount_ = kProfileComponentCount,
+    .columnCount_ = SONG_CHANNEL_COUNT,
+    .channelBudgetPctX1000_ = kChannelBudgetPctX1000,
+    .voicesBudgetPctX1000_ = kVoicesBudgetPctX1000,
+};
 
 inline float lookupFilterG(float normalized) {
   const float position =
@@ -78,35 +70,59 @@ inline float lookupFilterG(float normalized) {
              fraction;
 }
 
+struct StandardFilterCoefficients {
+  float a1_;
+  float a2_;
+  float a3_;
+};
+
+PICOTRACKER_FAST_CODE("audio_voice_standard_filter_coefficients")
+inline StandardFilterCoefficients
+calculateStandardFilterCoefficients(float cutoff, float k) {
+  // The constant table maps normalized cutoff through the exact exponential
+  // frequency curve and tan(pi * f / fs) TPT coefficient transform.
+  const float g = lookupFilterG(cutoff);
+  const float a1 = 1.0f / (1.0f + g * (g + k));
+  const float a2 = g * a1;
+  return {a1, a2, g * a2};
+}
+
+PICOTRACKER_FAST_CODE("audio_voice_standard_filter_sample")
+inline AudioSample
+processStandardFilterSample(AudioSample inputSample,
+                            const StandardFilterCoefficients &coefficients,
+                            float inputWeight, float bandpassWeight,
+                            float lowpassWeight, float &ic1eq, float &ic2eq) {
+  const float v3 = inputSample - ic2eq;
+  const float v1 = coefficients.a1_ * ic1eq + coefficients.a2_ * v3;
+  const float v2 = ic2eq + coefficients.a2_ * ic1eq + coefficients.a3_ * v3;
+  ic1eq = 2.0f * v1 - ic1eq;
+  ic2eq = 2.0f * v2 - ic2eq;
+
+  return inputWeight * inputSample + bandpassWeight * v1 + lowpassWeight * v2;
+}
+
 void registerVoiceProfiles() {
   static bool registered = false;
   if (registered) {
     return;
   }
 
-  gLegacySampleRenderProfile.displayOrder_ = kProfileOrderLegacySample;
-  gSourceRenderProfile.displayOrder_ = kProfileOrderVoiceSource;
-  gPreInsertProfile.displayOrder_ = kProfileOrderVoicePreInsert;
-  gBandpassProfile.displayOrder_ = kProfileOrderVoiceBandpass;
-  gStandardFilterProfile.displayOrder_ = kProfileOrderVoiceFilter;
-  gAmpProfile.displayOrder_ = kProfileOrderVoiceAmp;
-  gPanProfile.displayOrder_ = kProfileOrderVoicePan;
-  gPostInsertProfile.displayOrder_ = kProfileOrderVoicePostInsert;
-  gVoiceLFOProfile.displayOrder_ = kProfileOrderVoiceLFO;
-  gVoiceChainProfile.displayOrder_ = kProfileOrderVoiceChain;
-  gVoiceRenderProfile.displayOrder_ = kProfileOrderVoiceTotal;
-
-  RegisterDWTProfileStats(&gLegacySampleRenderProfile);
-  RegisterDWTProfileStats(&gSourceRenderProfile);
-  RegisterDWTProfileStats(&gPreInsertProfile);
-  RegisterDWTProfileStats(&gBandpassProfile);
-  RegisterDWTProfileStats(&gStandardFilterProfile);
-  RegisterDWTProfileStats(&gAmpProfile);
-  RegisterDWTProfileStats(&gPostInsertProfile);
-  RegisterDWTProfileStats(&gPanProfile);
-  RegisterDWTProfileStats(&gVoiceChainProfile);
-  RegisterDWTProfileStats(&gVoiceLFOProfile);
-  RegisterDWTProfileStats(&gVoiceRenderProfile);
+  for (uint32_t row = 0; row < kProfileComponentCount; ++row) {
+    for (uint32_t channel = 0; channel < SONG_CHANNEL_COUNT; ++channel) {
+      DWTProfileStats &stats = gVoiceComponentProfiles[row][channel];
+      stats.printIndividually_ = false;
+      gVoiceProfileRows[row].columns_[channel] = &stats;
+    }
+  }
+  for (uint32_t channel = 0; channel < SONG_CHANNEL_COUNT; ++channel) {
+    gVoiceChannelTotalProfiles[channel].printIndividually_ = false;
+    gVoiceProfileMatrix.channelTotals_[channel] =
+        &gVoiceChannelTotalProfiles[channel];
+  }
+  gVoicesTotalProfile.printIndividually_ = false;
+  gVoiceProfileMatrix.voicesTotal_ = &gVoicesTotalProfile;
+  RegisterDWTProfileMatrix(&gVoiceProfileMatrix);
   registered = true;
 }
 
@@ -141,6 +157,56 @@ inline float onePoleAlpha(float cutoffHz) {
   return std::clamp(1.0f - normalized, 0.0f, 1.0f);
 }
 
+inline float semitoneRatio(float semitones) {
+  return std::pow(2.0f, semitones / 12.0f);
+}
+
+inline float advanceFixedDurationRamp(float sequencerSteps,
+                                      float &stepsRemaining, bool &active) {
+  if (!active) {
+    return 0.0f;
+  }
+  if (stepsRemaining <= 0.0f) {
+    stepsRemaining = 0.0f;
+    active = false;
+    return 1.0f;
+  }
+  if (sequencerSteps <= 0.0f) {
+    return 0.0f;
+  }
+  if (sequencerSteps >= stepsRemaining) {
+    stepsRemaining = 0.0f;
+    active = false;
+    return 1.0f;
+  }
+
+  const float progress = sequencerSteps / stepsRemaining;
+  stepsRemaining -= sequencerSteps;
+  return progress;
+}
+
+inline bool advanceFixedDurationLinearRamp(float sequencerSteps, float target,
+                                           float &current,
+                                           float &stepsRemaining,
+                                           bool &active) {
+  const float previous = current;
+  const float progress =
+      advanceFixedDurationRamp(sequencerSteps, stepsRemaining, active);
+  if (progress >= 1.0f) {
+    current = target;
+  } else if (progress > 0.0f) {
+    current += (target - current) * progress;
+  }
+  return current != previous;
+}
+
+inline float samplesToSequencerSteps(int samplecount, float stepSampleCount) {
+  if (samplecount <= 0 || stepSampleCount <= 0.0f) {
+    return 0.0f;
+  }
+  return static_cast<float>(samplecount) / stepSampleCount;
+}
+
 inline float mapResonanceQ(int value) {
   const float norm = byteToUnit(value);
   return 0.707f + (norm * norm) * 15.0f;
@@ -160,10 +226,101 @@ inline AudioSample panGainRight(int pan) {
 
 } // namespace
 
-DWTProfileStats *GetVoiceRenderProfileStats() { return &gVoiceRenderProfile; }
+DWTProfileStats *GetVoiceProfileStats(VoiceProfileComponent component,
+                                      uint32_t channel) {
+  const uint32_t row = static_cast<uint32_t>(component);
+  if (row >= kProfileComponentCount || channel >= SONG_CHANNEL_COUNT) {
+    return nullptr;
+  }
+  return &gVoiceComponentProfiles[row][channel];
+}
+
+DWTProfileStats *GetVoiceChannelTotalProfileStats(uint32_t channel) {
+  if (channel >= SONG_CHANNEL_COUNT) {
+    return nullptr;
+  }
+  return &gVoiceChannelTotalProfiles[channel];
+}
+
+DWTProfileStats *GetVoicesTotalProfileStats() { return &gVoicesTotalProfile; }
+
+bool AudioVoice::FixedDurationLinearPitchRampState::AdvanceControl(
+    float sequencerSteps) {
+  return advanceFixedDurationLinearRamp(sequencerSteps, target_, current_,
+                                        stepsRemaining_, active_);
+}
+
+void AudioVoice::FixedDurationLinearPitchRampState::Reset() {
+  current_ = 1.0f;
+  target_ = 1.0f;
+  stepsRemaining_ = 0.0f;
+  active_ = false;
+}
+
+bool AudioVoice::FixedDurationLogPitchRampState::AdvanceControl(
+    float sequencerSteps) {
+  const float previous = current_;
+  const float progress =
+      advanceFixedDurationRamp(sequencerSteps, stepsRemaining_, active_);
+  if (progress >= 1.0f) {
+    current_ = target_;
+  } else if (progress > 0.0f) {
+    current_ *= std::pow(target_ / current_, progress);
+  }
+  return current_ != previous;
+}
+
+void AudioVoice::FixedDurationLogPitchRampState::Reset() {
+  current_ = 1.0f;
+  target_ = 1.0f;
+  stepsRemaining_ = 0.0f;
+  active_ = false;
+}
+
+void AudioVoice::ArpeggiatorState::Configure(uint16_t value) {
+  uint16_t arp = value;
+  uint8_t length = 0;
+  values_[0] = 0;
+  for (uint8_t index = 0; index < 4; ++index) {
+    values_[4 - index] = arp & 0xF;
+    if (values_[4 - index] != 0 && length == 0) {
+      length = 5 - index;
+    }
+    arp >>= 4;
+  }
+  length_ = length;
+  position_ = 0;
+  current_ = 1.0f;
+  active_ = true;
+}
+
+bool AudioVoice::ArpeggiatorState::AdvanceTick() {
+  if (!active_ || length_ == 0) {
+    return false;
+  }
+
+  const float previous = current_;
+  position_++;
+  if (position_ > length_) {
+    position_ = 0;
+  }
+  current_ = semitoneRatio(static_cast<float>(values_[position_]));
+  return current_ != previous;
+}
+
+void AudioVoice::ArpeggiatorState::Reset() {
+  for (uint8_t &value : values_) {
+    value = 0;
+  }
+  position_ = 0;
+  length_ = 0;
+  current_ = 1.0f;
+  active_ = false;
+}
 
 AudioVoice::AudioVoice(int channel)
-    : channel_(channel), source_(nullptr), lfoBank_(channel),
+    : channel_(channel), source_(nullptr), currentNote_(-1), previousNote_(-1),
+      legatoNotePending_(false), lfoBank_(channel),
       triggerReleaseSlicesRemaining_(0), releasePending_(false) {
   registerVoiceProfiles();
   clearInsertEffects();
@@ -174,6 +331,7 @@ AudioVoice::AudioVoice(int channel)
 bool AudioVoice::StartInstrument(I_Instrument *instrument, unsigned char note,
                                  bool trigger) {
   const bool continueVoice = (source_ == instrument) && !trigger;
+  const int16_t precedingNote = currentNote_;
 
   if (source_ && !continueVoice) {
     StopInstrument();
@@ -193,6 +351,15 @@ bool AudioVoice::StartInstrument(I_Instrument *instrument, unsigned char note,
   }
 
   source_ = instrument;
+  if (continueVoice && precedingNote >= 0) {
+    previousNote_ = precedingNote;
+    currentNote_ = note;
+    legatoNotePending_ = true;
+  } else {
+    currentNote_ = note;
+    previousNote_ = note;
+    legatoNotePending_ = false;
+  }
   lfoBank_.SetInstrument(source_);
   lfoBank_.OnNoteStart(trigger);
   refreshParameterRefs();
@@ -210,12 +377,20 @@ bool AudioVoice::StartInstrument(I_Instrument *instrument, unsigned char note,
   if (trigger) {
     resetStageState();
   }
+  pitchMultiplierApplied_ = false;
+  if (InstrumentTypeUsesModernAudioVoice(source_->GetType())) {
+    applyPitchMultiplier();
+  }
   return true;
 }
 
 bool AudioVoice::ProcessCommand(TrackerCommand command, ushort value) {
-  if (!source_ || source_->GetType() == IT_SAMPLE) {
+  if (!source_) {
     return false;
+  }
+
+  if (processPitchCommand(command, value)) {
+    return true;
   }
 
   switch (command) {
@@ -256,6 +431,195 @@ bool AudioVoice::ProcessCommand(TrackerCommand command, ushort value) {
   }
 }
 
+bool AudioVoice::processPitchCommand(TrackerCommand command, ushort value) {
+  switch (command) {
+  case TrackerCommand::InstrumentCommandArpeggiator: {
+    ArpeggiatorState &arpeggiator = pitchCommand_.arpeggiator_;
+    if (!registerPitchUpdater(arpeggiator)) {
+      return false;
+    }
+    arpeggiator.Configure(value);
+    markPitchMultiplierDirty();
+    applyPitchMultiplier();
+    return true;
+  }
+
+  case TrackerCommand::InstrumentCommandPitchSlide: {
+    const int8_t pitch = static_cast<int8_t>(value & 0xFF);
+    const float speed = static_cast<float>(value >> 8);
+    FixedDurationLinearPitchRampState &ramp = pitchCommand_.pitchSlide_;
+    if (!registerPitchUpdater(ramp)) {
+      return false;
+    }
+    ramp.target_ = semitoneRatio(static_cast<float>(pitch));
+    ramp.stepsRemaining_ = commandSpeedDurationSteps(speed);
+    ramp.active_ = speed != 0.0f;
+    if (!ramp.active_) {
+      ramp.current_ = ramp.target_;
+      markPitchMultiplierDirty();
+    }
+    return true;
+  }
+
+  case TrackerCommand::InstrumentCommandLegato: {
+    // LEG only describes the duration of a tied-note transition. Its low byte
+    // is deliberately ignored; the two notes provide both endpoints.
+    if (!legatoNotePending_) {
+      return true;
+    }
+
+    const int16_t pitch = previousNote_ - currentNote_;
+    const float speed = static_cast<float>(value >> 8);
+    FixedDurationLogPitchRampState &ramp = pitchCommand_.legato_;
+    if (!registerPitchUpdater(ramp)) {
+      return false;
+    }
+    legatoNotePending_ = false;
+    // The instrument has already switched to the tied note's base pitch.
+    // Translate the existing LEG contribution into that new reference frame
+    // so retargeting an unfinished glide does not jump to the previous note.
+    ramp.current_ *= semitoneRatio(static_cast<float>(pitch));
+    ramp.target_ = 1.0f;
+    ramp.stepsRemaining_ = commandSpeedDurationSteps(speed);
+    ramp.active_ = speed != 0.0f;
+    if (!ramp.active_) {
+      ramp.current_ = ramp.target_;
+    }
+    markPitchMultiplierDirty();
+    return true;
+  }
+
+  case TrackerCommand::InstrumentCommandPitchFineTune: {
+    float semitones = (value & 0xFF) / 128.0f;
+    if (semitones > 1.0f) {
+      semitones -= 2.0f;
+    }
+
+    const float speed = static_cast<float>(value >> 8);
+    FixedDurationLogPitchRampState &ramp = pitchCommand_.fineTune_;
+    if (!registerPitchUpdater(ramp)) {
+      return false;
+    }
+    ramp.target_ = semitoneRatio(semitones);
+    ramp.stepsRemaining_ = commandSpeedDurationSteps(speed);
+    ramp.active_ = speed != 0.0f;
+    if (!ramp.active_) {
+      ramp.current_ = ramp.target_;
+      markPitchMultiplierDirty();
+    }
+    return true;
+  }
+
+  default:
+    return false;
+  }
+}
+
+bool AudioVoice::registerPitchUpdater(PitchUpdater &updater) {
+  if (updater.registered_) {
+    return true;
+  }
+
+  if (pitchCommand_.contributors_.full()) {
+    return false;
+  }
+
+  pitchCommand_.contributors_.push_back(&updater);
+  updater.registered_ = true;
+  markPitchMultiplierDirty();
+  return true;
+}
+
+void AudioVoice::resetPitchCommands() {
+  for (PitchUpdater *updater : pitchCommand_.contributors_) {
+    updater->Reset();
+    updater->registered_ = false;
+  }
+  pitchCommand_.contributors_.clear();
+  pitchCommand_.currentMultiplier_ = 1.0f;
+  pitchCommand_.multiplierDirty_ = true;
+}
+
+void AudioVoice::advancePitchTick() {
+  for (PitchUpdater *updater : pitchCommand_.contributors_) {
+    if (updater->AdvanceTick()) {
+      markPitchMultiplierDirty();
+    }
+  }
+}
+
+void AudioVoice::advancePitchRamps(float sequencerSteps) {
+  for (PitchUpdater *updater : pitchCommand_.contributors_) {
+    if (updater->AdvanceControl(sequencerSteps)) {
+      markPitchMultiplierDirty();
+    }
+  }
+}
+
+int AudioVoice::getPitchRampCompletionSamples(float stepSampleCount) const {
+  if (stepSampleCount <= 0.0f) {
+    return 0;
+  }
+
+  float stepsRemaining = std::numeric_limits<float>::max();
+  if (pitchCommand_.pitchSlide_.active_) {
+    stepsRemaining =
+        std::min(stepsRemaining, pitchCommand_.pitchSlide_.stepsRemaining_);
+  }
+  if (pitchCommand_.legato_.active_) {
+    stepsRemaining =
+        std::min(stepsRemaining, pitchCommand_.legato_.stepsRemaining_);
+  }
+  if (pitchCommand_.fineTune_.active_) {
+    stepsRemaining =
+        std::min(stepsRemaining, pitchCommand_.fineTune_.stepsRemaining_);
+  }
+  if (stepsRemaining == std::numeric_limits<float>::max()) {
+    return 0;
+  }
+
+  return std::max(
+      1, static_cast<int>(std::ceil(stepsRemaining * stepSampleCount)));
+}
+
+bool AudioVoice::hasActivePitchRamp() const {
+  for (const PitchUpdater *updater : pitchCommand_.contributors_) {
+    if (updater->HasActiveRamp()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AudioVoice::markPitchMultiplierDirty() {
+  pitchCommand_.multiplierDirty_ = true;
+}
+
+void AudioVoice::updatePitchMultiplier() {
+  if (!pitchCommand_.multiplierDirty_) {
+    return;
+  }
+
+  float multiplier = 1.0f;
+  for (const PitchUpdater *updater : pitchCommand_.contributors_) {
+    multiplier *= updater->GetCurrentRatio();
+  }
+  pitchCommand_.currentMultiplier_ = multiplier;
+  pitchCommand_.multiplierDirty_ = false;
+}
+
+void AudioVoice::applyPitchMultiplier() {
+  updatePitchMultiplier();
+  const float multiplier = pitchCommand_.currentMultiplier_;
+  if (pitchMultiplierApplied_ && multiplier == appliedPitchMultiplier_) {
+    return;
+  }
+
+  source_->SetPitchMultiplier(channel_, multiplier);
+  appliedPitchMultiplier_ = multiplier;
+  pitchMultiplierApplied_ = true;
+}
+
 void AudioVoice::ReleaseInstrument() {
   if (!source_) {
     return;
@@ -292,6 +656,10 @@ void AudioVoice::StopInstrument() {
   releasePending_ = false;
   triggerReleaseSlicesRemaining_ = 0;
   resetCommandState();
+  pitchMultiplierApplied_ = false;
+  currentNote_ = -1;
+  previousNote_ = -1;
+  legatoNotePending_ = false;
   ampEnvelope_.Kill();
   filterEnvelope_.Kill();
   resetStageState();
@@ -307,27 +675,108 @@ void AudioVoice::Reset() {
   releasePending_ = false;
   triggerReleaseSlicesRemaining_ = 0;
   resetCommandState();
+  pitchMultiplierApplied_ = false;
+  currentNote_ = -1;
+  previousNote_ = -1;
+  legatoNotePending_ = false;
   ampEnvelope_.Reset();
   filterEnvelope_.Reset();
   resetStageState();
 }
 
+bool AudioVoice::renderSourceWithControl(AudioSample *buffer,
+                                         AudioBufferLayout layout,
+                                         int samplecount, bool updateTick,
+                                         float stepSampleCount) {
+  if (samplecount <= 0) {
+    applyPitchMultiplier();
+    return source_->Render(channel_, buffer, samplecount, updateTick);
+  }
+
+  const int stride = GetAudioBufferLayoutStride(layout);
+  int renderedSamples = 0;
+  uint8_t subdivision = 1;
+  bool firstChunk = true;
+  // Keep the full-buffer source fast path unless a source-level control is
+  // moving. Each outer buffer is one sequencer slice; proportional boundaries
+  // distribute any fractional samples without accumulating timing drift.
+  // This is also the insertion point for future source LFO targets.
+  while (renderedSamples < samplecount) {
+    applyPitchMultiplier();
+    int chunkSize = samplecount - renderedSamples;
+    if (hasActivePitchRamp()) {
+      while (subdivision <= SourceCommandSubdivisionsPerSlice &&
+             samplecount * subdivision / SourceCommandSubdivisionsPerSlice <=
+                 renderedSamples) {
+        ++subdivision;
+      }
+      if (subdivision <= SourceCommandSubdivisionsPerSlice) {
+        const int subdivisionBoundary =
+            samplecount * subdivision / SourceCommandSubdivisionsPerSlice;
+        chunkSize = std::min(chunkSize, subdivisionBoundary - renderedSamples);
+      }
+
+      const int completionSamples =
+          getPitchRampCompletionSamples(stepSampleCount);
+      if (completionSamples > 0) {
+        chunkSize = std::min(chunkSize, completionSamples);
+      }
+    }
+
+    if (!source_->Render(channel_, buffer + renderedSamples * stride, chunkSize,
+                         updateTick && firstChunk)) {
+      if (renderedSamples == 0) {
+        return false;
+      }
+      // A later chunk finishing does not invalidate the source audio already
+      // rendered for this outer slice. Feed silence through the remaining
+      // voice stages, then let the next outer render perform normal teardown.
+      std::fill(buffer + renderedSamples * stride,
+                buffer + samplecount * stride, kAudioSampleZero);
+      break;
+    }
+    renderedSamples += chunkSize;
+    firstChunk = false;
+    if (hasActivePitchRamp() && stepSampleCount > 0.0f) {
+      advancePitchRamps(samplesToSequencerSteps(chunkSize, stepSampleCount));
+    }
+  }
+  return true;
+}
+
+PICOTRACKER_FAST_CODE("audio_voice_render")
 bool AudioVoice::Render(AudioSample *buffer, int samplecount, bool updateTick) {
   if (!source_) {
     return false;
   }
 
-  constexpr int sampleRate = kEngineSampleRate;
-  const int profileVoiceCount = getProfileVoiceCount();
+  // Commands for a row are dispatched before its first render. If a tied-note
+  // row did not consume the pending transition with LEG, discard any previous
+  // LEG contribution so the new note takes effect immediately.
+  if (legatoNotePending_) {
+    legatoNotePending_ = false;
+    FixedDurationLogPitchRampState &ramp = pitchCommand_.legato_;
+    if (ramp.registered_) {
+      ramp.Reset();
+      markPitchMultiplierDirty();
+    }
+  }
+
+  const uint32_t profileChannel = static_cast<uint32_t>(channel_);
 
   // Legacy sample instruments are a deliberate exception: render only the
   // instrument source here and skip the AudioVoice profiler/processing chain.
   if (source_->GetType() == IT_SAMPLE) {
-    ScopedDWTProfile legacySampleProfile(&gLegacySampleRenderProfile,
-                                         samplecount, sampleRate,
-                                         profileVoiceCount);
     return source_->Render(channel_, buffer, samplecount, updateTick);
   }
+
+  if (updateTick) {
+    advancePitchTick();
+  }
+
+  SyncMaster *syncMaster = SyncMaster::GetInstance();
+  const float stepSampleCount =
+      syncMaster ? syncMaster->GetStepSampleCount() : 0.0f;
 
   const AudioBufferLayout sourceLayout =
       source_->GetAudioBufferLayout(channel_);
@@ -338,12 +787,11 @@ bool AudioVoice::Render(AudioSample *buffer, int samplecount, bool updateTick) {
                                   ? buffer + samplecount
                                   : buffer;
 
-  ScopedDWTProfile voiceProfile(&gVoiceRenderProfile, samplecount, sampleRate,
-                                profileVoiceCount);
   {
-    ScopedDWTProfile sourceProfile(&gSourceRenderProfile, samplecount,
-                                   sampleRate, profileVoiceCount);
-    if (!source_->Render(channel_, sourceBuffer, samplecount, updateTick)) {
+    ScopedDWTProfile sourceProfile(
+        GetVoiceProfileStats(VoiceProfileComponent::Source, profileChannel));
+    if (!renderSourceWithControl(sourceBuffer, sourceLayout, samplecount,
+                                 updateTick, stepSampleCount)) {
       // Today, "source finished" is treated as "voice finished", so the whole
       // voice is torn down immediately. If we later want tail-capable insert
       // effects (delay/reverb/etc.) to ring out after the source stops, this
@@ -366,54 +814,43 @@ bool AudioVoice::Render(AudioSample *buffer, int samplecount, bool updateTick) {
   {
     AudioSample *prePanBuffer = sourceBuffer;
     const AudioBufferLayout prePanLayout = sourceLayout;
-    AccumulatingDWTProfile chainProfile(&gVoiceChainProfile, samplecount,
-                                        sampleRate, profileVoiceCount);
-    AccumulatingDWTProfile preInsertProfile(&gPreInsertProfile, samplecount,
-                                            sampleRate, profileVoiceCount);
-    AccumulatingDWTProfile bandpassProfile(&gBandpassProfile, samplecount,
-                                           sampleRate, profileVoiceCount);
+    AccumulatingDWTProfile bandpassProfile(
+        GetVoiceProfileStats(VoiceProfileComponent::Bandwidth, profileChannel));
     AccumulatingDWTProfile standardFilterProfile(
-        &gStandardFilterProfile, samplecount, sampleRate, profileVoiceCount);
-    AccumulatingDWTProfile ampProfile(&gAmpProfile, samplecount, sampleRate,
-                                      profileVoiceCount);
-    AccumulatingDWTProfile postInsertProfile(&gPostInsertProfile, samplecount,
-                                             sampleRate, profileVoiceCount);
-    AccumulatingDWTProfile panProfile(&gPanProfile, samplecount, sampleRate,
-                                      profileVoiceCount);
-    AccumulatingDWTProfile lfoProfile(&gVoiceLFOProfile, samplecount,
-                                      sampleRate, profileVoiceCount);
+        GetVoiceProfileStats(VoiceProfileComponent::Filter, profileChannel));
+    AccumulatingDWTProfile ampProfile(
+        GetVoiceProfileStats(VoiceProfileComponent::Amp, profileChannel));
+    AccumulatingDWTProfile panProfile(
+        GetVoiceProfileStats(VoiceProfileComponent::Pan, profileChannel));
+    AccumulatingDWTProfile lfoProfile(
+        GetVoiceProfileStats(VoiceProfileComponent::Lfo, profileChannel));
 
     syncInsertEffects();
     syncFilterType();
 
-    runStage(chainProfile, lfoProfile, preInsertProfile,
-             stageLfoMasks_.preInsert_, prePanBuffer, prePanLayout,
-             prePanBuffer, prePanLayout, samplecount,
+    runStage(lfoProfile, nullptr, stageLfoMasks_.preInsert_, prePanBuffer,
+             prePanLayout, prePanBuffer, prePanLayout, samplecount,
              &AudioVoice::processPreInsertStage);
-    runStage(chainProfile, lfoProfile, bandpassProfile,
-             stageLfoMasks_.bandpass_, prePanBuffer, prePanLayout, prePanBuffer,
-             prePanLayout, samplecount, &AudioVoice::processBandpass);
-    runStage(chainProfile, lfoProfile, standardFilterProfile,
-             stageLfoMasks_.standardFilter_, prePanBuffer, prePanLayout,
-             prePanBuffer, prePanLayout, samplecount,
-             &AudioVoice::processStandardFilter,
-             &AudioVoice::updateFilterEnvelopeParameters);
-    runStage(chainProfile, lfoProfile, ampProfile, stageLfoMasks_.amp_,
+    runStage(lfoProfile, &bandpassProfile, stageLfoMasks_.bandpass_,
              prePanBuffer, prePanLayout, prePanBuffer, prePanLayout,
-             samplecount, &AudioVoice::processAmp,
-             &AudioVoice::updateAmpEnvelopeParameters);
-    runStage(chainProfile, lfoProfile, postInsertProfile,
-             stageLfoMasks_.postInsert_, prePanBuffer, prePanLayout,
-             prePanBuffer, prePanLayout, samplecount,
+             samplecount, &AudioVoice::processBandpass);
+    runStage(lfoProfile, &standardFilterProfile, stageLfoMasks_.standardFilter_,
+             prePanBuffer, prePanLayout, prePanBuffer, prePanLayout,
+             samplecount, &AudioVoice::processStandardFilter,
+             &AudioVoice::updateFilterEnvelopeParameters);
+    runStage(lfoProfile, &ampProfile, stageLfoMasks_.amp_, prePanBuffer,
+             prePanLayout, prePanBuffer, prePanLayout, samplecount,
+             &AudioVoice::processAmp, &AudioVoice::updateAmpEnvelopeParameters);
+    runStage(lfoProfile, nullptr, stageLfoMasks_.postInsert_, prePanBuffer,
+             prePanLayout, prePanBuffer, prePanLayout, samplecount,
              &AudioVoice::processPostInsertStage);
-    runStage(chainProfile, lfoProfile, panProfile, stageLfoMasks_.pan_,
-             prePanBuffer, prePanLayout, buffer,
-             AudioBufferLayout::StereoInterleaved, samplecount,
-             &AudioVoice::processPan);
+    runStage(lfoProfile, &panProfile, stageLfoMasks_.pan_, prePanBuffer,
+             prePanLayout, buffer, AudioBufferLayout::StereoInterleaved,
+             samplecount, &AudioVoice::processPan);
 
     // Voice command ramps now advance once per render slice so only LFO
     // targets can force stage chunking.
-    advanceCommandRamps(samplecount);
+    advanceCommandRamps(samplesToSequencerSteps(samplecount, stepSampleCount));
   }
 
   advanceTriggerRelease(updateTick);
@@ -480,6 +917,7 @@ void AudioVoice::resetTriggerRelease() {
   }
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_advance_trigger_release")
 void AudioVoice::advanceTriggerRelease(bool updateTick) {
   if (!updateTick || releasePending_ || triggerReleaseSlicesRemaining_ == 0) {
     return;
@@ -496,6 +934,7 @@ void AudioVoice::resetCommandState() {
   resetCommandValue(panCommand_);
   resetCommandValue(filterCutoffCommand_);
   resetCommandValue(filterResonanceCommand_);
+  resetPitchCommands();
 }
 
 void AudioVoice::resetCommandValue(CommandValueState &state) { state = {}; }
@@ -503,7 +942,7 @@ void AudioVoice::resetCommandValue(CommandValueState &state) { state = {}; }
 void AudioVoice::setCommandImmediate(CommandValueState &state, float value) {
   state.current_ = value;
   state.target_ = value;
-  state.step_ = 0.0f;
+  state.stepsRemaining_ = 0.0f;
   state.overrideActive_ = true;
   state.rampActive_ = false;
 }
@@ -525,72 +964,46 @@ void AudioVoice::setCommandRamp(CommandValueState &state, float target,
   }
 
   const float start = getCommandStartValue(state, variable, defaultValue);
-  const float step = getCommandRampStep(target, start, speedParam);
+  const float durationSteps = commandSpeedDurationSteps(speedParam);
 
   state.current_ = start;
   state.target_ = target;
-  state.step_ = step;
+  state.stepsRemaining_ = durationSteps;
   state.overrideActive_ = true;
-  state.rampActive_ = speedParam != 0.0f && step > 0.0f;
+  state.rampActive_ = durationSteps > 0.0f && start != target;
 
   if (!state.rampActive_) {
     state.current_ = target;
+    state.stepsRemaining_ = 0.0f;
   }
 }
 
 void AudioVoice::cancelCommandRamp(CommandValueState &state) {
   state.rampActive_ = false;
-  state.step_ = 0.0f;
+  state.stepsRemaining_ = 0.0f;
 }
 
-void AudioVoice::advanceCommandRamp(CommandValueState &state, int samplecount) {
+PICOTRACKER_FAST_CODE("audio_voice_advance_command_ramp")
+void AudioVoice::advanceCommandRamp(CommandValueState &state,
+                                    float sequencerSteps) {
   if (!state.overrideActive_ || !state.rampActive_) {
     return;
   }
 
-  if (state.step_ <= 0.0f) {
-    state.current_ = state.target_;
-    state.rampActive_ = false;
-    return;
-  }
-
-  const float scaledStep =
-      state.step_ * samplecount / static_cast<float>(kCommandKRateSampleCount);
-  if (state.current_ < state.target_) {
-    state.current_ = std::min(state.current_ + scaledStep, state.target_);
-  } else {
-    state.current_ = std::max(state.current_ - scaledStep, state.target_);
-  }
-
-  if (std::abs(state.current_ - state.target_) <= 1.0e-6f) {
-    state.current_ = state.target_;
-    state.rampActive_ = false;
-  }
+  advanceFixedDurationLinearRamp(sequencerSteps, state.target_, state.current_,
+                                 state.stepsRemaining_, state.rampActive_);
 }
 
-void AudioVoice::advanceCommandRamps(int samplecount) {
-  advanceCommandRamp(filterCutoffCommand_, samplecount);
-  advanceCommandRamp(filterResonanceCommand_, samplecount);
-  advanceCommandRamp(ampCommand_, samplecount);
-  advanceCommandRamp(panCommand_, samplecount);
+PICOTRACKER_FAST_CODE("audio_voice_advance_command_ramps")
+void AudioVoice::advanceCommandRamps(float sequencerSteps) {
+  advanceCommandRamp(filterCutoffCommand_, sequencerSteps);
+  advanceCommandRamp(filterResonanceCommand_, sequencerSteps);
+  advanceCommandRamp(ampCommand_, sequencerSteps);
+  advanceCommandRamp(panCommand_, sequencerSteps);
 }
 
-float AudioVoice::getCommandRampStep(float target, float start,
-                                     float speedParam) const {
-  if (speedParam == 0.0f) {
-    return 0.0f;
-  }
-
-  SyncMaster *syncMaster = SyncMaster::GetInstance();
-  const float tickSampleCount =
-      syncMaster ? syncMaster->GetTickSampleCount() : 0.0f;
-  const float sampleCount = 4.0f * tickSampleCount;
-  if (sampleCount <= 0.0f) {
-    return 0.0f;
-  }
-
-  return std::abs(target - start) * kCommandKRateSampleCount / speedParam /
-         sampleCount;
+float AudioVoice::commandSpeedDurationSteps(float speedParam) {
+  return speedParam / static_cast<float>(SyncMaster::SlicesPerStep);
 }
 
 void AudioVoice::refreshStageLFOMasks() {
@@ -639,11 +1052,13 @@ void AudioVoice::resetStageState() {
     state.ic1eq_ = 0.0f;
     state.ic2eq_ = 0.0f;
   }
+  bandpassCoefficients_ = {};
   for (int slot = 0; slot < InsertSlotCount; ++slot) {
     insertEffectSlots_[slot].ResetState();
   }
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_update_filter_envelope")
 void AudioVoice::updateFilterEnvelopeParameters() {
   filterEnvelope_.SetParameters(
       getVoiceValue(LFOTarget::VoiceFilterAttack, params_.filterAttack_, 0, 0,
@@ -656,6 +1071,7 @@ void AudioVoice::updateFilterEnvelopeParameters() {
                     0xFF));
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_update_amp_envelope")
 void AudioVoice::updateAmpEnvelopeParameters() {
   ampEnvelope_.SetParameters(
       getVoiceValue(LFOTarget::VoiceAmpAttack, params_.ampAttack_, 0, 0, 0xFF),
@@ -666,6 +1082,7 @@ void AudioVoice::updateAmpEnvelopeParameters() {
                     0xFF));
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_sync_filter_type")
 void AudioVoice::syncFilterType() {
   const int filterTypeValue = std::clamp(
       params_.filterType_ ? params_.filterType_->GetInt() : 0, 0, 0xFF);
@@ -685,10 +1102,10 @@ void AudioVoice::syncFilterType() {
   filterMorph_.lowpassWeight_ = lowBandAmount * (1.0f - lowToBand) - bandToHigh;
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_run_stage")
 void AudioVoice::runStage(
-    AccumulatingDWTProfile &chainProfile, AccumulatingDWTProfile &lfoProfile,
-    AccumulatingDWTProfile &stageProfile, uint8_t lfoMask,
-    AudioSample *inputBuffer, AudioBufferLayout inputLayout,
+    AccumulatingDWTProfile &lfoProfile, AccumulatingDWTProfile *stageProfile,
+    uint8_t lfoMask, AudioSample *inputBuffer, AudioBufferLayout inputLayout,
     AudioSample *outputBuffer, AudioBufferLayout outputLayout, int samplecount,
     void (AudioVoice::*processStage)(AudioSample *, AudioSample *, int,
                                      AudioBufferLayout, AudioBufferLayout),
@@ -697,12 +1114,14 @@ void AudioVoice::runStage(
     if (beforeStage) {
       (this->*beforeStage)();
     }
-    chainProfile.Begin();
-    stageProfile.Begin();
+    if (stageProfile) {
+      stageProfile->Begin();
+    }
     (this->*processStage)(inputBuffer, outputBuffer, samplecount, inputLayout,
                           outputLayout);
-    stageProfile.End();
-    chainProfile.End();
+    if (stageProfile) {
+      stageProfile->End();
+    }
     return;
   }
 
@@ -717,23 +1136,26 @@ void AudioVoice::runStage(
     if (beforeStage) {
       (this->*beforeStage)();
     }
-    chainProfile.Begin();
-    stageProfile.Begin();
+    if (stageProfile) {
+      stageProfile->Begin();
+    }
     (this->*processStage)(chunkInput, chunkOutput, chunkSize, inputLayout,
                           outputLayout);
-    stageProfile.End();
+    if (stageProfile) {
+      stageProfile->End();
+    }
 
     if (lfoMask != 0) {
       lfoProfile.Begin();
       lfoBank_.AdvanceSlots(lfoMask, chunkSize);
       lfoProfile.End();
     }
-    chainProfile.End();
 
     processedSamples += chunkSize;
   }
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_get_value")
 int AudioVoice::getVoiceValue(LFOTarget target, Variable *variable,
                               int defaultValue, int minValue,
                               int maxValue) const {
@@ -762,6 +1184,7 @@ int AudioVoice::getVoiceValue(LFOTarget target, Variable *variable,
   return lfoBank_.GetLiveModulatedValue(target, baseValue, minValue, maxValue);
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_pre_insert")
 void AudioVoice::processPreInsertStage(AudioSample *input, AudioSample *output,
                                        int samplecount,
                                        AudioBufferLayout inputLayout,
@@ -771,6 +1194,7 @@ void AudioVoice::processPreInsertStage(AudioSample *input, AudioSample *output,
   processInsertChain(preInsertChain_, output, samplecount, inputLayout);
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_bandpass")
 void AudioVoice::processBandpass(AudioSample *input, AudioSample *output,
                                  int samplecount, AudioBufferLayout inputLayout,
                                  AudioBufferLayout outputLayout) {
@@ -781,74 +1205,102 @@ void AudioVoice::processBandpass(AudioSample *input, AudioSample *output,
                                   params_.bandpassMix_, 0xFF, 0, 0xFF);
   const bool highpassActive = base > 0;
   const bool lowpassActive = width < 0xFF;
-  const float maxHz = maxCutoffHz();
-  const float baseHz = highpassActive ? mapCutoffHz(base) : 0.0f;
-  float lowpassHz = maxHz;
+  // Both coefficients depend only on the quantized controls, so unchanged
+  // controls can reuse the exact previous results of powf/expf.
+  if (bandpassCoefficients_.base_ != base ||
+      bandpassCoefficients_.width_ != width) {
+    const float maxHz = maxCutoffHz();
+    const float baseHz = highpassActive ? mapCutoffHz(base) : 0.0f;
+    float lowpassHz = maxHz;
 
-  if (lowpassActive) {
-    if (!highpassActive) {
-      lowpassHz = mapCutoffHz(width);
-    } else {
-      lowpassHz = baseHz + byteToUnit(width) * (maxHz - baseHz);
+    if (lowpassActive) {
+      if (!highpassActive) {
+        lowpassHz = mapCutoffHz(width);
+      } else {
+        lowpassHz = baseHz + byteToUnit(width) * (maxHz - baseHz);
+      }
     }
+
+    bandpassCoefficients_.base_ = base;
+    bandpassCoefficients_.width_ = width;
+    bandpassCoefficients_.highpassAlpha_ =
+        highpassActive ? onePoleAlpha(baseHz) : 0.0f;
+    bandpassCoefficients_.lowpassAlpha_ =
+        lowpassActive ? onePoleAlpha(lowpassHz) : 0.0f;
   }
 
-  const float highpassAlpha = highpassActive ? onePoleAlpha(baseHz) : 0.0f;
-  const float lowpassAlpha = lowpassActive ? onePoleAlpha(lowpassHz) : 0.0f;
+  const float highpassAlpha = bandpassCoefficients_.highpassAlpha_;
+  const float lowpassAlpha = bandpassCoefficients_.lowpassAlpha_;
 
   if (inputLayout == AudioBufferLayout::MonoPacked) {
-    BaseWidthState &state = bandpassState_[0];
+    float highpassLow = bandpassState_[0].highpassLow_;
+    float lowpassOut = bandpassState_[0].lowpassOut_;
     for (int i = 0; i < samplecount; ++i) {
       const float inputSample = input[i];
       float stageOutput = inputSample;
 
       if (highpassActive) {
-        state.highpassLow_ +=
-            highpassAlpha * (inputSample - state.highpassLow_);
-        stageOutput = inputSample - state.highpassLow_;
+        highpassLow += highpassAlpha * (inputSample - highpassLow);
+        stageOutput = inputSample - highpassLow;
       } else {
-        state.highpassLow_ = inputSample;
+        highpassLow = inputSample;
       }
 
       if (lowpassActive) {
-        state.lowpassOut_ += lowpassAlpha * (stageOutput - state.lowpassOut_);
-        stageOutput = state.lowpassOut_;
+        lowpassOut += lowpassAlpha * (stageOutput - lowpassOut);
+        stageOutput = lowpassOut;
       } else {
-        state.lowpassOut_ = stageOutput;
+        lowpassOut = stageOutput;
       }
 
       output[i] = stageOutput;
     }
+    bandpassState_[0].highpassLow_ = highpassLow;
+    bandpassState_[0].lowpassOut_ = lowpassOut;
     return;
   }
 
+  float highpassLowLeft = bandpassState_[0].highpassLow_;
+  float lowpassOutLeft = bandpassState_[0].lowpassOut_;
+  float highpassLowRight = bandpassState_[1].highpassLow_;
+  float lowpassOutRight = bandpassState_[1].lowpassOut_;
   for (int i = 0; i < samplecount; ++i) {
-    for (int ch = 0; ch < 2; ++ch) {
-      const int index = i * 2 + ch;
-      BaseWidthState &state = bandpassState_[ch];
-      const float inputSample = input[index];
-      float stageOutput = inputSample;
+    const int index = i * 2;
+    const float inputLeft = input[index];
+    const float inputRight = input[index + 1];
+    float outputLeft = inputLeft;
+    float outputRight = inputRight;
 
-      if (highpassActive) {
-        state.highpassLow_ +=
-            highpassAlpha * (inputSample - state.highpassLow_);
-        stageOutput = inputSample - state.highpassLow_;
-      } else {
-        state.highpassLow_ = inputSample;
-      }
-
-      if (lowpassActive) {
-        state.lowpassOut_ += lowpassAlpha * (stageOutput - state.lowpassOut_);
-        stageOutput = state.lowpassOut_;
-      } else {
-        state.lowpassOut_ = stageOutput;
-      }
-
-      output[index] = stageOutput;
+    if (highpassActive) {
+      highpassLowLeft += highpassAlpha * (inputLeft - highpassLowLeft);
+      highpassLowRight += highpassAlpha * (inputRight - highpassLowRight);
+      outputLeft = inputLeft - highpassLowLeft;
+      outputRight = inputRight - highpassLowRight;
+    } else {
+      highpassLowLeft = inputLeft;
+      highpassLowRight = inputRight;
     }
+
+    if (lowpassActive) {
+      lowpassOutLeft += lowpassAlpha * (outputLeft - lowpassOutLeft);
+      lowpassOutRight += lowpassAlpha * (outputRight - lowpassOutRight);
+      outputLeft = lowpassOutLeft;
+      outputRight = lowpassOutRight;
+    } else {
+      lowpassOutLeft = outputLeft;
+      lowpassOutRight = outputRight;
+    }
+
+    output[index] = outputLeft;
+    output[index + 1] = outputRight;
   }
+  bandpassState_[0].highpassLow_ = highpassLowLeft;
+  bandpassState_[0].lowpassOut_ = lowpassOutLeft;
+  bandpassState_[1].highpassLow_ = highpassLowRight;
+  bandpassState_[1].lowpassOut_ = lowpassOutRight;
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_standard_filter")
 void AudioVoice::processStandardFilter(AudioSample *input, AudioSample *output,
                                        int samplecount,
                                        AudioBufferLayout inputLayout,
@@ -867,9 +1319,18 @@ void AudioVoice::processStandardFilter(AudioSample *input, AudioSample *output,
   const float lowpassWeight = filterMorph_.lowpassWeight_;
   const float envAmount = bipolarDepth(getVoiceValue(
       LFOTarget::VoiceFilterEnvAmount, params_.filterEnvAmount_, 0, -64, 64));
+  const bool constantCutoff = envAmount == 0.0f;
+  StandardFilterCoefficients constantCoefficients{};
+  // A zero envelope depth keeps the cutoff constant even while the envelope
+  // advances, allowing the exact coefficient calculation to move out of the
+  // sample loops.
+  if (constantCutoff) {
+    constantCoefficients = calculateStandardFilterCoefficients(baseCutoff, k);
+  }
 
   if (inputLayout == AudioBufferLayout::MonoPacked) {
-    StandardFilterState &state = standardFilterState_[0];
+    float ic1eq = standardFilterState_[0].ic1eq_;
+    float ic2eq = standardFilterState_[0].ic2eq_;
     int processedSamples = 0;
     while (processedSamples < samplecount) {
       const VoiceADSR::LinearSegment envelopeSegment =
@@ -880,29 +1341,41 @@ void AudioVoice::processStandardFilter(AudioSample *input, AudioSample *output,
 
       float envValue = envelopeSegment.firstValue;
       const int segmentEnd = processedSamples + envelopeSegment.samples;
-      for (; processedSamples < segmentEnd; ++processedSamples) {
-        const float cutoff =
-            std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f);
-        const float g = lookupFilterG(cutoff);
-        const float a1 = 1.0f / (1.0f + g * (g + k));
-        const float a2 = g * a1;
-        const float a3 = g * a2;
-        const float inputSample = input[processedSamples];
-
-        const float v3 = inputSample - state.ic2eq_;
-        const float v1 = a1 * state.ic1eq_ + a2 * v3;
-        const float v2 = state.ic2eq_ + a2 * state.ic1eq_ + a3 * v3;
-        state.ic1eq_ = 2.0f * v1 - state.ic1eq_;
-        state.ic2eq_ = 2.0f * v2 - state.ic2eq_;
-
-        output[processedSamples] = inputWeight * inputSample +
-                                   bandpassWeight * v1 + lowpassWeight * v2;
-        envValue += envelopeSegment.step;
+      if (constantCutoff || envelopeSegment.step == 0.0f) {
+        const StandardFilterCoefficients coefficients =
+            constantCutoff
+                ? constantCoefficients
+                : calculateStandardFilterCoefficients(
+                      std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f),
+                      k);
+        for (; processedSamples < segmentEnd; ++processedSamples) {
+          output[processedSamples] = processStandardFilterSample(
+              input[processedSamples], coefficients, inputWeight,
+              bandpassWeight, lowpassWeight, ic1eq, ic2eq);
+          envValue += envelopeSegment.step;
+        }
+      } else {
+        for (; processedSamples < segmentEnd; ++processedSamples) {
+          const float cutoff =
+              std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f);
+          const StandardFilterCoefficients coefficients =
+              calculateStandardFilterCoefficients(cutoff, k);
+          output[processedSamples] = processStandardFilterSample(
+              input[processedSamples], coefficients, inputWeight,
+              bandpassWeight, lowpassWeight, ic1eq, ic2eq);
+          envValue += envelopeSegment.step;
+        }
       }
     }
+    standardFilterState_[0].ic1eq_ = ic1eq;
+    standardFilterState_[0].ic2eq_ = ic2eq;
     return;
   }
 
+  float ic1eqLeft = standardFilterState_[0].ic1eq_;
+  float ic2eqLeft = standardFilterState_[0].ic2eq_;
+  float ic1eqRight = standardFilterState_[1].ic1eq_;
+  float ic2eqRight = standardFilterState_[1].ic2eq_;
   int processedSamples = 0;
   while (processedSamples < samplecount) {
     const VoiceADSR::LinearSegment envelopeSegment =
@@ -913,35 +1386,55 @@ void AudioVoice::processStandardFilter(AudioSample *input, AudioSample *output,
 
     float envValue = envelopeSegment.firstValue;
     const int segmentEnd = processedSamples + envelopeSegment.samples;
-    for (; processedSamples < segmentEnd; ++processedSamples) {
-      const float cutoff =
-          std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f);
-      // The constant table maps normalized cutoff through the exact exponential
-      // frequency curve and tan(pi * f / fs) TPT coefficient transform.
-      const float g = lookupFilterG(cutoff);
-      const float a1 = 1.0f / (1.0f + g * (g + k));
-      const float a2 = g * a1;
-      const float a3 = g * a2;
-
-      for (int ch = 0; ch < 2; ++ch) {
-        const int index = processedSamples * 2 + ch;
-        StandardFilterState &state = standardFilterState_[ch];
-        const float inputSample = input[index];
-
-        const float v3 = inputSample - state.ic2eq_;
-        const float v1 = a1 * state.ic1eq_ + a2 * v3;
-        const float v2 = state.ic2eq_ + a2 * state.ic1eq_ + a3 * v3;
-        state.ic1eq_ = 2.0f * v1 - state.ic1eq_;
-        state.ic2eq_ = 2.0f * v2 - state.ic2eq_;
-
-        output[index] = inputWeight * inputSample + bandpassWeight * v1 +
-                        lowpassWeight * v2;
+    if (constantCutoff || envelopeSegment.step == 0.0f) {
+      const StandardFilterCoefficients coefficients =
+          constantCutoff
+              ? constantCoefficients
+              : calculateStandardFilterCoefficients(
+                    std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f),
+                    k);
+      for (; processedSamples < segmentEnd; ++processedSamples) {
+        const int index = processedSamples * 2;
+        const float inputLeft = input[index];
+        const float inputRight = input[index + 1];
+        const float outputLeft = processStandardFilterSample(
+            inputLeft, coefficients, inputWeight, bandpassWeight, lowpassWeight,
+            ic1eqLeft, ic2eqLeft);
+        const float outputRight = processStandardFilterSample(
+            inputRight, coefficients, inputWeight, bandpassWeight,
+            lowpassWeight, ic1eqRight, ic2eqRight);
+        output[index] = outputLeft;
+        output[index + 1] = outputRight;
+        envValue += envelopeSegment.step;
       }
-      envValue += envelopeSegment.step;
+    } else {
+      for (; processedSamples < segmentEnd; ++processedSamples) {
+        const float cutoff =
+            std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f);
+        const StandardFilterCoefficients coefficients =
+            calculateStandardFilterCoefficients(cutoff, k);
+        const int index = processedSamples * 2;
+        const float inputLeft = input[index];
+        const float inputRight = input[index + 1];
+        const float outputLeft = processStandardFilterSample(
+            inputLeft, coefficients, inputWeight, bandpassWeight, lowpassWeight,
+            ic1eqLeft, ic2eqLeft);
+        const float outputRight = processStandardFilterSample(
+            inputRight, coefficients, inputWeight, bandpassWeight,
+            lowpassWeight, ic1eqRight, ic2eqRight);
+        output[index] = outputLeft;
+        output[index + 1] = outputRight;
+        envValue += envelopeSegment.step;
+      }
     }
   }
+  standardFilterState_[0].ic1eq_ = ic1eqLeft;
+  standardFilterState_[0].ic2eq_ = ic2eqLeft;
+  standardFilterState_[1].ic1eq_ = ic1eqRight;
+  standardFilterState_[1].ic2eq_ = ic2eqRight;
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_amp")
 void AudioVoice::processAmp(AudioSample *input, AudioSample *output,
                             int samplecount, AudioBufferLayout inputLayout,
                             AudioBufferLayout outputLayout) {
@@ -983,6 +1476,7 @@ void AudioVoice::processAmp(AudioSample *input, AudioSample *output,
   }
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_pan")
 void AudioVoice::processPan(AudioSample *input, AudioSample *output,
                             int samplecount, AudioBufferLayout inputLayout,
                             AudioBufferLayout outputLayout) {
@@ -1016,6 +1510,7 @@ void AudioVoice::processPan(AudioSample *input, AudioSample *output,
   }
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_post_insert")
 void AudioVoice::processPostInsertStage(AudioSample *input, AudioSample *output,
                                         int samplecount,
                                         AudioBufferLayout inputLayout,
@@ -1025,6 +1520,7 @@ void AudioVoice::processPostInsertStage(AudioSample *input, AudioSample *output,
   processInsertChain(postInsertChain_, output, samplecount, inputLayout);
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_insert_chain")
 void AudioVoice::processInsertChain(etl::ivector<InsertEffectSlot *> &chain,
                                     AudioSample *buffer, int samplecount,
                                     AudioBufferLayout layout) {
@@ -1036,6 +1532,11 @@ void AudioVoice::processInsertChain(etl::ivector<InsertEffectSlot *> &chain,
                                         : LFOTarget::VoiceInsertAmount2;
     const int slotAmount =
         getVoiceValue(target, amount, kDefaultVoiceInsertAmount, 0, 0xFF);
+    const VoiceProfileComponent component =
+        index == 0 ? VoiceProfileComponent::Insert1
+                   : VoiceProfileComponent::Insert2;
+    ScopedDWTProfile effectProfile(
+        GetVoiceProfileStats(component, static_cast<uint32_t>(channel_)));
     slot->Render(buffer, samplecount, slotAmount, layout);
   }
 }
@@ -1106,6 +1607,7 @@ void AudioVoice::clearInsertEffects() {
   rebuildInsertChains();
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_sync_insert_effects")
 void AudioVoice::syncInsertEffects() {
   const bool slot0Changed =
       syncInsertEffectSlot(0, params_.insertType1_, params_.insertPosition1_);
@@ -1117,6 +1619,7 @@ void AudioVoice::syncInsertEffects() {
   }
 }
 
+PICOTRACKER_FAST_CODE("audio_voice_sync_insert_effect_slot")
 bool AudioVoice::syncInsertEffectSlot(int slot, Variable *type,
                                       Variable *position) {
   const int slotType = ClampVoiceInsertEffectIndex(

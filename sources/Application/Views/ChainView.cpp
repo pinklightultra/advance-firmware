@@ -143,7 +143,7 @@ void ChainView::warpInColumn(int offset) {
 
 void ChainView::warpToNeighbour(int offset) {
 
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   int oldSongX = viewData_->songX_;
   for (int newPos = oldSongX + offset; (newPos > -1) && (newPos < channelCount);
        newPos += offset) {
@@ -749,7 +749,7 @@ void ChainView::DrawView() {
 
   etl::string<23> title("Chain ");
   etl::format_spec format;
-  format.width(2).fill('0');
+  format.width(2).fill('0').hex().upper_case(true);
   etl::to_string(viewData_->currentChain_, title, format, true);
   setTitle(title);
 
@@ -869,7 +869,7 @@ void ChainView::AnimationUpdate() {
     // Only update play position if player is running
     if (player->IsRunning()) {
       // Loop on all channels to see if one of them is playing current chain
-      const int channelCount = viewData_->song_->GetChannelCount();
+      const int channelCount = SONG_CHANNEL_COUNT;
       for (int i = 0; i < channelCount; i++) {
         if (player->IsChannelPlaying(i)) {
           if (viewData_->currentPlayChain_[i] == viewData_->currentChain_ &&
@@ -891,14 +891,14 @@ void ChainView::AnimationUpdate() {
 
     // Handle queue position updates if in live mode
     if (player->GetSequencerMode() == SM_LIVE) {
-      const int channelCount = viewData_->song_->GetChannelCount();
+      const int channelCount = SONG_CHANNEL_COUNT;
       for (int i = 0; i < channelCount; i++) {
         // is anything queued?
         if (player->GetQueueingMode(i) != QM_NONE) {
           // find the chain queued in channel
           unsigned char songPos = player->GetQueuePosition(i);
-          unsigned char *chain = viewData_->song_->data_ + i +
-                                 viewData_->song_->GetChannelCount() * songPos;
+          unsigned char *chain =
+              viewData_->song_->data_ + i + SONG_CHANNEL_COUNT * songPos;
           if (*chain == viewData_->currentChain_) {
             unsigned char chainPos = player->GetQueueChainPosition(i);
             pos._y = anchor._y + chainPos;

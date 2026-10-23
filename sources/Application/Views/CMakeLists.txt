@@ -16,6 +16,7 @@ add_library(application_views
   GrooveView.cpp
   ImportView.cpp
   InstrumentImportView.cpp
+  FM6PresetBrowserView.cpp
   InstrumentView.cpp
   VoiceView.cpp
   ThemeImportView.cpp
@@ -38,6 +39,7 @@ add_library(application_views
   SampleEditProgressDisplay.cpp
   SampleSlicer.cpp
   SampleSlicesView.cpp
+  CreditsView.cpp
 )
 
 target_link_libraries(application_views PUBLIC

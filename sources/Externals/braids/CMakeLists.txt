@@ -16,8 +16,9 @@ add_library(braids
   vco_jitter_source.h
 )
 
-target_link_libraries(braids PUBLIC pico_stdlib
-)
+if(TARGET pico_stdlib)
+  target_link_libraries(braids PUBLIC pico_stdlib)
+endif()
 
 target_include_directories(braids PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

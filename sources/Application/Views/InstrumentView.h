@@ -19,9 +19,12 @@
 #include "BaseClasses/UIActionField.h"
 #include "BaseClasses/UIBigHexVarField.h"
 #include "BaseClasses/UIBitmaskVarField.h"
+#include "BaseClasses/UIFM6AlgoField.h"
+#include "BaseClasses/UIFM6ParamField.h"
 #include "BaseClasses/UIIntVarField.h"
 #include "BaseClasses/UIIntVarOffField.h"
 #include "BaseClasses/UINoteVarField.h"
+#include "BaseClasses/UIPitchOffsetVarField.h"
 #include "BaseClasses/UIStaticField.h"
 #include "BaseClasses/UITextField.h"
 #include "Externals/etl/include/etl/string.h"
@@ -54,9 +57,20 @@ public:
 protected:
   void warpToNext(int offset);
   void onInstrumentChange();
+  void fillStarLoomParameters();
+  void fillFM6Parameters();
+  void fillFM6OperatorPanel(FM6Instrument &instrument, int x, int y);
+  void fillFM6GlobalPanel(FM6Instrument &instrument, int x, int y);
+  void updateFM6FixedFrequencyLabel();
+  void addFM6Label(int x, int y, const char *text);
+  void addFM6SectionHeader(int x, int y, const char *text);
+  void addFM6Param(int x, int y, FM6Instrument &instrument,
+                   const FM6ParamDef &def);
   void fillSampleParameters();
   void fillSampleSourceParameters();
   void fillMidiParameters();
+  void fillSIDParameters();
+  void fillPicoSwarmParameters();
   void fillNoneParameters();
   I_Instrument *getInstrument();
   void Update(Observable &o, I_ObservableData *d);
@@ -71,8 +85,12 @@ protected:
   bool focusedEmbeddedSlicerPreviewField();
   void updateEmbeddedSlicerPreviewRange();
   bool isEmbeddedSlicerActive() const;
+  uint8_t instrumentPreviewNote(I_Instrument *instrument);
   bool startInstrumentPreview(unsigned short mask);
+  void auditionParameterChange(FourCC parameter);
   void stopInstrumentPreview();
+  int maxSelectableInstrumentTypeIndex() const;
+  void updateInstrumentTypeSelectionAvailability();
 
 private:
   void onConfirmInstrumentTypeChange(View &view, ModalView &dialog);
@@ -80,18 +98,26 @@ private:
   void onConfirmSampleChange(View &view, ModalView &dialog);
   void onConfirmExportOverwrite(View &view, ModalView &dialog);
   static void AutoSliceConfirmCallback(View &view, ModalView &dialog);
+  void onSimpleModalDismiss(View &view, ModalView &dialog);
 
   static constexpr size_t SliceCountLabelSize = 20;
+  static constexpr size_t FM6FixedFrequencyLabelSize = 8;
   Project *project_;
   FourCC lastFocusID_;
   bool lastFocusWasSliceGraph_;
   WatchedVariable instrumentType_;
   int lastSampleIndex_;
   int8_t pendingSampleSourceLoopModeDirection_;
-  bool previewKeyHeld_;
+  enum class PreviewMode : uint8_t { None, Manual, Parameter };
+  PreviewMode previewMode_;
   unsigned short previewChannel_;
   unsigned short previewInstrument_;
   bool suppressSampleChangeWarning_;
+  // Which FM6 patch block the algorithm field's cursor points at: 1-6 for a
+  // DX7 operator, FM6SelectionGlobal for the global block. Held here so it
+  // survives the field rebuild an operator/global switch triggers.
+  uint8_t fm6Selection_;
+  char fm6FixedFrequencyLabel_[FM6FixedFrequencyLabelSize] = {};
   etl::string<SliceCountLabelSize> sliceCountLabel_;
 
   // Variables for export confirmation dialog
@@ -107,8 +133,12 @@ private:
   etl::vector<UIIntVarField, 1> typeIntVarField_;
   etl::vector<UIActionField, 2> persistentActionField_;
   etl::vector<UIIntVarField, 40> intVarField_;
+  etl::vector<UIActionField, 1> fm6ActionField_;
+  etl::vector<UIFM6AlgoField, 1> fm6AlgoField_;
+  etl::vector<UIFM6ParamField, 24> fm6ParamField_;
   etl::vector<UINoteVarField, 1> noteVarField_;
-  etl::vector<UIStaticField, 10> staticField_;
+  etl::vector<UIPitchOffsetVarField, 3> pitchOffsetVarField_;
+  etl::vector<UIStaticField, 24> staticField_;
   etl::vector<UIBigHexVarField, 4> bigHexVarField_;
   etl::vector<UIIntVarOffField, 2> intVarOffField_;
   etl::vector<UIActionField, 1> sampleActionField_;

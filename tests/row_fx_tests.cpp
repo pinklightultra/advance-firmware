@@ -41,6 +41,7 @@ public:
     }
     return randomNumber_;
   }
+  uint32_t GetDeviceIdentitySeed() override { return 0x5049434FU; }
   uint32_t Micros() override { return 0; }
   uint32_t Millis() override { return 0; }
 

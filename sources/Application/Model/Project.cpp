@@ -27,6 +27,7 @@
 #include "System/Console/Trace.h"
 #include "System/io/Status.h"
 #include "Table.h"
+#include "config/MemorySections.h"
 
 #include <math.h>
 
@@ -44,9 +45,6 @@
 #define DATA_UNUSED_VALUE 0xFF
 
 namespace {
-constexpr const char *kProjectAudioModeNames[] = {"stereo", "mono"};
-constexpr int kProjectAudioModeCount = 2;
-
 bool IsMixRoutingVariable(FourCC id) {
   if (id == FourCC::VarMasterVolume) {
     return true;
@@ -119,8 +117,6 @@ Project::Project(const char *name)
       scale_(FourCC::VarScale, scaleNames, numScales, 0),
       scaleRoot_(FourCC::VarScaleRoot, noteNames, 12, 0),
       projectName_(FourCC::VarProjectName, name),
-      projectAudioMode_(FourCC::VarProjectAudioMode, kProjectAudioModeNames,
-                        kProjectAudioModeCount, kProjectAudioModeStereo),
       previewVolume_(FourCC::VarPreviewVolume, DEFAULT_PREVIEW_VOLUME),
       mixRoutingDirty_(true) {
 
@@ -178,7 +174,6 @@ Project::Project(const char *name)
   this->variables_.insert(variables_.end(), &scaleRoot_);
   scaleRoot_.SetInt(0); // Default to C (0)
   this->variables_.insert(variables_.end(), &projectName_);
-  this->variables_.insert(variables_.end(), &projectAudioMode_);
   this->variables_.insert(variables_.end(), &previewVolume_);
 
   WatchedVariable *mixRoutingVars[] = {
@@ -241,7 +236,6 @@ Project::Project(const char *name)
   Groove::GetInstance()->Clear();
 
   tempoTapCount_ = 0;
-  SyncSongChannelCount();
 
   Status::Set("About to load project");
 };
@@ -307,7 +301,6 @@ void Project::Load(const char *name) {
   transpose_.Reset();
   scale_.Reset();
   scaleRoot_.Reset();
-  projectAudioMode_.Reset();
   previewVolume_.Reset();
 
   if (name) {
@@ -317,7 +310,6 @@ void Project::Load(const char *name) {
   }
 
   mixRoutingDirty_ = true;
-  SyncSongChannelCount();
 
   Status::Set("About to load project");
 }
@@ -334,18 +326,13 @@ uint8_t Project::GetScaleRoot() {
   return v->GetInt();
 }
 
+PICOTRACKER_FAST_CODE("project_get_tempo")
 int Project::GetTempo() {
   Variable *v = FindVariable(FourCC::VarTempo);
   NAssert(v);
   int tempo = v->GetInt() + tempoNudge_;
   return tempo;
 };
-
-int Project::GetAudioMode() {
-  Variable *v = FindVariable(FourCC::VarProjectAudioMode);
-  NAssert(v);
-  return v->GetInt();
-}
 
 int Project::GetMasterVolume() {
   Variable *v = FindVariable(FourCC::VarMasterVolume);
@@ -354,10 +341,6 @@ int Project::GetMasterVolume() {
 }
 
 int Project::GetChannelVolume(int channel) {
-  if (channel >= SONG_CHANNEL_COUNT_STEREO && channel < SONG_CHANNEL_COUNT) {
-    return DEFAULT_CHANNEL_VOLUME;
-  }
-
   switch (channel) {
   case 0:
     return channelVolume1_.GetInt();
@@ -382,10 +365,6 @@ int Project::GetChannelVolume(int channel) {
 };
 
 int Project::GetChannelFXSend(int channel, int fx) {
-  if (channel >= SONG_CHANNEL_COUNT_STEREO && channel < SONG_CHANNEL_COUNT) {
-    return DEFAULT_CHANNEL_FX_SEND;
-  }
-
   switch (fx) {
   case 0:
     switch (channel) {
@@ -519,6 +498,7 @@ void Project::NudgeTempo(int value) {
   }
 };
 
+PICOTRACKER_FAST_CODE("project_trigger")
 void Project::Trigger() {
   if (tempoNudge_ != 0) {
     if (tempoNudge_ > 0) {
@@ -565,8 +545,7 @@ void Project::Purge() {
   song_.phrase_.ClearAllocation();
 
   unsigned char *data = song_.data_;
-  const int channelCount = song_.GetChannelCount();
-  for (int i = 0; i < 256 * channelCount; i++) {
+  for (int i = 0; i < 256 * SONG_CHANNEL_COUNT; i++) {
     if (*data != DATA_UNUSED_VALUE) {
       song_.chain_.SetUsed(*data);
     }
@@ -753,7 +732,6 @@ void Project::RestoreContent(PersistencyDocument *doc) {
     }
     elem = doc->NextSibling();
   }
-  SyncSongChannelCount();
   mixRoutingDirty_ = true;
 }
 
@@ -811,11 +789,4 @@ void Project::OnTempoTap() {
     tempoTapCount_ = 1;
   }
   lastTap_[tempoTapCount_ - 1] = now;
-}
-
-void Project::SyncSongChannelCount() {
-  const int channelCount = projectAudioMode_.GetInt() == kProjectAudioModeMono
-                               ? SONG_CHANNEL_COUNT_MONO
-                               : SONG_CHANNEL_COUNT_STEREO;
-  song_.SetChannelCount(channelCount);
 }

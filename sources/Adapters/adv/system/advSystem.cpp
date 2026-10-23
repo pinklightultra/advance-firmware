@@ -20,6 +20,7 @@
 #include "Application/Model/Config.h"
 #include "Application/Player/SyncMaster.h"
 #include "BatteryGauge.h"
+#include "System/System/DeviceIdentity.h"
 #include "advUsbRoleManager.h"
 #include "assets/error_bitmaps.h"
 #include "charger.h"
@@ -199,6 +200,11 @@ uint32_t advSystem::GetRandomNumber() {
   randomState_ ^= randomState_ >> 17;
   randomState_ ^= randomState_ << 5;
   return randomState_;
+}
+
+uint32_t advSystem::GetDeviceIdentitySeed() {
+  return DeviceIdentity::SeedFromUidWords(HAL_GetUIDw0(), HAL_GetUIDw1(),
+                                          HAL_GetUIDw2());
 }
 
 void advSystem::SystemBootloader() { platform_bootloader(); }

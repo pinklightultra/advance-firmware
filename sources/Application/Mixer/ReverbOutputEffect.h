@@ -39,6 +39,7 @@ public:
 
   void SetParameters(float inputGain, float time, float diffusion,
                      float lowPass);
+  bool IsTailActive() const override;
   virtual void Render(const AudioSample *input, AudioSample *output,
                       int samplecount) override;
   virtual const char *GetShortName() const override { return "REVB"; }

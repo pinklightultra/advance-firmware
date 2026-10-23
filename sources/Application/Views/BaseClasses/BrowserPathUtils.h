@@ -16,6 +16,15 @@
 
 namespace BrowserPathUtils {
 
+// Internal sentinel stored as the synthetic parent entry's name. ".." can
+// never appear as a real listed directory entry, so name-based checks against
+// it will not collide with an actual filesystem directory (e.g. one literally
+// named "[up]"). Keep this separate from the display label below.
+constexpr const char *kParentDirectoryName = "..";
+
+// Display label shown for the synthetic parent entry in the browser UI.
+constexpr const char *kParentDirectoryDisplayName = "[up]";
+
 enum class NextIndexedFilePathStatus : uint8_t {
   Found = 0,
   Exhausted,
@@ -147,7 +156,7 @@ inline bool PrependParentEntry(const char *currentDir, const char *rootDir,
   }
 
   FileSystemEntry parentEntry;
-  parentEntry.name = "..";
+  parentEntry.name = kParentDirectoryName;
   parentEntry.type = PFT_DIR;
   parentEntry.size = 0;
   parentEntry.isHidden = false;

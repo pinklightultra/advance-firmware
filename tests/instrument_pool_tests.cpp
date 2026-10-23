@@ -8,7 +8,10 @@
 
 #include "doctest/doctest.h"
 
+#include "Application/Instruments/InstrumentBank.h"
+#include "Application/Instruments/SamplePool.h"
 #include "Externals/etl/include/etl/variant_pool.h"
+#include <cstring>
 
 namespace {
 
@@ -24,6 +27,66 @@ struct DummyMidiInstrument {
 
 using TestInstrumentPool =
     etl::variant_pool<4, DummySampleInstrument, DummyMidiInstrument>;
+
+class LegacySelectionTestSamplePool : public SamplePool {
+public:
+  void Reset() override { count_ = 0; }
+  bool CheckSampleFits(int) override { return true; }
+  uint32_t GetAvailableSampleStorageSpace() override { return 0; }
+  bool unloadSample(uint32_t index) override {
+    if (index >= count_) {
+      return false;
+    }
+    for (uint32_t i = index; i < count_ - 1; ++i) {
+      std::strncpy(nameStore_[i], nameStore_[i + 1],
+                   MAX_INSTRUMENT_FILENAME_LENGTH);
+      nameStore_[i][MAX_INSTRUMENT_FILENAME_LENGTH] = '\0';
+    }
+    --count_;
+    SetChanged();
+    SamplePoolEvent event;
+    event.index_ = index;
+    event.type_ = SPET_DELETE;
+    NotifyObservers(&event);
+    return true;
+  }
+
+  void SeedSamples() {
+    static constexpr const char *sampleNames[] = {"A.wav", "B.wav", "C.wav"};
+    count_ = 3;
+    for (uint32_t i = 0; i < count_; ++i) {
+      std::strncpy(nameStore_[i], sampleNames[i],
+                   MAX_INSTRUMENT_FILENAME_LENGTH);
+      nameStore_[i][MAX_INSTRUMENT_FILENAME_LENGTH] = '\0';
+    }
+  }
+
+protected:
+  bool loadSample(const char *name) override {
+    if (count_ >= MAX_SAMPLES) {
+      return false;
+    }
+    std::strncpy(nameStore_[count_], name, MAX_INSTRUMENT_FILENAME_LENGTH);
+    nameStore_[count_][MAX_INSTRUMENT_FILENAME_LENGTH] = '\0';
+    ++count_;
+    return true;
+  }
+};
+
+class SamplePoolInstallGuard {
+public:
+  SamplePoolInstallGuard() : previous_(SamplePool::GetInstance()) {
+    SamplePool::Install(&pool_);
+  }
+
+  ~SamplePoolInstallGuard() { SamplePool::Install(previous_); }
+
+  LegacySelectionTestSamplePool &pool() { return pool_; }
+
+private:
+  SamplePool *previous_;
+  LegacySelectionTestSamplePool pool_;
+};
 
 } // namespace
 
@@ -57,4 +120,63 @@ TEST_CASE("Variant pool reuses freed slots across instrument types") {
   REQUIRE(midi != nullptr);
   CHECK(midi->channel_ == 7);
   CHECK(pool.available() == 3);
+}
+
+TEST_CASE("Legacy sample selection stays enabled for its project session") {
+  SamplePoolInstallGuard samplePoolGuard;
+  InstrumentBank bank;
+
+  CHECK_FALSE(bank.IsLegacySampleInstrumentSelectionEnabled());
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE_SOURCE, 0) == 0);
+  CHECK_FALSE(bank.IsLegacySampleInstrumentSelectionEnabled());
+
+  bank.releaseInstrument(0);
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE, 0) == 0);
+  CHECK(bank.IsLegacySampleInstrumentSelectionEnabled());
+
+  bank.releaseInstrument(0);
+  CHECK(bank.IsLegacySampleInstrumentSelectionEnabled());
+
+  bank.Reset();
+  CHECK_FALSE(bank.IsLegacySampleInstrumentSelectionEnabled());
+}
+
+TEST_CASE("Sample assignments survive a project-pool sample reload") {
+  SamplePoolInstallGuard samplePoolGuard;
+  samplePoolGuard.pool().SeedSamples();
+  InstrumentBank bank;
+
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE, 0) == 0);
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE_SOURCE, 1) == 1);
+  REQUIRE(bank.GetNextAndAssignID(IT_SAMPLE_SOURCE, 2) == 2);
+
+  auto *sample = static_cast<SampleInstrument *>(bank.GetInstrument(0));
+  auto *sampleSource =
+      static_cast<SampleSourceInstrument *>(bank.GetInstrument(1));
+  auto *unrelated =
+      static_cast<SampleSourceInstrument *>(bank.GetInstrument(2));
+  sample->AssignSample(0);
+  sampleSource->AssignSample(0);
+  unrelated->AssignSample(1);
+
+  const auto assignments = bank.CaptureSampleAssignments(0);
+  const int32_t newIndex =
+      samplePoolGuard.pool().ReloadSample(0, "/projects/demo/samples/A.wav");
+
+  REQUIRE(newIndex == 2);
+  REQUIRE(sample->GetSampleIndex() == -1);
+  REQUIRE(sampleSource->GetSampleIndex() == -1);
+  CHECK(sample->FindVariable(FourCC::SampleInstrumentSample)->GetListSize() ==
+        3);
+  CHECK(sampleSource->FindVariable(FourCC::SampleSourceInstrumentSample)
+            ->GetListSize() == 3);
+  bank.RestoreSampleAssignments(assignments, newIndex);
+
+  CHECK(sample->GetSampleIndex() == 2);
+  CHECK(sampleSource->GetSampleIndex() == 2);
+  CHECK(sample->FindVariable(FourCC::SampleInstrumentSample)->GetString() ==
+        "A.wav");
+  CHECK(sampleSource->FindVariable(FourCC::SampleSourceInstrumentSample)
+            ->GetString() == "A.wav");
+  CHECK(unrelated->GetSampleIndex() == 0);
 }

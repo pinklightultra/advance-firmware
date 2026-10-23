@@ -30,10 +30,30 @@ enum InstrumentType {
   IT_SAMPLE,
   IT_SAMPLE_SOURCE,
   IT_MIDI,
+  IT_SID,
+  IT_FM6,
+  IT_STARLOOM,
+  IT_PICO_SWARM,
   IT_LAST
 };
-static const char *InstrumentTypeNames[IT_LAST] = {"NONE", "SAMPLE",
-                                                   "SAMPLESOURCE", "MIDI"};
+static const char *InstrumentTypeNames[IT_LAST] = {
+    "NONE", "SAMPLE", "SAMPLESOURCE", "MIDI",
+    "SID",  "FM6",    "STARLOOM",     "PICOSWARM"};
+
+inline bool InstrumentTypeUsesModernAudioVoice(InstrumentType type) {
+  // This is the single source of truth for shared VoiceParameters and common
+  // AudioVoice command handling. Legacy Sample and MIDI remain self-contained.
+  switch (type) {
+  case IT_SAMPLE_SOURCE:
+  case IT_SID:
+  case IT_FM6:
+  case IT_STARLOOM:
+  case IT_PICO_SWARM:
+    return true;
+  default:
+    return false;
+  }
+}
 
 class I_Instrument : public VariableContainer,
                      public Observable,
@@ -68,6 +88,14 @@ public:
   virtual bool IsEmpty() = 0;
 
   virtual InstrumentType GetType() = 0;
+
+  // Instrument editors use this to decide whether changing a parameter should
+  // retrigger the instrument audition note. Instruments opt in only the
+  // parameters whose value directly changes the sound.
+  virtual bool ShouldAuditionParameterChange(FourCC parameter) const {
+    (void)parameter;
+    return false;
+  }
 
   virtual etl::string<MAX_INSTRUMENT_NAME_LENGTH> GetDefaultName() {
     return etl::string<MAX_INSTRUMENT_NAME_LENGTH>(
@@ -104,9 +132,6 @@ public:
     return GetDefaultName();
   }
 
-  // Override in instruments that expose the dedicated audio voice editor.
-  virtual bool SupportsAudioVoiceScreen() const { return false; }
-
   virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value) = 0;
 
   virtual bool Render(int channel, AudioSample *buffer, int size,
@@ -116,6 +141,13 @@ public:
     (void)size;
     (void)updateTick;
     return false;
+  }
+
+  // AudioVoice owns common pitch commands. Modern audio sources translate the
+  // resulting multiplier into their native playback-frequency control.
+  virtual void SetPitchMultiplier(int channel, float multiplier) {
+    (void)channel;
+    (void)multiplier;
   }
 
   virtual AudioBufferLayout GetAudioBufferLayout(int channel) const {

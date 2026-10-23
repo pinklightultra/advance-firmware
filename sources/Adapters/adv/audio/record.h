@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef _RECORD_H_
 #define _RECORD_H_
@@ -32,6 +36,10 @@ bool StartRecording(const char *filename, uint8_t threshold,
 
                     uint32_t milliseconds);
 void StopRecording();
+// Stop an in progress recording and throw it away instead of saving it to the
+// sdcard, deleting the file if writing it out had already started. Used when
+// there isnt time to save, eg. power off. Does not block.
+void CancelRecording();
 void RequestStopRecording();
 bool WaitForRecordingStop(uint32_t timeoutMs);
 void FinishStopRecording();

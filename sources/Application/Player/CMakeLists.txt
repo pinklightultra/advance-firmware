@@ -10,6 +10,7 @@ add_library(application_player
   AudioVoice.cpp
   InsertEffectSlot.cpp
   LFOProcessor.cpp
+  ${PROJECT_SOURCE_DIR}/Services/Midi/MidiNoteTracker.cpp
   Player.cpp
   PlayerChannel.cpp
   PlayerMixer.cpp

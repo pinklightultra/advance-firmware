@@ -35,9 +35,12 @@ static uint8_t lastRemoteColorIdx = 255;
 
 namespace {
 
-constexpr uint16_t kProfileOrderGraphicsBackend = 71;
+constexpr uint16_t kProfileOrderGraphicsBackend = 70;
 
-DWTProfileStats gGraphicsBackendProfile = {" gfx draw", true};
+DWTProfileStats gGraphicsBackendProfile = {
+    .name_ = "gfx draw",
+    .printLast_ = true,
+};
 
 void registerAdvGuiWindowProfiles() {
   static bool registered = false;
@@ -170,8 +173,7 @@ void advGUIWindowImp::Lock(){};
 void advGUIWindowImp::Unlock(){};
 
 void advGUIWindowImp::Flush() {
-  ScopedDWTProfile graphicsBackendProfile(&gGraphicsBackendProfile, 1,
-                                          PICO_CLOCK_HZ, 1);
+  ScopedDWTProfile graphicsBackendProfile(&gGraphicsBackendProfile);
   display_draw_changed();
   // send buffered UI draw cmds out over USB
   if (remoteUIEnabled_) {

@@ -69,7 +69,9 @@ private:
   GraphKind graphKindForField(UIField *field);
   GraphSection graphSectionForField(UIField *field);
   I_Instrument *getInstrument();
+  uint8_t voicePreviewNote(I_Instrument *instrument);
   bool startVoicePreview(unsigned short mask);
+  void auditionParameterChange();
   void stopVoicePreview();
   void warpToNext(int offset);
 
@@ -81,7 +83,8 @@ private:
   etl::vector<UILFOField, 12> lfoFields_;
   GraphKind graphKind_;
   GraphSection graphSection_;
-  bool previewKeyHeld_;
+  enum class PreviewMode : uint8_t { None, Manual, Parameter };
+  PreviewMode previewMode_;
   unsigned short previewChannel_;
   unsigned short previewInstrument_;
 };

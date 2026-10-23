@@ -7,7 +7,6 @@
  */
 
 #include "LFOSettings.h"
-#include "I_Instrument.h"
 #include <algorithm>
 #include <cmath>
 
@@ -310,20 +309,7 @@ size_t GetLFOSyncDivisionCount() {
   return sizeof(kSyncDivisions) / sizeof(kSyncDivisions[0]);
 }
 
-bool IsLFOTargetSupportedForInstrument(int instrumentType, LFOTarget target) {
-  if (target == LFOTarget::None) {
-    return true;
-  }
-
-  return instrumentType == IT_SAMPLE_SOURCE && isVoiceTarget(target);
-}
-
-bool GetLFOTargetValueRange(I_Instrument *instrument, LFOTarget target,
-                            int &minValue, int &maxValue) {
-  if (!instrument) {
-    return false;
-  }
-
+bool GetLFOTargetValueRange(LFOTarget target, int &minValue, int &maxValue) {
   if (isVoiceTarget(target)) {
     minValue = getVoiceTargetMin(target);
     maxValue = getVoiceTargetMax(target);

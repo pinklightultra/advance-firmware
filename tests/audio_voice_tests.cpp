@@ -19,12 +19,15 @@
 #include "Application/Player/AudioVoice.h"
 #undef private
 #include "Application/Audio/AudioSample.h"
+#include "Application/Player/AudioVoiceFilterGLUT.h"
 #include "Application/Player/InsertEffectDefinitions.h"
 #include "Application/Player/SyncMaster.h"
 #include "Application/Player/VoiceADSR.h"
 #include "Application/Utils/fixed.h"
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 
@@ -76,8 +79,10 @@ public:
       : I_Instrument(&variables_), voiceParameters_(), levelLeft_(0),
         levelRight_(0), active_(false), startResult_(true), alternating_(false),
         ramping_(false), stepLeft_(0.0f), stepRight_(0.0f), renderCount_(0),
-        releaseCount_(0), layout_(AudioBufferLayout::StereoInterleaved),
-        lastUpdateTick_(false) {
+        releaseCount_(0), pitchMultiplier_(1.0f), pitchSetCount_(0),
+        renderCallCount_(0), processCommandCount_(0), failRenderCall_(-1),
+        silentRenderStartCall_(-1),
+        layout_(AudioBufferLayout::StereoInterleaved), lastUpdateTick_(false) {
     voiceParameters_.AppendTo(variables_);
   }
 
@@ -113,9 +118,21 @@ public:
     }
 
     lastUpdateTick_ = updateTick;
+    if (renderCallCount_ < static_cast<int>(renderSizes_.size())) {
+      renderSizes_[renderCallCount_] = size;
+      renderPitches_[renderCallCount_] = pitchMultiplier_;
+    }
+    const bool shouldFail = renderCallCount_ == failRenderCall_;
+    const bool shouldRenderSilence = silentRenderStartCall_ >= 0 &&
+                                     renderCallCount_ >= silentRenderStartCall_;
+    renderCallCount_++;
+    if (shouldFail) {
+      active_ = false;
+      return false;
+    }
     for (int i = 0; i < size; ++i) {
-      AudioSample left = levelLeft_;
-      AudioSample right = levelRight_;
+      AudioSample left = shouldRenderSilence ? kAudioSampleZero : levelLeft_;
+      AudioSample right = shouldRenderSilence ? kAudioSampleZero : levelRight_;
       if (ramping_) {
         left += stepLeft_ * static_cast<AudioSample>(renderCount_ + i);
         right += stepRight_ * static_cast<AudioSample>(renderCount_ + i);
@@ -135,6 +152,12 @@ public:
     return true;
   }
 
+  void SetPitchMultiplier(int channel, float multiplier) override {
+    (void)channel;
+    pitchMultiplier_ = multiplier;
+    pitchSetCount_++;
+  }
+
   AudioBufferLayout GetAudioBufferLayout(int channel) const override {
     (void)channel;
     return layout_;
@@ -147,6 +170,7 @@ public:
     (void)channel;
     (void)cc;
     (void)value;
+    processCommandCount_++;
   }
   int GetTable() override { return VAR_OFF; }
   bool GetTableAutomation() override { return false; }
@@ -173,6 +197,20 @@ public:
   int StartCount() const { return startCount_; }
   int StopCount() const { return stopCount_; }
   bool LastRetrigger() const { return lastRetrigger_; }
+  float PitchMultiplier() const { return pitchMultiplier_; }
+  int PitchSetCount() const { return pitchSetCount_; }
+  int RenderCallCount() const { return renderCallCount_; }
+  int RenderSize(int index) const { return renderSizes_[index]; }
+  float RenderPitch(int index) const { return renderPitches_[index]; }
+  int ProcessCommandCount() const { return processCommandCount_; }
+  void FailRenderCall(int call) { failRenderCall_ = call; }
+  void SilenceFromRenderCall(int call) { silentRenderStartCall_ = call; }
+  void ClearPitchRenderHistory() {
+    pitchSetCount_ = 0;
+    renderCallCount_ = 0;
+    renderSizes_.fill(0);
+    renderPitches_.fill(0.0f);
+  }
 
   bool lastUpdateTick_;
 
@@ -191,10 +229,27 @@ private:
   AudioSample stepRight_;
   int renderCount_;
   int releaseCount_;
+  float pitchMultiplier_;
+  int pitchSetCount_;
+  int renderCallCount_;
+  int processCommandCount_;
+  int failRenderCall_;
+  int silentRenderStartCall_;
+  std::array<int, 32> renderSizes_{};
+  std::array<float, 32> renderPitches_{};
   int startCount_ = 0;
   int stopCount_ = 0;
   bool lastRetrigger_ = true;
   AudioBufferLayout layout_;
+};
+
+class StubPitchUpdater final : public AudioVoice::PitchUpdater {
+public:
+  float GetCurrentRatio() const override { return currentRatio_; }
+  void Reset() override { currentRatio_ = 1.0f; }
+
+private:
+  float currentRatio_ = 1.0f;
 };
 
 void ConfigureLFO(StubInstrument &instrument, size_t slot, LFOTarget target,
@@ -219,6 +274,153 @@ AudioSample sumAbs(const std::array<AudioSample, Size> &buffer) {
 
 constexpr AudioSample pcmToAudioSample(int pcm) {
   return static_cast<AudioSample>(pcm) / kAudioPcmScale;
+}
+
+template <size_t Size>
+void checkBitExact(const std::array<AudioSample, Size> &actual,
+                   const std::array<AudioSample, Size> &expected) {
+  for (size_t i = 0; i < Size; ++i) {
+    CHECK(std::bit_cast<uint32_t>(actual[i]) ==
+          std::bit_cast<uint32_t>(expected[i]));
+  }
+}
+
+float referenceByteToUnit(int value) {
+  return std::clamp(value, 0, 0xFF) / 255.0f;
+}
+
+float referenceMapCutoffHz(int value) {
+  constexpr int kSampleRate = 44100;
+  constexpr float kMinFrequencyHz = 20.0f;
+  const float maxHz = std::min(kSampleRate * 0.45f, 18000.0f);
+  return kMinFrequencyHz *
+         std::pow(maxHz / kMinFrequencyHz, referenceByteToUnit(value));
+}
+
+float referenceOnePoleAlpha(float cutoffHz) {
+  constexpr int kSampleRate = 44100;
+  constexpr float kPi = 3.14159265358979323846f;
+  if (cutoffHz <= 0.0f) {
+    return 0.0f;
+  }
+
+  const float normalized = std::exp((-2.0f * kPi * cutoffHz) / kSampleRate);
+  return std::clamp(1.0f - normalized, 0.0f, 1.0f);
+}
+
+void processReferenceBandpassStereo(const AudioSample *input,
+                                    AudioSample *output, int samplecount,
+                                    int base, int width,
+                                    AudioVoice::BaseWidthState (&states)[2]) {
+  constexpr int kSampleRate = 44100;
+  const bool highpassActive = base > 0;
+  const bool lowpassActive = width < 0xFF;
+  const float maxHz = std::min(kSampleRate * 0.45f, 18000.0f);
+  const float baseHz = highpassActive ? referenceMapCutoffHz(base) : 0.0f;
+  float lowpassHz = maxHz;
+
+  if (lowpassActive) {
+    if (!highpassActive) {
+      lowpassHz = referenceMapCutoffHz(width);
+    } else {
+      lowpassHz = baseHz + referenceByteToUnit(width) * (maxHz - baseHz);
+    }
+  }
+
+  const float highpassAlpha =
+      highpassActive ? referenceOnePoleAlpha(baseHz) : 0.0f;
+  const float lowpassAlpha =
+      lowpassActive ? referenceOnePoleAlpha(lowpassHz) : 0.0f;
+
+  for (int i = 0; i < samplecount; ++i) {
+    for (int channel = 0; channel < 2; ++channel) {
+      const int index = i * 2 + channel;
+      AudioVoice::BaseWidthState &state = states[channel];
+      const float inputSample = input[index];
+      float stageOutput = inputSample;
+
+      if (highpassActive) {
+        state.highpassLow_ +=
+            highpassAlpha * (inputSample - state.highpassLow_);
+        stageOutput = inputSample - state.highpassLow_;
+      } else {
+        state.highpassLow_ = inputSample;
+      }
+
+      if (lowpassActive) {
+        state.lowpassOut_ += lowpassAlpha * (stageOutput - state.lowpassOut_);
+        stageOutput = state.lowpassOut_;
+      } else {
+        state.lowpassOut_ = stageOutput;
+      }
+
+      output[index] = stageOutput;
+    }
+  }
+}
+
+float referenceLookupFilterG(float normalized) {
+  const float position =
+      std::clamp(normalized, 0.0f, 1.0f) *
+      static_cast<float>(AudioVoiceFilterGLUT::kFilterGLUTSize);
+  const size_t index = std::min(static_cast<size_t>(position),
+                                AudioVoiceFilterGLUT::kFilterGLUTSize - 1);
+  const float fraction = position - static_cast<float>(index);
+  return AudioVoiceFilterGLUT::kFilterGValues[index] +
+         (AudioVoiceFilterGLUT::kFilterGValues[index + 1] -
+          AudioVoiceFilterGLUT::kFilterGValues[index]) *
+             fraction;
+}
+
+void processReferenceStandardFilterStereo(
+    const AudioSample *input, AudioSample *output, int samplecount, int cutoff,
+    int resonance, int envAmountValue,
+    const AudioVoice::FilterMorphState &morph, VoiceADSR &envelope,
+    AudioVoice::StandardFilterState (&states)[2]) {
+  const float normalizedResonance = referenceByteToUnit(resonance);
+  const float q = 0.707f + (normalizedResonance * normalizedResonance) * 15.0f;
+  const float k = 1.0f / q;
+  const float baseCutoff = referenceByteToUnit(cutoff);
+  const float inputWeight = morph.inputWeight_;
+  const float bandpassWeight =
+      morph.bandpassBaseWeight_ - morph.highpassFeedbackWeight_ * k;
+  const float lowpassWeight = morph.lowpassWeight_;
+  const float envAmount = std::clamp(envAmountValue, -64, 64) / 64.0f;
+
+  int processedSamples = 0;
+  while (processedSamples < samplecount) {
+    const VoiceADSR::LinearSegment envelopeSegment =
+        envelope.AdvanceBlock(samplecount - processedSamples);
+    if (envelopeSegment.samples <= 0) {
+      break;
+    }
+
+    float envValue = envelopeSegment.firstValue;
+    const int segmentEnd = processedSamples + envelopeSegment.samples;
+    for (; processedSamples < segmentEnd; ++processedSamples) {
+      const float normalizedCutoff =
+          std::clamp(baseCutoff + envAmount * envValue, 0.0f, 1.0f);
+      const float g = referenceLookupFilterG(normalizedCutoff);
+      const float a1 = 1.0f / (1.0f + g * (g + k));
+      const float a2 = g * a1;
+      const float a3 = g * a2;
+
+      for (int channel = 0; channel < 2; ++channel) {
+        const int index = processedSamples * 2 + channel;
+        AudioVoice::StandardFilterState &state = states[channel];
+        const float inputSample = input[index];
+        const float v3 = inputSample - state.ic2eq_;
+        const float v1 = a1 * state.ic1eq_ + a2 * v3;
+        const float v2 = state.ic2eq_ + a2 * state.ic1eq_ + a3 * v3;
+        state.ic1eq_ = 2.0f * v1 - state.ic1eq_;
+        state.ic2eq_ = 2.0f * v2 - state.ic2eq_;
+
+        output[index] = inputWeight * inputSample + bandpassWeight * v1 +
+                        lowpassWeight * v2;
+      }
+      envValue += envelopeSegment.step;
+    }
+  }
 }
 
 AudioSample expectedOverdriveSample(AudioSample sample, int drive) {
@@ -247,7 +449,7 @@ AudioSample expectedOverdriveSample(AudioSample sample, int drive) {
   shaped = std::min(shaped, kAudioSampleMax);
 
   for (int i = 0; i < kStageCount; ++i) {
-    shaped = (2.0f * shaped) - (shaped * shaped);
+    shaped *= 2.0f - shaped;
   }
 
   shaped = std::min(shaped, kAudioSampleMax);
@@ -373,6 +575,565 @@ TEST_CASE("AudioVoice open-path stays close to source audio after startup") {
   }
 }
 
+TEST_CASE("Only modern audio instruments use shared AudioVoice features") {
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_NONE));
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_SAMPLE));
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_MIDI));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_SAMPLE_SOURCE));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_SID));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_FM6));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_STARLOOM));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_PICO_SWARM));
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_LAST));
+}
+
+TEST_CASE("AudioVoice pitch commands compose without source command handling") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0x000C));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchFineTune,
+                               0x0040));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandArpeggiator,
+                               0x3000));
+
+  std::array<AudioSample, 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 1, true));
+
+  CHECK(instrument.PitchMultiplier() ==
+        doctest::Approx(std::pow(2.0f, 15.5f / 12.0f)));
+  CHECK(instrument.ProcessCommandCount() == 0);
+}
+
+TEST_CASE("AudioVoice reuses a pitch updater when its command is retargeted") {
+  SyncMaster::GetInstance()->SetTempo(120);
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0x040C));
+  REQUIRE(voice.pitchCommand_.contributors_.size() == 1);
+
+  const int sliceSamples =
+      static_cast<int>(SyncMaster::GetInstance()->GetTickSampleCount());
+  std::array<AudioSample, 2000> buffer{};
+  REQUIRE(voice.Render(buffer.data(), sliceSamples, false));
+  const float ascendingPitch = instrument.PitchMultiplier();
+  CHECK(ascendingPitch > 1.0f);
+
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0x04F4));
+  CHECK(voice.pitchCommand_.contributors_.size() == 1);
+  REQUIRE(voice.Render(buffer.data(), sliceSamples, false));
+  CHECK(instrument.PitchMultiplier() < ascendingPitch);
+}
+
+TEST_CASE("AudioVoice recomputes pitch from authoritative contributors") {
+  SyncMaster::GetInstance()->SetTempo(120);
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  REQUIRE(voice.StartInstrument(&instrument, 64, false));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0xFF0C));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0xFF02));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchFineTune,
+                               0xFF40));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandArpeggiator,
+                               0x7000));
+
+  float maximumError = 0.0f;
+  for (uint16_t update = 0; update < 10000; ++update) {
+    voice.advancePitchRamps(1.0f / 48.0f);
+    voice.advancePitchTick();
+    voice.applyPitchMultiplier();
+
+    const float expected = voice.pitchCommand_.pitchSlide_.current_ *
+                           voice.pitchCommand_.legato_.current_ *
+                           voice.pitchCommand_.fineTune_.current_ *
+                           voice.pitchCommand_.arpeggiator_.current_;
+    maximumError =
+        std::max(maximumError,
+                 std::abs(voice.pitchCommand_.currentMultiplier_ - expected));
+  }
+
+  CHECK(maximumError < 1.0e-6f);
+}
+
+TEST_CASE("AudioVoice rejects pitch contributors beyond registry capacity") {
+  AudioVoice voice(0);
+  std::array<StubPitchUpdater, AudioVoice::PitchUpdaterCapacity + 1> updaters{};
+
+  for (uint8_t index = 0; index < AudioVoice::PitchUpdaterCapacity; ++index) {
+    REQUIRE(voice.registerPitchUpdater(updaters[index]));
+    CHECK(updaters[index].registered_);
+  }
+
+  REQUIRE(voice.pitchCommand_.contributors_.full());
+  CHECK_FALSE(voice.registerPitchUpdater(updaters.back()));
+  CHECK_FALSE(updaters.back().registered_);
+  CHECK(voice.pitchCommand_.contributors_.size() ==
+        AudioVoice::PitchUpdaterCapacity);
+}
+
+TEST_CASE("AudioVoice divides a sequencer slice into eight pitch updates") {
+  SyncMaster::GetInstance()->SetTempo(138);
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0xFF0C));
+  CHECK(voice.pitchCommand_.pitchSlide_.stepsRemaining_ ==
+        doctest::Approx(AudioVoice::commandSpeedDurationSteps(255.0f)));
+  instrument.ClearPitchRenderHistory();
+
+  constexpr int renderSamples = 799;
+  std::array<AudioSample, renderSamples * 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), renderSamples, false));
+
+  REQUIRE(instrument.RenderCallCount() ==
+          AudioVoice::SourceCommandSubdivisionsPerSlice);
+  int renderedSamples = 0;
+  for (int call = 0; call < instrument.RenderCallCount(); ++call) {
+    CHECK(instrument.RenderSize(call) >= 99);
+    CHECK(instrument.RenderSize(call) <= 100);
+    renderedSamples += instrument.RenderSize(call);
+  }
+  CHECK(renderedSamples == renderSamples);
+  for (int call = 1; call < instrument.RenderCallCount(); ++call) {
+    CHECK(instrument.RenderPitch(call - 1) < instrument.RenderPitch(call));
+  }
+  const float expectedStepsRemaining =
+      AudioVoice::commandSpeedDurationSteps(255.0f) -
+      renderSamples / SyncMaster::GetInstance()->GetStepSampleCount();
+  CHECK(voice.pitchCommand_.pitchSlide_.stepsRemaining_ ==
+        doctest::Approx(expectedStepsRemaining));
+}
+
+TEST_CASE("AudioVoice source subdivisions follow tempo") {
+  SyncMaster::GetInstance()->SetTempo(60);
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0xFF0C));
+  instrument.ClearPitchRenderHistory();
+
+  constexpr int slowSliceSamples = 1838;
+  std::array<AudioSample, slowSliceSamples * 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), slowSliceSamples, false));
+  REQUIRE(instrument.RenderCallCount() ==
+          AudioVoice::SourceCommandSubdivisionsPerSlice);
+  CHECK(instrument.RenderSize(0) >= 229);
+  CHECK(instrument.RenderSize(0) <= 230);
+
+  SyncMaster::GetInstance()->SetTempo(300);
+  instrument.ClearPitchRenderHistory();
+  constexpr int fastSliceSamples = 368;
+  REQUIRE(voice.Render(buffer.data(), fastSliceSamples, false));
+  REQUIRE(instrument.RenderCallCount() ==
+          AudioVoice::SourceCommandSubdivisionsPerSlice);
+  for (int call = 0; call < instrument.RenderCallCount(); ++call) {
+    CHECK(instrument.RenderSize(call) == 46);
+  }
+}
+
+TEST_CASE("AudioVoice reaches a pitch target between subdivision boundaries") {
+  SyncMaster::GetInstance()->SetTempo(120);
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  REQUIRE(voice.StartInstrument(&instrument, 48, false));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x01A5));
+  instrument.ClearPitchRenderHistory();
+
+  constexpr int sliceSamples = 918;
+  std::array<AudioSample, sliceSamples * 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), sliceSamples, false));
+  REQUIRE(voice.pitchCommand_.legato_.active_);
+
+  const int completionSamples = static_cast<int>(
+      std::ceil(voice.pitchCommand_.legato_.stepsRemaining_ *
+                SyncMaster::GetInstance()->GetStepSampleCount()));
+  for (uint8_t subdivision = 1;
+       subdivision < AudioVoice::SourceCommandSubdivisionsPerSlice;
+       ++subdivision) {
+    CHECK(completionSamples !=
+          sliceSamples * subdivision /
+              AudioVoice::SourceCommandSubdivisionsPerSlice);
+  }
+
+  instrument.ClearPitchRenderHistory();
+  REQUIRE(voice.Render(buffer.data(), sliceSamples, false));
+  CHECK_FALSE(voice.pitchCommand_.legato_.active_);
+
+  int targetCall = -1;
+  int samplesBeforeTarget = 0;
+  for (int call = 0; call < instrument.RenderCallCount(); ++call) {
+    if (std::abs(instrument.RenderPitch(call) - 1.0f) < 1.0e-6f) {
+      targetCall = call;
+      break;
+    }
+    samplesBeforeTarget += instrument.RenderSize(call);
+  }
+  REQUIRE(targetCall > 0);
+  CHECK(samplesBeforeTarget == completionSamples);
+}
+
+TEST_CASE("AudioVoice preserves audio before a later source chunk finishes") {
+  StubInstrument finishingInstrument;
+  StubInstrument silenceReferenceInstrument;
+  finishingInstrument.SetSignal(0.5f, 0.5f);
+  silenceReferenceInstrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice finishingVoice(0);
+  AudioVoice silenceReferenceVoice(1);
+  REQUIRE(finishingVoice.StartInstrument(&finishingInstrument, 48, true));
+  REQUIRE(silenceReferenceVoice.StartInstrument(&silenceReferenceInstrument, 48,
+                                                true));
+  REQUIRE(finishingVoice.ProcessCommand(
+      TrackerCommand::InstrumentCommandPitchSlide, 0x040C));
+  REQUIRE(silenceReferenceVoice.ProcessCommand(
+      TrackerCommand::InstrumentCommandPitchSlide, 0x040C));
+  finishingInstrument.ClearPitchRenderHistory();
+  silenceReferenceInstrument.ClearPitchRenderHistory();
+  finishingInstrument.FailRenderCall(1);
+  silenceReferenceInstrument.SilenceFromRenderCall(1);
+
+  constexpr uint16_t renderSamples = 799;
+  std::array<AudioSample, renderSamples * 2> buffer{};
+  std::array<AudioSample, renderSamples * 2> silenceReference{};
+  buffer.fill(0.25f);
+  silenceReference.fill(0.25f);
+
+  REQUIRE(finishingVoice.Render(buffer.data(), renderSamples, false));
+  REQUIRE(silenceReferenceVoice.Render(silenceReference.data(), renderSamples,
+                                       false));
+  REQUIRE(finishingInstrument.RenderCallCount() == 2);
+  REQUIRE(silenceReferenceInstrument.RenderCallCount() ==
+          AudioVoice::SourceCommandSubdivisionsPerSlice);
+  CHECK(finishingVoice.GetInstrument() == &finishingInstrument);
+  CHECK(silenceReferenceVoice.GetInstrument() == &silenceReferenceInstrument);
+  checkBitExact(buffer, silenceReference);
+  CHECK(sumAbs(buffer) > 0.0f);
+
+  CHECK_FALSE(finishingVoice.Render(buffer.data(), renderSamples, false));
+  CHECK(finishingVoice.GetInstrument() == nullptr);
+}
+
+TEST_CASE("AudioVoice renders an unmodulated source in one call") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  instrument.ClearPitchRenderHistory();
+
+  std::array<AudioSample, 500> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 250, false));
+
+  REQUIRE(instrument.RenderCallCount() == 1);
+  CHECK(instrument.RenderSize(0) == 250);
+  CHECK(instrument.PitchSetCount() == 0);
+}
+
+TEST_CASE("AudioVoice does not reapply an unchanged source pitch") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  instrument.ClearPitchRenderHistory();
+
+  std::array<AudioSample, 8> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 4, false));
+  REQUIRE(voice.Render(buffer.data(), 4, false));
+  CHECK(instrument.PitchSetCount() == 0);
+}
+
+TEST_CASE("AudioVoice LEG derives its interval from tied notes") {
+  SyncMaster::GetInstance()->SetTempo(120);
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  REQUIRE(voice.StartInstrument(&instrument, 64, false));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x10A5));
+
+  CHECK(voice.pitchCommand_.legato_.current_ ==
+        doctest::Approx(std::pow(2.0f, -4.0f / 12.0f)));
+  CHECK(voice.pitchCommand_.legato_.target_ == doctest::Approx(1.0f));
+  CHECK(voice.pitchCommand_.legato_.stepsRemaining_ ==
+        doctest::Approx(AudioVoice::commandSpeedDurationSteps(16.0f)));
+
+  std::array<AudioSample, 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 1, false));
+  CHECK(voice.pitchCommand_.legato_.current_ > std::pow(2.0f, -4.0f / 12.0f));
+  REQUIRE(voice.Render(buffer.data(), 1, false));
+  CHECK(instrument.PitchMultiplier() > std::pow(2.0f, -4.0f / 12.0f));
+  CHECK(instrument.PitchMultiplier() < 1.0f);
+}
+
+TEST_CASE("AudioVoice LEG ignores its low byte") {
+  StubInstrument firstInstrument;
+  StubInstrument secondInstrument;
+  AudioVoice firstVoice(0);
+  AudioVoice secondVoice(1);
+
+  REQUIRE(firstVoice.StartInstrument(&firstInstrument, 60, true));
+  REQUIRE(firstVoice.StartInstrument(&firstInstrument, 67, false));
+  REQUIRE(secondVoice.StartInstrument(&secondInstrument, 60, true));
+  REQUIRE(secondVoice.StartInstrument(&secondInstrument, 67, false));
+
+  REQUIRE(firstVoice.ProcessCommand(TrackerCommand::InstrumentCommandLegato,
+                                    0x1000));
+  REQUIRE(secondVoice.ProcessCommand(TrackerCommand::InstrumentCommandLegato,
+                                     0x10FF));
+
+  CHECK(firstVoice.pitchCommand_.legato_.current_ ==
+        doctest::Approx(secondVoice.pitchCommand_.legato_.current_));
+  CHECK(firstVoice.pitchCommand_.legato_.target_ ==
+        doctest::Approx(secondVoice.pitchCommand_.legato_.target_));
+  CHECK(firstVoice.pitchCommand_.legato_.stepsRemaining_ ==
+        doctest::Approx(secondVoice.pitchCommand_.legato_.stepsRemaining_));
+}
+
+TEST_CASE("AudioVoice LEG retargets from the currently sounding pitch") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+  AudioVoice voice(0);
+
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  REQUIRE(voice.StartInstrument(&instrument, 64, false));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x1000));
+
+  const float halfDuration =
+      AudioVoice::commandSpeedDurationSteps(16.0f) * 0.5f;
+  voice.advancePitchRamps(halfDuration);
+  REQUIRE(voice.pitchCommand_.legato_.active_);
+  const float precedingLegatoRatio = voice.pitchCommand_.legato_.current_;
+
+  REQUIRE(voice.StartInstrument(&instrument, 67, false));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x1000));
+
+  const float previousToNewNoteRatio = std::pow(2.0f, -3.0f / 12.0f);
+  CHECK(voice.pitchCommand_.legato_.current_ ==
+        doctest::Approx(precedingLegatoRatio * previousToNewNoteRatio));
+  CHECK(voice.pitchCommand_.legato_.current_ !=
+        doctest::Approx(previousToNewNoteRatio));
+  CHECK(voice.pitchCommand_.legato_.stepsRemaining_ ==
+        doctest::Approx(AudioVoice::commandSpeedDurationSteps(16.0f)));
+}
+
+TEST_CASE("AudioVoice tied note without LEG cancels an unfinished LEG") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+  AudioVoice voice(0);
+
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                               0x000C));
+  REQUIRE(voice.StartInstrument(&instrument, 64, false));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x1000));
+
+  voice.advancePitchRamps(AudioVoice::commandSpeedDurationSteps(16.0f) * 0.5f);
+  REQUIRE(voice.pitchCommand_.legato_.active_);
+
+  REQUIRE(voice.StartInstrument(&instrument, 67, false));
+  std::array<AudioSample, 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 1, false));
+
+  CHECK(!voice.legatoNotePending_);
+  CHECK(!voice.pitchCommand_.legato_.active_);
+  CHECK(voice.pitchCommand_.legato_.current_ == doctest::Approx(1.0f));
+  CHECK(voice.pitchCommand_.legato_.target_ == doctest::Approx(1.0f));
+  CHECK(voice.pitchCommand_.legato_.stepsRemaining_ == doctest::Approx(0.0f));
+  CHECK(voice.pitchCommand_.pitchSlide_.current_ == doctest::Approx(2.0f));
+  CHECK(instrument.PitchMultiplier() == doctest::Approx(2.0f));
+}
+
+TEST_CASE("AudioVoice LEG does nothing without a current tied note") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+  AudioVoice voice(0);
+
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x10FF));
+  CHECK(voice.pitchCommand_.contributors_.empty());
+
+  REQUIRE(voice.StartInstrument(&instrument, 64, false));
+  std::array<AudioSample, 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 1, false));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato, 0x10FF));
+  CHECK(voice.pitchCommand_.contributors_.empty());
+}
+
+TEST_CASE("AudioVoice PSL speed unit is one sequencer slice") {
+  constexpr float stepsPerUpdate = 0.02f;
+
+  auto countUpdates = [stepsPerUpdate](uint16_t commandValue) {
+    StubInstrument instrument;
+    instrument.SetSignal(0.5f, 0.5f);
+    AudioVoice voice(0);
+    if (!voice.StartInstrument(&instrument, 60, true) ||
+        !voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchSlide,
+                              commandValue)) {
+      return -1;
+    }
+
+    int updateCount = 0;
+    while (voice.pitchCommand_.pitchSlide_.active_ && updateCount < 4000) {
+      voice.advancePitchRamps(stepsPerUpdate);
+      ++updateCount;
+    }
+    return voice.pitchCommand_.pitchSlide_.active_ ? -1 : updateCount;
+  };
+
+  const int octaveUpUpdates = countUpdates(0xFF0C);
+  const int twoOctavesUpUpdates = countUpdates(0xFF18);
+  const int octaveDownUpdates = countUpdates(0xFFF4);
+
+  REQUIRE(octaveUpUpdates > 0);
+  CHECK(twoOctavesUpUpdates == octaveUpUpdates);
+  CHECK(octaveDownUpdates == octaveUpUpdates);
+  const float elapsedSteps = octaveUpUpdates * stepsPerUpdate;
+  const float expectedSteps = AudioVoice::commandSpeedDurationSteps(255.0f);
+  CHECK(elapsedSteps >= expectedSteps);
+  CHECK(elapsedSteps < expectedSteps + stepsPerUpdate);
+}
+
+TEST_CASE("AudioVoice LEG shares the PSL duration range") {
+  constexpr float stepsPerUpdate = 0.02f;
+
+  auto countUpdates = [stepsPerUpdate](uint8_t destinationNote,
+                                       uint8_t unusedLowByte) {
+    StubInstrument instrument;
+    instrument.SetSignal(0.5f, 0.5f);
+    AudioVoice voice(0);
+    if (!voice.StartInstrument(&instrument, 60, true) ||
+        !voice.StartInstrument(&instrument, destinationNote, false) ||
+        !voice.ProcessCommand(TrackerCommand::InstrumentCommandLegato,
+                              static_cast<uint16_t>(0xFF00 | unusedLowByte))) {
+      return -1;
+    }
+
+    int updateCount = 0;
+    while (voice.pitchCommand_.legato_.active_ && updateCount < 4000) {
+      voice.advancePitchRamps(stepsPerUpdate);
+      ++updateCount;
+    }
+    return voice.pitchCommand_.legato_.active_ ? -1 : updateCount;
+  };
+
+  const int octaveUpUpdates = countUpdates(72, 0x0C);
+  const int twoOctavesUpUpdates = countUpdates(84, 0x18);
+  const int octaveDownUpdates = countUpdates(48, 0xF4);
+
+  REQUIRE(octaveUpUpdates > 0);
+  CHECK(twoOctavesUpUpdates == octaveUpUpdates);
+  CHECK(octaveDownUpdates == octaveUpUpdates);
+  const float elapsedSteps = octaveUpUpdates * stepsPerUpdate;
+  const float expectedSteps = AudioVoice::commandSpeedDurationSteps(255.0f);
+  CHECK(elapsedSteps >= expectedSteps);
+  CHECK(elapsedSteps < expectedSteps + stepsPerUpdate);
+}
+
+TEST_CASE("AudioVoice PFT shares the PSL duration range") {
+  constexpr float stepsPerUpdate = 0.02f;
+
+  auto countUpdates = [stepsPerUpdate](uint16_t commandValue) {
+    StubInstrument instrument;
+    instrument.SetSignal(0.5f, 0.5f);
+    AudioVoice voice(0);
+    if (!voice.StartInstrument(&instrument, 60, true) ||
+        !voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchFineTune,
+                              commandValue)) {
+      return -1;
+    }
+
+    int updateCount = 0;
+    while (voice.pitchCommand_.fineTune_.active_ && updateCount < 4000) {
+      voice.advancePitchRamps(stepsPerUpdate);
+      ++updateCount;
+    }
+    return voice.pitchCommand_.fineTune_.active_ ? -1 : updateCount;
+  };
+
+  const int semitoneUpUpdates = countUpdates(0xFF80);
+  const int halfSemitoneUpUpdates = countUpdates(0xFF40);
+  const int semitoneDownUpdates = countUpdates(0xFF81);
+
+  REQUIRE(semitoneUpUpdates > 0);
+  CHECK(halfSemitoneUpUpdates == semitoneUpUpdates);
+  CHECK(semitoneDownUpdates == semitoneUpUpdates);
+  const float elapsedSteps = semitoneUpUpdates * stepsPerUpdate;
+  const float expectedSteps = AudioVoice::commandSpeedDurationSteps(255.0f);
+  CHECK(elapsedSteps >= expectedSteps);
+  CHECK(elapsedSteps < expectedSteps + stepsPerUpdate);
+}
+
+TEST_CASE("AudioVoice pitch state resets on a clean note") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPitchFineTune,
+                               0x0040));
+  std::array<AudioSample, 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 1, false));
+  CHECK(instrument.PitchMultiplier() > 1.0f);
+
+  REQUIRE(voice.StartInstrument(&instrument, 48, true));
+  CHECK(instrument.PitchMultiplier() == doctest::Approx(1.0f));
+  CHECK_FALSE(voice.pitchCommand_.fineTune_.active_);
+  CHECK(voice.pitchCommand_.fineTune_.current_ == doctest::Approx(1.0f));
+}
+
+TEST_CASE("AudioVoice leaves RTG handling to its attached source") {
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+  CHECK_FALSE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandRetrigger, 0x0001));
+
+  std::array<AudioSample, 2> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 0, true));
+  REQUIRE(voice.Render(buffer.data(), 0, true));
+  CHECK(instrument.StartCount() == 1);
+  CHECK(instrument.ProcessCommandCount() == 0);
+}
+
 TEST_CASE("AudioVoice volume command applies per-voice amp override") {
   SyncMaster::GetInstance()->SetTempo(120);
 
@@ -433,6 +1194,114 @@ TEST_CASE("AudioVoice volume ramp advances only between render buffers") {
   CHECK(afterFirstRender > 0.0f);
   CHECK(voice.ampCommand_.current_ < afterFirstRender);
   CHECK(sumAbs(secondBuffer) < sumAbs(firstBuffer));
+}
+
+TEST_CASE("AudioVoice value ramps use sequencer-slice speed units") {
+  SyncMaster::GetInstance()->SetTempo(120);
+
+  CHECK(AudioVoice::commandSpeedDurationSteps(1.0f) ==
+        doctest::Approx(1.0f / SyncMaster::SlicesPerStep));
+  CHECK(AudioVoice::commandSpeedDurationSteps(SyncMaster::SlicesPerStep) ==
+        doctest::Approx(1.0f));
+
+  StubInstrument instrument;
+  instrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandVolume, 0x0100));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPan, 0x0100));
+  REQUIRE(
+      voice.ProcessCommand(TrackerCommand::InstrumentCommandFilterCut, 0x0100));
+  REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandFilterResonance,
+                               0x01FF));
+
+  const float halfSliceSteps =
+      0.5f / static_cast<float>(SyncMaster::SlicesPerStep);
+  auto checkOneSliceRamp =
+      [&voice, halfSliceSteps](AudioVoice::CommandValueState &state) {
+        REQUIRE(state.rampActive_);
+        voice.advanceCommandRamp(state, halfSliceSteps);
+        CHECK(state.rampActive_);
+        CHECK(state.current_ != doctest::Approx(state.target_));
+        voice.advanceCommandRamp(state, halfSliceSteps);
+        CHECK(!state.rampActive_);
+        CHECK(state.current_ == doctest::Approx(state.target_));
+      };
+
+  checkOneSliceRamp(voice.ampCommand_);
+  checkOneSliceRamp(voice.panCommand_);
+  checkOneSliceRamp(voice.filterCutoffCommand_);
+  checkOneSliceRamp(voice.filterResonanceCommand_);
+}
+
+TEST_CASE("AudioVoice value ramps retain slice duration when tempo changes") {
+  StubInstrument beforeTempoChangeInstrument;
+  StubInstrument afterTempoChangeInstrument;
+  beforeTempoChangeInstrument.SetSignal(0.5f, 0.5f);
+  afterTempoChangeInstrument.SetSignal(0.5f, 0.5f);
+
+  AudioVoice beforeTempoChange(0);
+  AudioVoice afterTempoChange(1);
+  REQUIRE(beforeTempoChange.StartInstrument(&beforeTempoChangeInstrument, 60,
+                                            true));
+  REQUIRE(
+      afterTempoChange.StartInstrument(&afterTempoChangeInstrument, 60, true));
+
+  auto startValueRamps = [](AudioVoice &voice) {
+    REQUIRE(
+        voice.ProcessCommand(TrackerCommand::InstrumentCommandVolume, 0x0600));
+    REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandPan, 0x0600));
+    REQUIRE(voice.ProcessCommand(TrackerCommand::InstrumentCommandFilterCut,
+                                 0x0600));
+    REQUIRE(voice.ProcessCommand(
+        TrackerCommand::InstrumentCommandFilterResonance, 0x06FF));
+  };
+
+  SyncMaster::GetInstance()->SetTempo(210);
+  startValueRamps(beforeTempoChange);
+  SyncMaster::GetInstance()->SetTempo(315);
+  startValueRamps(afterTempoChange);
+
+  const int sliceSamples =
+      static_cast<int>(SyncMaster::GetInstance()->GetTickSampleCount());
+  REQUIRE(sliceSamples == 350);
+  static std::array<AudioSample, 700> renderBuffer{};
+
+  auto checkMatchingRamps = [&beforeTempoChange, &afterTempoChange]() {
+    CHECK(beforeTempoChange.ampCommand_.current_ ==
+          doctest::Approx(afterTempoChange.ampCommand_.current_));
+    CHECK(beforeTempoChange.panCommand_.current_ ==
+          doctest::Approx(afterTempoChange.panCommand_.current_));
+    CHECK(beforeTempoChange.filterCutoffCommand_.current_ ==
+          doctest::Approx(afterTempoChange.filterCutoffCommand_.current_));
+    CHECK(beforeTempoChange.filterResonanceCommand_.current_ ==
+          doctest::Approx(afterTempoChange.filterResonanceCommand_.current_));
+  };
+
+  for (int slice = 0; slice < SyncMaster::SlicesPerStep - 1; ++slice) {
+    REQUIRE(beforeTempoChange.Render(renderBuffer.data(), sliceSamples, false));
+    REQUIRE(afterTempoChange.Render(renderBuffer.data(), sliceSamples, false));
+    checkMatchingRamps();
+    CHECK(beforeTempoChange.ampCommand_.rampActive_);
+    CHECK(afterTempoChange.ampCommand_.rampActive_);
+  }
+
+  REQUIRE(beforeTempoChange.Render(renderBuffer.data(), sliceSamples, false));
+  REQUIRE(afterTempoChange.Render(renderBuffer.data(), sliceSamples, false));
+  checkMatchingRamps();
+  CHECK(!beforeTempoChange.ampCommand_.rampActive_);
+  CHECK(!beforeTempoChange.panCommand_.rampActive_);
+  CHECK(!beforeTempoChange.filterCutoffCommand_.rampActive_);
+  CHECK(!beforeTempoChange.filterResonanceCommand_.rampActive_);
+  CHECK(!afterTempoChange.ampCommand_.rampActive_);
+  CHECK(!afterTempoChange.panCommand_.rampActive_);
+  CHECK(!afterTempoChange.filterCutoffCommand_.rampActive_);
+  CHECK(!afterTempoChange.filterResonanceCommand_.rampActive_);
+
+  SyncMaster::GetInstance()->SetTempo(120);
 }
 
 TEST_CASE("AudioVoice pan command applies per-voice pan override") {
@@ -1045,6 +1914,20 @@ TEST_CASE("LFO settings reject invalid targets") {
   CHECK(instrument.VoiceLFOSettings()->Get(1).target_ == LFOTarget::None);
 }
 
+TEST_CASE("AudioVoice owns LFO target value ranges") {
+  int minValue = 0;
+  int maxValue = 0;
+
+  CHECK(GetLFOTargetValueRange(LFOTarget::VoiceFilterEnvAmount, minValue,
+                               maxValue));
+  CHECK(minValue == -64);
+  CHECK(maxValue == 64);
+
+  CHECK(GetLFOTargetValueRange(LFOTarget::VoiceAmp, minValue, maxValue));
+  CHECK(minValue == 0);
+  CHECK(maxValue == 0xFF);
+}
+
 TEST_CASE("LFO settings clamp enum and rate values in setters") {
   StubInstrument instrument;
 
@@ -1610,6 +2493,136 @@ TEST_CASE("AudioVoice base-width stage keeps state across renders") {
   }
 }
 
+TEST_CASE("AudioVoice cached stereo bandpass is bit-exact across blocks") {
+  StubInstrument instrument;
+  instrument.VoiceVar(FourCC::VoiceBandpassCutoff)->SetInt(96, false);
+  instrument.VoiceVar(FourCC::VoiceBandpassMix)->SetInt(32, false);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+
+  constexpr int kFrameCount = 19;
+  std::array<AudioSample, kFrameCount * 2> input{};
+  for (int i = 0; i < kFrameCount; ++i) {
+    input[i * 2] = pcmToAudioSample(-15000 + i * 1300);
+    input[i * 2 + 1] = pcmToAudioSample(12000 - i * 900);
+  }
+
+  AudioVoice::BaseWidthState referenceStates[2]{};
+  std::array<AudioSample, kFrameCount * 2> actual{};
+  std::array<AudioSample, kFrameCount * 2> expected{};
+
+  for (int block = 0; block < 2; ++block) {
+    voice.processBandpass(input.data(), actual.data(), kFrameCount,
+                          AudioBufferLayout::StereoInterleaved,
+                          AudioBufferLayout::StereoInterleaved);
+    processReferenceBandpassStereo(input.data(), expected.data(), kFrameCount,
+                                   96, 32, referenceStates);
+    checkBitExact(actual, expected);
+  }
+
+  instrument.VoiceVar(FourCC::VoiceBandpassCutoff)->SetInt(143, false);
+  instrument.VoiceVar(FourCC::VoiceBandpassMix)->SetInt(72, false);
+  voice.processBandpass(input.data(), actual.data(), kFrameCount,
+                        AudioBufferLayout::StereoInterleaved,
+                        AudioBufferLayout::StereoInterleaved);
+  processReferenceBandpassStereo(input.data(), expected.data(), kFrameCount,
+                                 143, 72, referenceStates);
+  checkBitExact(actual, expected);
+
+  for (int channel = 0; channel < 2; ++channel) {
+    CHECK(std::bit_cast<uint32_t>(voice.bandpassState_[channel].highpassLow_) ==
+          std::bit_cast<uint32_t>(referenceStates[channel].highpassLow_));
+    CHECK(std::bit_cast<uint32_t>(voice.bandpassState_[channel].lowpassOut_) ==
+          std::bit_cast<uint32_t>(referenceStates[channel].lowpassOut_));
+  }
+}
+
+TEST_CASE("AudioVoice optimized stereo standard filter is bit-exact") {
+  StubInstrument instrument;
+  instrument.VoiceVar(FourCC::VoiceFilterCutoff)->SetInt(73, false);
+  instrument.VoiceVar(FourCC::VoiceFilterResonance)->SetInt(0xB7, false);
+  instrument.VoiceVar(FourCC::VoiceFilterType)->SetInt(0x53, false);
+
+  SUBCASE("constant cutoff with a moving envelope") {
+    instrument.VoiceVar(FourCC::VoiceFilterEnvAmount)->SetInt(0, false);
+    instrument.VoiceVar(FourCC::VoiceFilterAttack)->SetInt(96, false);
+
+    AudioVoice voice(0);
+    REQUIRE(voice.StartInstrument(&instrument, 60, true));
+    voice.syncFilterType();
+
+    constexpr int kFrameCount = 41;
+    std::array<AudioSample, kFrameCount * 2> input{};
+    for (int i = 0; i < kFrameCount; ++i) {
+      input[i * 2] = pcmToAudioSample(-14000 + i * 600);
+      input[i * 2 + 1] = pcmToAudioSample(13000 - i * 500);
+    }
+    std::array<AudioSample, kFrameCount * 2> actual{};
+    std::array<AudioSample, kFrameCount * 2> expected{};
+    VoiceADSR referenceEnvelope = voice.filterEnvelope_;
+    AudioVoice::StandardFilterState referenceStates[2]{};
+
+    voice.processStandardFilter(input.data(), actual.data(), kFrameCount,
+                                AudioBufferLayout::StereoInterleaved,
+                                AudioBufferLayout::StereoInterleaved);
+    processReferenceStandardFilterStereo(
+        input.data(), expected.data(), kFrameCount, 73, 0xB7, 0,
+        voice.filterMorph_, referenceEnvelope, referenceStates);
+
+    checkBitExact(actual, expected);
+    CHECK(voice.filterEnvelope_.GetValue() == referenceEnvelope.GetValue());
+    for (int channel = 0; channel < 2; ++channel) {
+      CHECK(
+          std::bit_cast<uint32_t>(voice.standardFilterState_[channel].ic1eq_) ==
+          std::bit_cast<uint32_t>(referenceStates[channel].ic1eq_));
+      CHECK(
+          std::bit_cast<uint32_t>(voice.standardFilterState_[channel].ic2eq_) ==
+          std::bit_cast<uint32_t>(referenceStates[channel].ic2eq_));
+    }
+  }
+
+  SUBCASE("steady envelope cutoff") {
+    instrument.VoiceVar(FourCC::VoiceFilterEnvAmount)->SetInt(39, false);
+    instrument.VoiceVar(FourCC::VoiceFilterAttack)->SetInt(0, false);
+    instrument.VoiceVar(FourCC::VoiceFilterDecay)->SetInt(0, false);
+    instrument.VoiceVar(FourCC::VoiceFilterSustain)->SetInt(0x91, false);
+
+    AudioVoice voice(0);
+    REQUIRE(voice.StartInstrument(&instrument, 60, true));
+    voice.syncFilterType();
+
+    constexpr int kFrameCount = 41;
+    std::array<AudioSample, kFrameCount * 2> input{};
+    for (int i = 0; i < kFrameCount; ++i) {
+      input[i * 2] = pcmToAudioSample(11000 - i * 400);
+      input[i * 2 + 1] = pcmToAudioSample(-12000 + i * 550);
+    }
+    std::array<AudioSample, kFrameCount * 2> actual{};
+    std::array<AudioSample, kFrameCount * 2> expected{};
+    VoiceADSR referenceEnvelope = voice.filterEnvelope_;
+    AudioVoice::StandardFilterState referenceStates[2]{};
+
+    voice.processStandardFilter(input.data(), actual.data(), kFrameCount,
+                                AudioBufferLayout::StereoInterleaved,
+                                AudioBufferLayout::StereoInterleaved);
+    processReferenceStandardFilterStereo(
+        input.data(), expected.data(), kFrameCount, 73, 0xB7, 39,
+        voice.filterMorph_, referenceEnvelope, referenceStates);
+
+    checkBitExact(actual, expected);
+    CHECK(voice.filterEnvelope_.GetValue() == referenceEnvelope.GetValue());
+    for (int channel = 0; channel < 2; ++channel) {
+      CHECK(
+          std::bit_cast<uint32_t>(voice.standardFilterState_[channel].ic1eq_) ==
+          std::bit_cast<uint32_t>(referenceStates[channel].ic1eq_));
+      CHECK(
+          std::bit_cast<uint32_t>(voice.standardFilterState_[channel].ic2eq_) ==
+          std::bit_cast<uint32_t>(referenceStates[channel].ic2eq_));
+    }
+  }
+}
+
 TEST_CASE("AudioVoice standard filter lowpass output stays bounded") {
   StubInstrument instrument;
   instrument.SetSignal(pcmToAudioSample(16000), pcmToAudioSample(16000));
@@ -1677,6 +2690,29 @@ TEST_CASE("AudioVoice release envelope fades out and stops the voice") {
 
   CHECK(sawReleaseOutput);
   CHECK(stopped);
+}
+
+TEST_CASE("AudioVoice release preserves a held tail until hard stop") {
+  StubInstrument instrument;
+  instrument.SetSignal(pcmToAudioSample(12000), pcmToAudioSample(12000));
+  instrument.VoiceVar(FourCC::VoiceAmpRelease)->SetInt(0xFF, false);
+
+  AudioVoice voice(0);
+  REQUIRE(voice.StartInstrument(&instrument, 60, true));
+
+  std::array<AudioSample, 16> buffer{};
+  REQUIRE(voice.Render(buffer.data(), 8, false));
+
+  voice.ReleaseInstrument();
+  CHECK(instrument.ReleaseCount() == 1);
+  CHECK(voice.Render(buffer.data(), 8, false));
+  CHECK(sumAbs(buffer) > 0);
+  CHECK(voice.GetInstrument() == &instrument);
+
+  voice.StopInstrument();
+  CHECK(instrument.StopCount() == 1);
+  CHECK(voice.GetInstrument() == nullptr);
+  CHECK_FALSE(voice.Render(buffer.data(), 8, false));
 }
 
 TEST_CASE(

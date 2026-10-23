@@ -30,7 +30,7 @@ void UIController::Reset() {
 void UIController::UnMuteAll() {
 
   Player *player = Player::GetInstance();
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   for (int i = 0; i < channelCount; i++) {
     player->SetChannelMute(i, false);
   };
@@ -53,13 +53,13 @@ void UIController::SwitchSoloMode(int from, int to, bool soloing) {
 
   if (soloing) {
 
-    const int channelCount = viewData_->song_->GetChannelCount();
+    const int channelCount = SONG_CHANNEL_COUNT;
     for (int i = 0; i < channelCount; i++) {
       soloMask_[i] = player->IsChannelMuted(i);
       player->SetChannelMute(i, (i < from) || (i > to));
     };
   } else {
-    const int channelCount = viewData_->song_->GetChannelCount();
+    const int channelCount = SONG_CHANNEL_COUNT;
     for (int i = 0; i < channelCount; i++) {
       player->SetChannelMute(i, soloMask_[i]);
     };

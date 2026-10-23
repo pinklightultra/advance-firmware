@@ -27,7 +27,6 @@
 
 namespace {
 constexpr bool kShouldKillClicks = false;
-constexpr int kKRateSampleCount = 100;
 constexpr int kDeclickTailSamples = 32;
 constexpr int kLoopCrossfadeSamples = kDeclickTailSamples;
 constexpr int kNoSample = -1;
@@ -38,6 +37,7 @@ constexpr AudioSample kDeclickSilenceThreshold =
 const char *sampleSourcePlaybackModes[SSLM_LAST] = {
     "fwd", "rev", "loop", "rev-loop", "pingpong", "osc", "loopsync"};
 
+PICOTRACKER_FAST_CODE("sample_source_start_declick")
 inline bool startDeclickTail(sampleSourceRenderParams &rp);
 
 enum class SamplePlaybackTopology {
@@ -46,6 +46,7 @@ enum class SamplePlaybackTopology {
   Reflect,
 };
 
+PICOTRACKER_FAST_CODE("sample_source_clamp_frame")
 inline int clampFrameIndex(int frame, int firstFrame, int lastFrame) {
   if (frame < firstFrame) {
     return firstFrame;
@@ -56,6 +57,7 @@ inline int clampFrameIndex(int frame, int firstFrame, int lastFrame) {
   return frame;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_wrap_frame")
 inline int wrapFrameIndex(int frame, int firstFrame, int lastFrame) {
   const int frameCount = lastFrame - firstFrame + 1;
   if (frameCount <= 0) {
@@ -69,6 +71,7 @@ inline int wrapFrameIndex(int frame, int firstFrame, int lastFrame) {
   return firstFrame + offset;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_reflect_frame")
 inline int reflectFrameIndex(int frame, int firstFrame, int lastFrame) {
   const int span = lastFrame - firstFrame;
   if (span <= 0) {
@@ -86,6 +89,7 @@ inline int reflectFrameIndex(int frame, int firstFrame, int lastFrame) {
   return firstFrame + offset;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_resolve_frame")
 inline int resolveFrameIndex(int frame, int firstFrame, int lastFrame,
                              SamplePlaybackTopology topology) {
   switch (topology) {
@@ -100,6 +104,7 @@ inline int resolveFrameIndex(int frame, int firstFrame, int lastFrame,
   return clampFrameIndex(frame, firstFrame, lastFrame);
 }
 
+PICOTRACKER_FAST_CODE("sample_source_pcm_frame")
 inline AudioSample pcmFrameSample(const int16_t *sampleFrames, int channelCount,
                                   int frameIndex, int channelIndex) {
   return static_cast<AudioSample>(
@@ -107,6 +112,7 @@ inline AudioSample pcmFrameSample(const int16_t *sampleFrames, int channelCount,
          kAudioPcmScale;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_hermite")
 inline AudioSample hermiteInterpolate(AudioSample ym1, AudioSample y0,
                                       AudioSample y1, AudioSample y2,
                                       float fraction) {
@@ -118,6 +124,7 @@ inline AudioSample hermiteInterpolate(AudioSample ym1, AudioSample y0,
   return ((c3 * fraction + c2) * fraction + c1) * fraction + c0;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_playback_topology")
 inline SamplePlaybackTopology
 getPlaybackTopology(SampleSourceInstrumentLoopMode loopMode) {
   switch (loopMode) {
@@ -137,10 +144,12 @@ getPlaybackTopology(SampleSourceInstrumentLoopMode loopMode) {
   return SamplePlaybackTopology::Clamp;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_uses_crossfade")
 inline bool usesLoopCrossfade(SampleSourceInstrumentLoopMode loopMode) {
   return loopMode == SSLM_LOOP || loopMode == SSLM_REVERSE_LOOP;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_uses_loop_point")
 inline bool playbackModeUsesLoopPoint(SampleSourceInstrumentLoopMode mode) {
   switch (mode) {
   case SSLM_LOOP:
@@ -158,6 +167,7 @@ inline bool playbackModeUsesLoopPoint(SampleSourceInstrumentLoopMode mode) {
   return false;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_reverse_range")
 inline bool isReverseOneShotInRange(const sampleSourceRenderParams &rp,
                                     float position) {
   if (rp.rendLoopEnd_ > rp.rendFirst_) {
@@ -169,6 +179,7 @@ inline bool isReverseOneShotInRange(const sampleSourceRenderParams &rp,
          position >= static_cast<float>(rp.rendLoopEnd_);
 }
 
+PICOTRACKER_FAST_CODE("sample_source_normalize_wrapped")
 inline void normalizeWrappedPosition(int loopStart, int loopEnd,
                                      float &position, bool reverse) {
   const bool forwardRange = loopStart <= loopEnd;
@@ -237,6 +248,7 @@ inline void normalizeWrappedPosition(int loopStart, int loopEnd,
   }
 }
 
+PICOTRACKER_FAST_CODE("sample_source_normalize_ping_pong")
 inline void normalizePingPongPosition(int loopStart, int loopEnd,
                                       float &position, bool &reverse) {
   float firstFrame = static_cast<float>(loopStart);
@@ -273,6 +285,7 @@ inline void normalizePingPongPosition(int loopStart, int loopEnd,
   }
 }
 
+PICOTRACKER_FAST_CODE("sample_source_normalize_playback")
 inline bool normalizePlaybackPosition(sampleSourceRenderParams &rp,
                                       SampleSourceInstrumentLoopMode loopMode,
                                       float &position, bool &reverse) {
@@ -319,6 +332,7 @@ inline bool normalizePlaybackPosition(sampleSourceRenderParams &rp,
   return false;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_interpolation_bounds")
 inline bool getInterpolationBounds(const sampleSourceRenderParams &rp,
                                    SampleSourceInstrumentLoopMode loopMode,
                                    int sampleFrameCount, float position,
@@ -358,6 +372,7 @@ inline bool getInterpolationBounds(const sampleSourceRenderParams &rp,
   return true;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_crossfade_target")
 inline bool getLoopCrossfadeTarget(const sampleSourceRenderParams &rp,
                                    SampleSourceInstrumentLoopMode loopMode,
                                    float position, bool reverse, float speed,
@@ -421,6 +436,7 @@ inline bool getLoopCrossfadeTarget(const sampleSourceRenderParams &rp,
   return true;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_interpolate_channel")
 inline AudioSample interpolateChannelHermite(const int16_t *sampleFrames,
                                              int channelCount, int baseFrame,
                                              float fraction, int firstFrame,
@@ -459,6 +475,7 @@ inline AudioSample interpolateChannelHermite(const int16_t *sampleFrames,
   return hermiteInterpolate(ym1, y0, y1, y2, fraction);
 }
 
+PICOTRACKER_FAST_CODE("sample_source_wrap_oscillator_frame")
 inline int wrapOscillatorFrameIndex(int frame, int frameCount) {
   if (frame >= frameCount) {
     frame -= frameCount;
@@ -477,6 +494,7 @@ inline int wrapOscillatorFrameIndex(int frame, int frameCount) {
   return frame;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_oscillator_frame")
 inline AudioSample oscillatorFrameSample(const int16_t *sampleFrames,
                                          int channelCount, int frameIndex,
                                          int channelIndex) {
@@ -485,6 +503,7 @@ inline AudioSample oscillatorFrameSample(const int16_t *sampleFrames,
          kAudioPcmScale;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_interpolate_oscillator")
 inline AudioSample interpolateOscillatorChannelHermite(
     const int16_t *sampleFrames, int channelCount, int baseFrame,
     float fraction, int frameCount, int channelIndex) {
@@ -521,6 +540,7 @@ inline AudioSample interpolateOscillatorChannelHermite(
   return hermiteInterpolate(ym1, y0, y1, y2, fraction);
 }
 
+PICOTRACKER_FAST_CODE("sample_source_normalize_oscillator")
 inline void normalizeOscillatorPhase(float &phase, float frameCount) {
   if (frameCount <= 0.0f) {
     phase = 0.0f;
@@ -539,99 +559,6 @@ inline void normalizeOscillatorPhase(float &phase, float frameCount) {
   }
 }
 
-inline bool advanceLinearRamp(float &current, float target, float step) {
-  if (step == 0.0f) {
-    current = target;
-    return false;
-  }
-
-  if (current < target) {
-    current += step;
-    if (current >= target) {
-      current = target;
-      return false;
-    }
-    return true;
-  }
-
-  if (current > target) {
-    current -= step;
-    if (current <= target) {
-      current = target;
-      return false;
-    }
-    return true;
-  }
-
-  return false;
-}
-
-inline bool advanceLogRamp(float &current, float target, float multiplier) {
-  if (multiplier == 0.0f) {
-    current = target;
-    return false;
-  }
-
-  if (multiplier > 1.0f) {
-    current *= multiplier;
-    if (current >= target) {
-      current = target;
-      return false;
-    }
-    return true;
-  }
-
-  if (current > target) {
-    current *= multiplier;
-    if (current <= target) {
-      current = target;
-      return false;
-    }
-    return true;
-  }
-
-  return false;
-}
-
-inline void setArpData(sampleSourceRenderParams &rp, unsigned int value) {
-  int arp = value;
-  int position = 0;
-  rp.arp_[0] = 0;
-  for (int i = 0; i < 4; ++i) {
-    rp.arp_[4 - i] = (arp & 0xF);
-    if ((rp.arp_[4 - i] != 0) && (position == 0)) {
-      position = 5 - i;
-    }
-    arp = (arp & 0xFFF0) >> 4;
-  }
-  rp.arpLength_ = static_cast<uint8_t>(position);
-  rp.arpPosition_ = 0;
-  rp.arpCurrent_ = 1.0f;
-}
-
-inline void resetPitchUpdaters(sampleSourceRenderParams &rp) {
-  rp.speedRampActive_ = false;
-  rp.speedRampCurrent_ = 1.0f;
-  rp.speedRampTarget_ = 1.0f;
-  rp.speedRampStep_ = 0.0f;
-
-  rp.legatoActive_ = false;
-  rp.legatoCurrent_ = 1.0f;
-  rp.legatoTarget_ = 1.0f;
-  rp.legatoMultiplier_ = 0.0f;
-
-  rp.pfinActive_ = false;
-  rp.pfinCurrent_ = 1.0f;
-  rp.pfinTarget_ = 1.0f;
-  rp.pfinMultiplier_ = 0.0f;
-
-  rp.arpActive_ = false;
-  rp.arpLength_ = 0;
-  rp.arpPosition_ = 0;
-  rp.arpCurrent_ = 1.0f;
-  memset(rp.arp_, 0, sizeof(rp.arp_));
-}
-
 inline void resetDeclickState(sampleSourceRenderParams &rp) {
   rp.finished_ = false;
   rp.sourceEnded_ = false;
@@ -642,11 +569,13 @@ inline void resetDeclickState(sampleSourceRenderParams &rp) {
   rp.lastOutputRight_ = 0.0f;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_should_declick")
 inline bool shouldStartDeclickTail(const sampleSourceRenderParams &rp) {
   return fabsf(rp.lastOutputLeft_) > kDeclickSilenceThreshold ||
          fabsf(rp.lastOutputRight_) > kDeclickSilenceThreshold;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_start_declick")
 inline bool startDeclickTail(sampleSourceRenderParams &rp) {
   rp.sourceEnded_ = true;
   if (!shouldStartDeclickTail(rp)) {
@@ -665,6 +594,7 @@ inline bool startDeclickTail(sampleSourceRenderParams &rp) {
   return true;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_render_declick")
 inline void renderDeclickTail(sampleSourceRenderParams &rp,
                               AudioSample *&result, int &count) {
   while (count > 0 && rp.tailSamplesRemaining_ > 0) {
@@ -699,7 +629,6 @@ inline void renderDeclickTail(sampleSourceRenderParams &rp,
 
 sampleSourceRenderParams
     SampleSourceInstrument::renderParams_[SONG_CHANNEL_COUNT];
-signed char SampleSourceInstrument::lastMidiNote_[SONG_CHANNEL_COUNT];
 
 SampleSourceInstrument::SampleSourceInstrument()
     : I_Instrument(&variables_), source_(nullptr), running_(false),
@@ -713,10 +642,6 @@ SampleSourceInstrument::SampleSourceInstrument()
       loopEnd_(FourCC::SampleSourceInstrumentEnd, 0),
       table_(FourCC::SampleSourceInstrumentTable, -1),
       tableAuto_(FourCC::SampleSourceInstrumentTableAutomation, false) {
-  for (int i = 0; i < SONG_CHANNEL_COUNT; ++i) {
-    lastMidiNote_[i] = -1;
-  }
-
   variables_.insert(variables_.end(), &sample_);
   sample_.AddObserver(*this);
   variables_.insert(variables_.end(), &level_);
@@ -1010,10 +935,6 @@ bool SampleSourceInstrument::Start(int channel, unsigned char midinote,
   const bool resumePosition = (!cleanstart) && (!rp->finished_);
   rp->midiNote_ = midinote;
 
-  if (lastMidiNote_[channel] == -1) {
-    lastMidiNote_[channel] = midinote;
-  }
-
   rp->sampleBuffer_ = source_->GetSampleBuffer(rp->midiNote_);
   if (rp->sampleBuffer_ == nullptr) {
     return false;
@@ -1205,17 +1126,11 @@ bool SampleSourceInstrument::Start(int channel, unsigned char midinote,
   (void)oscRenderLength;
   (void)oscLoopClamped;
 #endif
-  rp->krateCount_ = 0;
   resetDeclickState(*rp);
 
   if (cleanstart) {
-    rp->retrig_ = false;
-    rp->retrigLoop_ = 0;
-    rp->retrigCount_ = 0;
-    rp->retrigOffset_ = 0;
+    rp->retrigger_.Reset();
     rp->couldClick_ = kShouldKillClicks;
-
-    resetPitchUpdaters(*rp);
   }
   return true;
 }
@@ -1231,60 +1146,17 @@ void SampleSourceInstrument::Stop(int channel) {
   rp->finished_ = true;
 }
 
-void SampleSourceInstrument::doTickUpdate(int channel) {
-  sampleSourceRenderParams *rp = renderParams_ + channel;
-  if (!rp->arpActive_ || rp->arpLength_ == 0) {
-    return;
-  }
-
-  rp->arpPosition_++;
-  if (rp->arpPosition_ > rp->arpLength_) {
-    rp->arpPosition_ = 0;
-  }
-  rp->arpCurrent_ =
-      static_cast<float>(pow(2.0f, rp->arp_[rp->arpPosition_] / 12.0f));
+void SampleSourceInstrument::SetPitchMultiplier(int channel, float multiplier) {
+  sampleSourceRenderParams &renderParams = renderParams_[channel];
+  renderParams.speed_ = renderParams.baseSpeed_ * multiplier;
 }
 
-void SampleSourceInstrument::doKRateUpdate(int channel) {
-  sampleSourceRenderParams *rp = renderParams_ + channel;
-  if (rp->speedRampActive_) {
-    rp->speedRampActive_ = advanceLinearRamp(
-        rp->speedRampCurrent_, rp->speedRampTarget_, rp->speedRampStep_);
-  }
-  if (rp->legatoActive_) {
-    rp->legatoActive_ = advanceLogRamp(rp->legatoCurrent_, rp->legatoTarget_,
-                                       rp->legatoMultiplier_);
-  }
-  if (rp->pfinActive_) {
-    rp->pfinActive_ =
-        advanceLogRamp(rp->pfinCurrent_, rp->pfinTarget_, rp->pfinMultiplier_);
-  }
-}
-
-void SampleSourceInstrument::updateSpeedFromUpdaters(int channel) {
-  sampleSourceRenderParams *rp = renderParams_ + channel;
-  float speedOffset = 1.0f;
-  if (rp->speedRampActive_ || rp->speedRampCurrent_ != 1.0f) {
-    speedOffset *= rp->speedRampCurrent_;
-  }
-  if (rp->legatoActive_ || rp->legatoCurrent_ != 1.0f) {
-    speedOffset *= rp->legatoCurrent_;
-  }
-  if (rp->pfinActive_ || rp->pfinCurrent_ != 1.0f) {
-    speedOffset *= rp->pfinCurrent_;
-  }
-  if (rp->arpActive_ || rp->arpCurrent_ != 1.0f) {
-    speedOffset *= rp->arpCurrent_;
-  }
-  rp->speed_ = rp->baseSpeed_ * speedOffset;
-}
-
+PICOTRACKER_FAST_CODE("sample_source_render")
 bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
                                     bool updateTick) {
   bool somethingToMix = false;
 
   sampleSourceRenderParams *rp = renderParams_ + channel;
-  lastMidiNote_[channel] = rp->midiNote_;
   bool *rpFinished = &(rp->finished_);
 
   if (source_) {
@@ -1292,28 +1164,10 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
       return false;
     }
 
-    bool hasUpdaters = rp->speedRampActive_ || rp->legatoActive_ ||
-                       rp->pfinActive_ || rp->arpActive_;
-
-    if (updateTick) {
-      if (hasUpdaters) {
-        doTickUpdate(channel);
-        updateSpeedFromUpdaters(channel);
-      }
-
-      if (rp->retrig_) {
-        if (rp->retrigCount_ == 0) {
-          int ticks = rp->retrigOffset_ - rp->retrigLoop_;
-          long offset = static_cast<long>(
-              ticks * SyncMaster::GetInstance()->GetTickSampleCount());
-          rp->position_ += offset * rp->speed_;
-          if (rp->position_ < 0) {
-            rp->position_ = 0;
-          }
-          rp->retrigCount_ = rp->retrigLoop_;
-        }
-        rp->retrigCount_--;
-      }
+    if (updateTick && rp->retrigger_.AdvanceTick()) {
+      ApplySampleRetrigger(rp->position_, rp->speed_,
+                           SyncMaster::GetInstance()->GetTickSampleCount(),
+                           rp->retrigger_);
     }
 
     SampleSourceInstrumentLoopMode loopMode =
@@ -1333,16 +1187,14 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
 
     float position = rp->position_;
     bool rpReverse = rp->reverse_;
-    int rpKrateCount = rp->krateCount_;
 
-    // OSC playback can advance tens of source frames per output sample, so the
-    // generic renderer's per-sample bounds/topology setup becomes a measurable
-    // CPU cost. Keep the common forward oscillator case on a local wrapped
-    // phase and direct Hermite lookup; unusual/reverse ranges fall through
-    // below.
-    if (loopMode == SSLM_OSC && !rpReverse && channelCount > 0 &&
-        rp->rendLoopEnd_ > rp->rendLoopStart_ && rp->rendLoopStart_ >= 0 &&
-        rp->rendLoopEnd_ <= sampleFrameCount) {
+    // OSC playback can advance tens of source frames per output sample, and
+    // LOOPSYNC does not need the generic renderer's loop-crossfade checks.
+    // Keep their common forward case on a local wrapped phase and direct
+    // Hermite lookup; unusual/reverse ranges fall through below.
+    if ((loopMode == SSLM_OSC || loopMode == SSLM_LOOPSYNC) && !rpReverse &&
+        channelCount > 0 && rp->rendLoopEnd_ > rp->rendLoopStart_ &&
+        rp->rendLoopStart_ >= 0 && rp->rendLoopEnd_ <= sampleFrameCount) {
       const int oscFrameCount = rp->rendLoopEnd_ - rp->rendLoopStart_;
       const int16_t *oscFrames =
           sampleFrames + rp->rendLoopStart_ * channelCount;
@@ -1357,15 +1209,6 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
             break;
           }
           continue;
-        }
-
-        if (rpKrateCount-- == 0) {
-          rpKrateCount = kKRateSampleCount;
-
-          if (hasUpdaters) {
-            doKRateUpdate(channel);
-            updateSpeedFromUpdaters(channel);
-          }
         }
 
         int baseFrame = static_cast<int>(oscillatorPhase);
@@ -1398,7 +1241,6 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
       }
 
       rp->reverse_ = rpReverse;
-      rp->krateCount_ = rpKrateCount;
       rp->position_ = static_cast<float>(rp->rendLoopStart_) + oscillatorPhase;
 
       return true;
@@ -1419,15 +1261,6 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
         }
         if (rp->sourceEnded_) {
           continue;
-        }
-      }
-
-      if (rpKrateCount-- == 0) {
-        rpKrateCount = kKRateSampleCount;
-
-        if (hasUpdaters) {
-          doKRateUpdate(channel);
-          updateSpeedFromUpdaters(channel);
         }
       }
 
@@ -1507,7 +1340,6 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
     }
 
     rp->reverse_ = rpReverse;
-    rp->krateCount_ = rpKrateCount;
     rp->position_ = position;
 
     somethingToMix = true;
@@ -1516,6 +1348,7 @@ bool SampleSourceInstrument::Render(int channel, AudioSample *buffer, int size,
   return somethingToMix;
 }
 
+PICOTRACKER_FAST_CODE("sample_source_buffer_layout")
 AudioBufferLayout
 SampleSourceInstrument::GetAudioBufferLayout(int channel) const {
   if (channel < 0 || channel >= SONG_CHANNEL_COUNT) {
@@ -1641,6 +1474,20 @@ float SampleSourceInstrument::GetLengthInSec() {
 
 bool SampleSourceInstrument::IsInitialized() { return (source_ != nullptr); }
 
+bool SampleSourceInstrument::ShouldAuditionParameterChange(
+    FourCC parameter) const {
+  switch (parameter) {
+  case FourCC::SampleSourceInstrumentLevel:
+  case FourCC::SampleSourceInstrumentLoopMode:
+  case FourCC::SampleSourceInstrumentStart:
+  case FourCC::SampleSourceInstrumentLoopStart:
+  case FourCC::SampleSourceInstrumentEnd:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void SampleSourceInstrument::updateInstrumentData(bool search) {
   (void)search;
 
@@ -1746,99 +1593,10 @@ void SampleSourceInstrument::ProcessCommand(int channel, TrackerCommand cc,
     rp->couldClick_ = kShouldKillClicks;
   } break;
 
-  case TrackerCommand::InstrumentCommandArpeggiator:
-    setArpData(*rp, value);
-    rp->arpActive_ = true;
-    updateSpeedFromUpdaters(channel);
-    break;
-
-  case TrackerCommand::InstrumentCommandPitchSlide: {
-    int pitch = static_cast<char>(value & 0xFF);
-    float speed = static_cast<float>(value >> 8);
-    if (pitch > 127) {
-      pitch = pitch - 256;
-    }
-
-    float targetSpeed = static_cast<float>(pow(2.0, pitch / 12.0));
-    float srcSpeed = rp->speed_ / rp->baseSpeed_;
-
-    speed = (speed == 0)
-                ? 0.0f
-                : rp->speed_ * 255.0f / speed / kKRateSampleCount / 32.0f;
-
-    rp->speedRampActive_ = true;
-    rp->speedRampCurrent_ = srcSpeed;
-    rp->speedRampTarget_ = targetSpeed;
-    rp->speedRampStep_ = speed;
-    updateSpeedFromUpdaters(channel);
-  } break;
-
-  case TrackerCommand::InstrumentCommandLegato: {
-    int pitch = static_cast<char>(value & 0xFF);
-    float speed = static_cast<float>(value >> 8);
-
-    if (pitch > 127) {
-      pitch = pitch - 256;
-    }
-
-    float targetSpeed;
-    float initSpeed;
-    if (pitch == 0) {
-      pitch = lastMidiNote_[channel] - rp->midiNote_;
-      targetSpeed = 1.0f;
-      initSpeed = static_cast<float>(pow(2.0f, pitch / 12.0f));
-    } else {
-      initSpeed = rp->speed_ / rp->baseSpeed_;
-      targetSpeed = static_cast<float>(pow(2.0f, pitch / 12.0f));
-    }
-
-    speed = (speed == 0)
-                ? 0.0f
-                : static_cast<float>(1 + 50.0 / kKRateSampleCount / speed);
-
-    rp->legatoActive_ = true;
-    rp->legatoCurrent_ = initSpeed;
-    rp->legatoTarget_ = targetSpeed;
-    rp->legatoMultiplier_ = (targetSpeed > initSpeed)
-                                ? speed
-                                : ((speed == 0.0f) ? 0.0f : 1.0f / speed);
-    updateSpeedFromUpdaters(channel);
-  } break;
-
-  case TrackerCommand::InstrumentCommandPitchFineTune: {
-    float semi = (value & 0xFF) / static_cast<float>(0x80);
-    if (semi > 1) {
-      semi = semi - 2;
-    }
-
-    float speed = static_cast<float>(value >> 8);
-    float initSpeed = rp->pfinActive_ ? rp->pfinCurrent_ : 1.0f;
-    float targetSpeed = static_cast<float>(pow(2.0f, semi / 12.0f));
-
-    speed = (speed == 0)
-                ? 0.0f
-                : static_cast<float>(1 + 50.0 / kKRateSampleCount / speed);
-
-    rp->pfinActive_ = true;
-    rp->pfinCurrent_ = initSpeed;
-    rp->pfinTarget_ = targetSpeed;
-    rp->pfinMultiplier_ = (targetSpeed > initSpeed)
-                              ? speed
-                              : ((speed == 0.0f) ? 0.0f : 1.0f / speed);
-    updateSpeedFromUpdaters(channel);
-  } break;
-
   case TrackerCommand::InstrumentCommandRetrigger: {
-    unsigned char loop = value & 0xFF;
-    unsigned char offset = value >> 8;
-    if (loop != 0) {
-      rp->retrig_ = true;
-      rp->retrigLoop_ = loop;
-      rp->retrigCount_ = loop;
-      rp->retrigOffset_ = offset;
+    rp->retrigger_.Configure(value);
+    if (rp->retrigger_.IsActive()) {
       rp->couldClick_ = kShouldKillClicks;
-    } else {
-      rp->retrig_ = false;
     }
   } break;
 

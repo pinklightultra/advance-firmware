@@ -84,12 +84,12 @@ public:
   virtual void Execute(FourCC id, float value);
 
   AudioOut *GetAudioOut();
-  Project *GetProject() const { return project_; }
   MixerServiceMode GetMode() const { return mode_; }
   const ChannelOutputRouting &GetChannelRouting(int channel) const;
   OutputEffectSlot *GetOutputEffectSlot(int index);
   bool SetOutputEffect(int index, OutputEffectProcessor *effect);
   OutputEffectProcessor *GetOutputEffect(int index) const;
+  bool HasOutputEffectTail() const;
   void ClearOutputEffectTails();
   void ClearOutputEffectTailsLocked();
 

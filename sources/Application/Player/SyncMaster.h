@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SYNC_MASTER_H_
@@ -17,6 +21,12 @@
 
 class SyncMaster : public T_Singleton<SyncMaster> {
 public:
+  // In theory, this could be updated in the future in order to make rendering
+  // intervals smaller, if done, it must remain a multiple of 6 so table and
+  // MIDI slices stay aligned.
+  // In practice, we should probably never chnage this
+  static constexpr int SlicesPerStep = 6;
+
   SyncMaster();
   void Start();
   void Stop();
@@ -28,6 +38,7 @@ public:
   bool MidiSlice();
   float GetPlaySampleCount();
   float GetTickSampleCount();
+  float GetStepSampleCount();
   unsigned int GetBeatCount();
   float GetTickTime();
 

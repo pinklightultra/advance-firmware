@@ -48,10 +48,12 @@ subject to its own license. Below is a summary of included external code:
    SPDX-License-Identifier: MIT
    License file: sources/Externals/braids/LICENSE
 
-6. cRSID
-   Path: sources/Externals/cRSID
-   SPDX-License-Identifier: WTFPL (or equivalent)
-   License file: sources/Externals/cRSID/README.txt
+6. AdvanceSID (derived from cRSID 1.1)
+   Path: sources/Application/Instruments/AdvanceSID
+   SPDX-License-Identifier: LicenseRef-cRSID-WTF AND GPL-3.0-only
+   Original author: Hermit (Mihaly Horvath)
+   Original terms: LICENSES/LicenseRef-cRSID-WTF.txt
+   New original xiphonics contributions: GPL-3.0-only, as stated in file headers.
 
 7. etl
    Path: sources/Externals/etl
@@ -103,6 +105,14 @@ subject to its own license. Below is a summary of included external code:
    Path: sources/System/Console/nanoprintf.h
    SPDX-License-Identifier: 0BSD OR Unlicense
    License texts: included at the end of the header
+
+17. FM6 / libmsfa / msfa
+   Path: sources/Application/Instruments/AdvanceFM6
+   Apache-derived files: FM6Voice.cpp, FM6Dx7Patch.cpp, and tools/fm6_lut_gen.cpp
+   SPDX-License-Identifier: Apache-2.0 AND GPL-3.0-only (those derived files)
+   License: LICENSES/Apache-2.0.txt
+   Original notices: sources/Application/Instruments/AdvanceFM6/NOTICE
+   Other original project files retain their individual GPL notices.
 
 The license texts for the above components are available in their respective
 folders. Original component licenses remain applicable to their respective portions;

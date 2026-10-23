@@ -25,6 +25,7 @@
 #include "Application/Views/ChainView.h"
 #include "Application/Views/ConsoleView.h"
 #include "Application/Views/DeviceView.h"
+#include "Application/Views/FM6PresetBrowserView.h"
 #include "Application/Views/GrooveView.h"
 #include "Application/Views/ImportView.h"
 #include "Application/Views/InstrumentImportView.h"
@@ -32,6 +33,7 @@
 
 #include "Adapters/adv/display/display.h"
 #include "Adapters/adv/system/assets/error_bitmaps.h"
+#include "Application/Views/CreditsView.h"
 #include "Application/Views/MasterEffectsView.h"
 #include "Application/Views/MixerView.h"
 #include "Application/Views/ModalDialogs/FullScreenBox.h"
@@ -92,9 +94,12 @@ const uint16_t AUTOSAVE_INTERVAL_IN_SECONDS = 1 * 60;
 
 namespace {
 
-constexpr uint16_t kProfileOrderGraphicsTotal = 70;
+constexpr uint16_t kProfileOrderGraphicsTotal = 71;
 
-DWTProfileStats gGraphicsFlushProfile = {"gfx total", true};
+DWTProfileStats gGraphicsFlushProfile = {
+    .name_ = "gfx total",
+    .printLast_ = true,
+};
 
 void registerAppWindowProfiles() {
   static bool registered = false;
@@ -155,6 +160,7 @@ struct AppWindowViews {
   ProjectView projectView;
   ImportView importView;
   InstrumentImportView instrumentImportView;
+  FM6PresetBrowserView fm6PresetBrowserView;
   InstrumentView instrumentView;
   VoiceView voiceView;
 
@@ -167,18 +173,20 @@ struct AppWindowViews {
   SampleSlicesView sampleSlicesView;
   RecordView recordView;
   NullView nullView;
+  CreditsView creditsView;
 
   AppWindowViews(GUIWindow &w, ViewData &viewData)
       : songView(w, &viewData), chainView(w, &viewData),
         phraseView(w, &viewData), deviceView(w, &viewData),
         themeView(w, &viewData), themeImportView(w, &viewData),
         projectView(w, &viewData), importView(w, &viewData),
-        instrumentImportView(w, &viewData), instrumentView(w, &viewData),
-        voiceView(w, &viewData), tableView(w, &viewData),
-        grooveView(w, &viewData), selectProjectView(w, &viewData),
-        mixerView(w, &viewData), masterEffectsView(w, &viewData),
-        sampleEditorView(w, &viewData), sampleSlicesView(w, &viewData),
-        recordView(w, &viewData), nullView(w, &viewData) {}
+        instrumentImportView(w, &viewData), fm6PresetBrowserView(w, &viewData),
+        instrumentView(w, &viewData), voiceView(w, &viewData),
+        tableView(w, &viewData), grooveView(w, &viewData),
+        selectProjectView(w, &viewData), mixerView(w, &viewData),
+        masterEffectsView(w, &viewData), sampleEditorView(w, &viewData),
+        sampleSlicesView(w, &viewData), recordView(w, &viewData),
+        nullView(w, &viewData), creditsView(w, &viewData) {}
 };
 
 void AppWindow::defineColor(FourCC colorCode, GUIColor &color,
@@ -251,6 +259,7 @@ AppWindow::AppWindow(I_GUIWindowImp &imp, const char *projectName)
   views_->projectView.AddObserver(*this);
   views_->importView.AddObserver(*this);
   views_->instrumentImportView.AddObserver(*this);
+  views_->fm6PresetBrowserView.AddObserver(*this);
   views_->instrumentView.AddObserver(*this);
   views_->voiceView.AddObserver(*this);
 
@@ -262,6 +271,7 @@ AppWindow::AppWindow(I_GUIWindowImp &imp, const char *projectName)
   views_->sampleEditorView.AddObserver(*this);
   views_->sampleSlicesView.AddObserver(*this);
   views_->recordView.AddObserver(*this);
+  views_->creditsView.AddObserver(*this);
 
   memset(_charScreen, ' ', SCREEN_CHARS);
   memset(_preScreen, ' ', SCREEN_CHARS);
@@ -503,9 +513,10 @@ AppWindow::LoadProjectResult AppWindow::LoadProject(const char *projectName) {
   PersistencyService *persist = PersistencyService::GetInstance();
 
   Player *player = Player::GetInstance();
-  if (player->IsRunning()) {
-    player->Stop();
-  }
+  // Loading resets and destroys project-owned instruments and sample data.
+  // Hard-stop every voice first so the audio task cannot retain references to
+  // that state through release tails or direct-note audition.
+  player->Kill();
 
   TablePlayback::Reset();
   TableHolder::GetInstance()->Reset();
@@ -563,6 +574,10 @@ AppWindow::LoadProjectResult AppWindow::LoadProject(const char *projectName) {
   // Update view data
   viewData_.Load(project);
 
+  // Program changes are runtime state. Restore each MIDI channel's project
+  // default whenever a project is loaded.
+  MidiService::GetInstance()->LoadProjectSettings(*project);
+
   if (views_) {
     views_->songView.Reset();
     views_->chainView.Reset();
@@ -576,6 +591,7 @@ AppWindow::LoadProjectResult AppWindow::LoadProject(const char *projectName) {
     views_->masterEffectsView.Reset();
     views_->importView.Reset();
     views_->instrumentImportView.Reset();
+    views_->fm6PresetBrowserView.Reset();
     views_->themeView.Reset();
     views_->themeImportView.Reset();
     views_->selectProjectView.Reset();
@@ -807,7 +823,7 @@ void AppWindow::AnimationUpdate() {
         lowBatteryWarningCounter_ = 0;
       }
       if (lowBatteryWarningCounter_ > MIN_BATT_POWEROFF_SEC) {
-        System::GetInstance()->PowerDown();
+        PowerDown();
       }
     }
   }
@@ -859,8 +875,7 @@ void AppWindow::AnimationUpdate() {
   {
     // Measure the full UI render pass for this clock tick, including view
     // redraw work such as graph rectangles plus the final display flush.
-    ScopedDWTProfile graphicsFlushProfile(&gGraphicsFlushProfile, 1,
-                                          PICO_CLOCK_HZ, 1);
+    ScopedDWTProfile graphicsFlushProfile(&gGraphicsFlushProfile);
 
     if (sdCardMissing_ && sdCardMessageShown_) {
       if (_currentView && _currentView->isDirty()) {
@@ -975,6 +990,9 @@ void AppWindow::Update(Observable &o, I_ObservableData *d) {
     case VT_INSTRUMENT_IMPORT:
       _currentView = &views_->instrumentImportView;
       break;
+    case VT_FM6_PRESETS:
+      _currentView = &views_->fm6PresetBrowserView;
+      break;
     case VT_SELECTPROJECT:
       _currentView = &views_->selectProjectView;
       break;
@@ -1001,6 +1019,9 @@ void AppWindow::Update(Observable &o, I_ObservableData *d) {
       break;
     case VT_RECORD:
       _currentView = &views_->recordView;
+      break;
+    case VT_CREDITS:
+      _currentView = &views_->creditsView;
       break;
     default:
       break;
@@ -1157,6 +1178,40 @@ bool AppWindow::AutoSave() {
     return true;
   }
   return false;
+}
+
+void AppWindow::PowerDown() {
+  AutoSaveBeforePowerDown();
+  System::GetInstance()->PowerDown();
+}
+
+void AppWindow::AutoSaveBeforePowerDown() {
+  // nothing to save if there is no project currently loaded, or if one is
+  // still in the process of being loaded
+  if (views_ == nullptr || _currentView == nullptr ||
+      _currentView == &views_->nullView || loadProject_ ||
+      awaitingProjectLoadAck_) {
+    return;
+  }
+
+  // unlike the timed auto save we cant just skip saving when the sequencer is
+  // running or we are recording because we are about to lose power, so instead
+  // stop everything that could be writing to the sdcard or mutating the
+  // project while we save it.
+  // an in-progress recording is thrown away rather than saved
+  CancelRecording();
+  Player *player = Player::GetInstance();
+  if (player != nullptr) {
+    player->Kill();
+  }
+
+  Trace::Log("APPWINDOW", "AutoSaving Project Data before power down");
+  // deliberately an auto save and *not* an explicit save so that we dont
+  // clobber the users last explicit save of the project
+  PersistencyService *ps = PersistencyService::GetInstance();
+  if (ps->AutoSaveProjectData(projectName_) != PERSIST_SAVED) {
+    Trace::Error("APPWINDOW", "Failed to auto-save project data at power down");
+  }
 }
 
 // Maps the ColorDefinition used in View classes to a GUIColor that is needed by

@@ -14,12 +14,14 @@
 #include "MidiService.h"
 #include "Adapters/adv/usb/usb_utils.h"
 #include "Application/Model/Config.h"
+#include "Application/Model/Project.h"
 #include "Application/Player/Player.h"
 #include "Application/Player/SyncMaster.h"
 #include "Services/Audio/AudioDriver.h"
 #include "System/Console/Trace.h"
 #include "System/System/System.h"
 #include "System/Timer/Timer.h"
+#include "config/MemorySections.h"
 #include <cstdint>
 
 namespace {
@@ -49,15 +51,14 @@ bool MidiService::Init() {
   }
 
   for (auto dev : inList_) {
+    // Transport is handled directly by MidiInDevice. MidiService must not
+    // observe the input's differently typed message payloads.
+    dev->RemoveObserver(*this);
     dev->Start();
-    // Add this service as an observer to receive transport control messages
-    dev->AddObserver(*this);
   }
 
-  // Initialize the new channel-to-instrument mapping
-  for (short i = 0; i < 16; i++) {
-    inList_[0]->AssignInstrumentToChannel(i, i);
-  }
+  // MIDI input devices start on the first program and load the project's
+  // defaults after project data has been restored.
 
   auto config = Config::GetInstance();
   auto midiDevVar =
@@ -171,6 +172,7 @@ void MidiService::SendControlSurfaceRawImmediate(const uint8_t *data,
   }
 }
 
+PICOTRACKER_FAST_CODE("midi_service_trigger")
 void MidiService::Trigger() {
   AdvancePlayQueue();
 
@@ -184,6 +186,7 @@ void MidiService::Trigger() {
   }
 }
 
+PICOTRACKER_FAST_CODE("midi_service_advance_play_queue")
 void MidiService::AdvancePlayQueue() {
   currentPlayQueue_ = (currentPlayQueue_ + 1) % MIDI_MAX_BUFFERS;
   auto queue = &queues_[currentPlayQueue_];
@@ -264,6 +267,22 @@ void MidiService::ReloadControlSurface() {
   }
 }
 
+void MidiService::LoadProjectSettings(const Project &project) {
+  for (int midiChannel = 0; midiChannel < MIDI_INPUT_CHANNEL_COUNT;
+       midiChannel++) {
+    SetInputProgramForChannel(
+        midiChannel, project.song_.GetMidiDefaultInstrumentIndex(midiChannel));
+  }
+}
+
+void MidiService::SetInputProgramForChannel(int midiChannel, uint8_t program) {
+  for (MidiInDevice *device : inList_) {
+    if (device != nullptr) {
+      device->SetProgramForChannel(midiChannel, program);
+    }
+  }
+}
+
 void MidiService::flushOutQueue() {
   auto flushQueue = &queues_[currentOutQueue_];
 
@@ -303,30 +322,23 @@ void MidiService::updateActiveDevicesList(unsigned short config) {
 }
 
 void MidiService::updateActiveInputDevicesList(unsigned short config) {
-  // Stop all input devices
-  for (auto dev : inList_) {
-    dev->Stop();
-    dev->RemoveObserver(*this);
-  }
   activeInDevices_.clear();
-
-  switch (config) {
-  case 1:
-    activeInDevices_.insert(activeInDevices_.end(), inList_[0]);
-    break;
-  case 2:
-    activeInDevices_.insert(activeInDevices_.end(), inList_[1]);
-    break;
-  case 3:
-    activeInDevices_.insert(activeInDevices_.end(), inList_[0]);
-    activeInDevices_.insert(activeInDevices_.end(), inList_[1]);
-    break;
-  }
-
-  // Start selected input devices and add as observers
-  for (auto dev : activeInDevices_) {
-    dev->Start();
-    dev->AddObserver(*this);
+  for (size_t deviceIndex = 0; deviceIndex < inList_.size(); deviceIndex++) {
+    MidiInDevice *device = inList_[deviceIndex];
+    // Keep this service detached if input selection is reconfigured.
+    device->RemoveObserver(*this);
+    const bool shouldBeActive =
+        (config & (1U << static_cast<unsigned int>(deviceIndex))) != 0U;
+    if (shouldBeActive) {
+      activeInDevices_.insert(activeInDevices_.end(), device);
+      if (!device->IsRunning()) {
+        device->Start();
+      }
+    } else {
+      if (device->IsRunning()) {
+        device->Stop();
+      }
+    }
   }
 }
 

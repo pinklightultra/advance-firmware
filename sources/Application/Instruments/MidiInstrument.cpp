@@ -19,6 +19,7 @@
 #include "Externals/etl/include/etl/to_string.h"
 #include "Services/Midi/MidiMessage.h"
 #include "System/Console/Trace.h"
+#include "config/MemorySections.h"
 
 MidiService *MidiInstrument::svc_ = 0;
 TimerService *MidiInstrument::timerSvc_ = 0;
@@ -54,6 +55,7 @@ MidiInstrument::MidiInstrument()
     pendingNoteOffCount_[i] = 0;
     lastNotes_[i].fill(0);
     pendingNoteOffs_[i].fill(0);
+    ResetVolumeCommand(i);
   }
 }
 
@@ -67,6 +69,10 @@ bool MidiInstrument::Init() {
 void MidiInstrument::OnStart() {
   tableState_.Reset();
 
+  for (int i = 0; i < SONG_CHANNEL_COUNT; ++i) {
+    ResetVolumeCommand(i);
+  }
+
   // Send program change message at the start of playback
   int program = program_.GetInt();
 
@@ -76,15 +82,8 @@ void MidiInstrument::OnStart() {
     SendProgramChange(channel_.GetInt(), program);
   }
 
-  MidiMessage msg;
-  // send instrument volume for this midi channel when it's not zero
-  int volume = volume_.GetInt();
-  if (volume > 0) {
-    msg.status_ = MidiMessage::MIDI_CONTROL_CHANGE + channel_.GetInt();
-    msg.data1_ = MidiCC::CC_VOLUME;
-    msg.data2_ = volume / 2;
-    svc_->QueueMessage(msg);
-  }
+  // Establish the configured MIDI channel volume, including zero.
+  SendVolume(EncodeVolume(static_cast<float>(volume_.GetInt())));
 
   svc_->RegisterActiveChannel(channel_.GetInt());
 };
@@ -119,6 +118,12 @@ bool MidiInstrument::Start(int c, unsigned char note, bool retrigger) {
   int channel = v->GetInt();
 
   if (retrigger) {
+    const bool restoreConfiguredVolume = volumeCommand_[c].overrideActive_;
+    ResetVolumeCommand(c);
+    if (restoreConfiguredVolume) {
+      SendVolume(volumeCommand_[c].lastSent_);
+    }
+
     v = FindVariable(FourCC::MidiInstrumentNoteLength);
     remainingTicks_ = noteLen_.GetInt();
     if (remainingTicks_ > 0) {
@@ -169,6 +174,8 @@ void MidiInstrument::Stop(int c) {
   pendingNoteOffCount_[c] = 0;
   first_[c] = false;
   playing_ = false;
+  volumeCommand_[c].ticksRemaining_ = 0;
+  volumeCommand_[c].rampActive_ = false;
 };
 
 void MidiInstrument::SetChannel(int channel) {
@@ -176,6 +183,7 @@ void MidiInstrument::SetChannel(int channel) {
   v->SetInt(channel);
 };
 
+PICOTRACKER_FAST_CODE("midi_instrument_render")
 bool MidiInstrument::Render(int channel, AudioSample *buffer, int size,
                             bool updateTick) {
   (void)buffer;
@@ -262,6 +270,8 @@ bool MidiInstrument::Render(int channel, AudioSample *buffer, int size,
       }
     }
 
+    AdvanceVolumeCommand(channel);
+
     if (remainingTicks_ > 0) {
       remainingTicks_--;
       if (remainingTicks_ == 0) {
@@ -337,11 +347,7 @@ void MidiInstrument::ProcessCommand(int channel, TrackerCommand cc,
   }; break;
 
   case TrackerCommand::InstrumentCommandVolume: {
-    MidiMessage msg;
-    msg.status_ = MidiMessage::MIDI_CONTROL_CHANGE + mchannel;
-    msg.data1_ = MidiCC::CC_VOLUME;
-    msg.data2_ = value / 2;
-    svc_->QueueMessage(msg);
+    StartVolumeCommand(channel, value);
   }; break;
 
   case TrackerCommand::InstrumentCommandMidiCC: {
@@ -392,6 +398,79 @@ void MidiInstrument::ProcessCommand(int channel, TrackerCommand cc,
   case TrackerCommand::InstrumentCommandGateLength: {
     remainingTicks_ = (value & 0xFF) + 1;
   }; break;
+  }
+}
+
+uint8_t MidiInstrument::EncodeVolume(float value) {
+  if (value <= 0.0f) {
+    return 0;
+  }
+  if (value >= 255.0f) {
+    return 127;
+  }
+  return static_cast<uint8_t>(value) >> 1;
+}
+
+void MidiInstrument::SendVolume(uint8_t value) {
+  MidiMessage msg;
+  msg.status_ = MidiMessage::MIDI_CONTROL_CHANGE + channel_.GetInt();
+  msg.data1_ = MidiCC::CC_VOLUME;
+  msg.data2_ = value;
+  svc_->QueueMessage(msg);
+}
+
+void MidiInstrument::ResetVolumeCommand(int channel) {
+  VolumeCommandState &state = volumeCommand_[channel];
+  state.current_ = static_cast<float>(volume_.GetInt());
+  state.target_ = state.current_;
+  state.ticksRemaining_ = 0;
+  state.lastSent_ = EncodeVolume(state.current_);
+  state.overrideActive_ = false;
+  state.rampActive_ = false;
+}
+
+void MidiInstrument::StartVolumeCommand(int channel, uint16_t value) {
+  VolumeCommandState &state = volumeCommand_[channel];
+  const uint8_t speed = static_cast<uint8_t>(value >> 8);
+  const float target = static_cast<float>(value & 0xFF);
+
+  if (!state.overrideActive_) {
+    state.current_ = static_cast<float>(volume_.GetInt());
+    state.lastSent_ = EncodeVolume(state.current_);
+  }
+
+  state.target_ = target;
+  state.ticksRemaining_ = speed;
+  state.overrideActive_ = true;
+  state.rampActive_ = speed > 0 && state.current_ != state.target_;
+
+  if (!state.rampActive_) {
+    state.current_ = state.target_;
+    state.ticksRemaining_ = 0;
+    state.lastSent_ = EncodeVolume(state.current_);
+    SendVolume(state.lastSent_);
+  }
+}
+
+void MidiInstrument::AdvanceVolumeCommand(int channel) {
+  VolumeCommandState &state = volumeCommand_[channel];
+  if (!state.rampActive_ || state.ticksRemaining_ == 0) {
+    return;
+  }
+
+  if (state.ticksRemaining_ == 1) {
+    state.current_ = state.target_;
+    state.ticksRemaining_ = 0;
+    state.rampActive_ = false;
+  } else {
+    state.current_ += (state.target_ - state.current_) / state.ticksRemaining_;
+    state.ticksRemaining_--;
+  }
+
+  const uint8_t encoded = EncodeVolume(state.current_);
+  if (encoded != state.lastSent_) {
+    state.lastSent_ = encoded;
+    SendVolume(encoded);
   }
 }
 

@@ -59,11 +59,11 @@ const char *getLFOShapeDisplayName(LFOShape shape) {
 
 } // namespace
 
-UILFOField::UILFOField(const GUIPoint &position, I_Instrument &instrument,
+UILFOField::UILFOField(const GUIPoint &position,
                        VoiceParameters &voiceParameters, size_t lfoIndex,
                        LFOFieldKind kind)
-    : UIField(position), instrument_(instrument),
-      voiceParameters_(voiceParameters), lfoIndex_(lfoIndex), kind_(kind) {}
+    : UIField(position), voiceParameters_(voiceParameters), lfoIndex_(lfoIndex),
+      kind_(kind) {}
 
 void UILFOField::Draw(GUIWindow &w, int offset) {
   GUITextProperties props;
@@ -189,9 +189,6 @@ void UILFOField::cycleTarget(int direction) {
 
   for (value += step; value >= minValue && value <= maxValue; value += step) {
     const LFOTarget target = static_cast<LFOTarget>(value);
-    if (!IsLFOTargetSupportedForInstrument(instrument_.GetType(), target)) {
-      continue;
-    }
     if (target != LFOTarget::None &&
         settings->IsTargetInUse(target, lfoIndex_)) {
       continue;
@@ -295,8 +292,8 @@ int UILFOField::depthMax() const {
   if (!settings) {
     return 0;
   }
-  if (!GetLFOTargetValueRange(&instrument_, settings->Get(lfoIndex_).target_,
-                              minValue, maxValue)) {
+  if (!GetLFOTargetValueRange(settings->Get(lfoIndex_).target_, minValue,
+                              maxValue)) {
     return 0;
   }
   return std::max(std::abs(minValue), std::abs(maxValue));

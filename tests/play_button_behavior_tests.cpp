@@ -30,7 +30,7 @@ TEST_CASE("Play button kill hold handles tick wraparound") {
   CHECK(HasPlayButtonKillHoldElapsed(true, pressedAt, 500U));
 }
 
-TEST_CASE("Sample source preview bypasses only alt play deferral") {
+TEST_CASE("Instrument preview bypasses only alt play deferral") {
   static constexpr uint16_t kPlay = 0x0100;
   static constexpr uint16_t kAlt = 0x0010;
   static constexpr uint16_t kNav = 0x0080;
@@ -45,24 +45,23 @@ TEST_CASE("Sample source preview bypasses only alt play deferral") {
                                                        kPlay, kAlt));
 }
 
-TEST_CASE("Sample preview button mask requires exact alt play press") {
+TEST_CASE("Instrument preview button mask requires exact alt play press") {
   static constexpr uint16_t kPlay = 0x0100;
   static constexpr uint16_t kAlt = 0x0010;
   static constexpr uint16_t kEdit = 0x0020;
 
-  CHECK(IsSamplePreviewButtonMask(kPlay | kAlt, kPlay, kAlt));
-  CHECK_FALSE(IsSamplePreviewButtonMask(kPlay, kPlay, kAlt));
-  CHECK_FALSE(IsSamplePreviewButtonMask(kPlay | kAlt | kEdit, kPlay, kAlt));
+  CHECK(IsInstrumentPreviewButtonMask(kPlay | kAlt, kPlay, kAlt));
+  CHECK_FALSE(IsInstrumentPreviewButtonMask(kPlay, kPlay, kAlt));
+  CHECK_FALSE(IsInstrumentPreviewButtonMask(kPlay | kAlt | kEdit, kPlay, kAlt));
 }
 
-TEST_CASE(
-    "Sample preview combo remains held only while alt and play are down") {
+TEST_CASE("Instrument preview remains held only while alt and play are down") {
   static constexpr uint16_t kPlay = 0x0100;
   static constexpr uint16_t kAlt = 0x0010;
   static constexpr uint16_t kNav = 0x0080;
 
-  CHECK(IsSamplePreviewComboHeld(kPlay | kAlt, kPlay, kAlt));
-  CHECK(IsSamplePreviewComboHeld(kPlay | kAlt | kNav, kPlay, kAlt));
-  CHECK_FALSE(IsSamplePreviewComboHeld(kPlay, kPlay, kAlt));
-  CHECK_FALSE(IsSamplePreviewComboHeld(kAlt, kPlay, kAlt));
+  CHECK(IsInstrumentPreviewComboHeld(kPlay | kAlt, kPlay, kAlt));
+  CHECK(IsInstrumentPreviewComboHeld(kPlay | kAlt | kNav, kPlay, kAlt));
+  CHECK_FALSE(IsInstrumentPreviewComboHeld(kPlay, kPlay, kAlt));
+  CHECK_FALSE(IsInstrumentPreviewComboHeld(kAlt, kPlay, kAlt));
 }

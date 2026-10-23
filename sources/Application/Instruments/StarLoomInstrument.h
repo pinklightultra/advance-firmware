@@ -11,36 +11,36 @@
  * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
-#ifndef _MACRO_INSTRUMENT_H_
-#define _MACRO_INSTRUMENT_H_
+#ifndef _STARLOOM_INSTRUMENT_H_
+#define _STARLOOM_INSTRUMENT_H_
 
+#include "Application/Audio/AudioSample.h"
 #include "Application/Model/Song.h"
 #include "Application/Persistency/PersistenceConstants.h"
-#include "Externals/braids/envelope.h"
-#include "Externals/braids/macro_oscillator.h"
-#include "Externals/braids/quantizer.h"
-#include "Externals/braids/signature_waveshaper.h"
-#include "Externals/braids/vco_jitter_source.h"
 #include "Foundation/Observable.h"
 #include "Foundation/Types/Types.h"
 #include "Foundation/Variables/WatchedVariable.h"
 #include "I_Instrument.h"
+#include "VoiceParameters.h"
 
-class MacroInstrument : public I_Instrument, I_Observer {
+class StarLoomInstrument : public I_Instrument, I_Observer {
 
 public:
-  MacroInstrument();
-  virtual ~MacroInstrument();
+  StarLoomInstrument();
+  virtual ~StarLoomInstrument();
   // I_Instrument implementation
   virtual bool Init();
   virtual bool Start(int channel, unsigned char note, bool trigger = true);
   virtual void Stop(int channel);
-  virtual bool Render(int channel, fixed *buffer, int size, bool updateTick);
+  virtual bool Render(int channel, AudioSample *buffer, int size,
+                      bool updateTick) override;
+  void SetPitchMultiplier(int channel, float multiplier) override;
+  AudioBufferLayout GetAudioBufferLayout(int channel) const override;
   virtual bool IsInitialized();
   virtual bool IsEmpty();
 
-  // TODO: set a real instrument type before shipping macro instruments
-  virtual InstrumentType GetType() { return IT_NONE; };
+  virtual InstrumentType GetType() { return IT_STARLOOM; };
+  bool ShouldAuditionParameterChange(FourCC parameter) const override;
   virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
   virtual int GetTable();
   virtual bool GetTableAutomation();
@@ -56,26 +56,25 @@ public:
 
 protected:
 private:
-  etl::vector<Variable *, 25> variables_;
+  static constexpr size_t BaseVariableCount = 13;
+  static constexpr size_t VariableCount =
+      BaseVariableCount + VoiceParameters::PersistedVariableCount;
 
-  bool running_;
-
-  braids::MacroOscillator osc_;
-  braids::Envelope envelope_;
-  braids::Quantizer quantizer_;
-  braids::SignatureWaveshaper ws_;
-  braids::VcoJitterSource jitter_source_;
-
-  braids::MacroOscillatorShape osc_shape_;
+  etl::vector<Variable *, VariableCount> variables_;
 
   Variable shape_;
   Variable timbre_;
   Variable color_;
-  Variable attack_;
-  Variable decay_;
   Variable signature_;
-
-  uint16_t gain_lp_;
-  uint16_t remain_;
+  Variable mix_;
+  Variable oscillator1PitchOffset_;
+  Variable oscillator2Shape_;
+  Variable oscillator2Timbre_;
+  Variable oscillator2Color_;
+  Variable oscillator2PitchOffset_;
+  Variable interactionMode_;
+  Variable table_;
+  Variable tableAuto_;
+  TableSaveState tableState_;
 };
 #endif

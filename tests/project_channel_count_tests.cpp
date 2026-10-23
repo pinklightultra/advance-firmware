@@ -36,25 +36,6 @@ bool loadSongNode(PersistencyDocument &doc, const char *path) {
   return doc.FirstChild() && strcmp(doc.ElemName(), "SONG") == 0;
 }
 
-bool containsProjectParameterValue(const std::string &xml,
-                                   const char *parameterName,
-                                   const char *value) {
-  const std::string nameNeedle = std::string("NAME=\"") + parameterName + "\"";
-  const size_t namePos = xml.find(nameNeedle);
-  if (namePos == std::string::npos) {
-    return false;
-  }
-
-  const size_t parameterEnd = xml.find("/>", namePos);
-  if (parameterEnd == std::string::npos) {
-    return false;
-  }
-
-  const std::string valueNeedle = std::string("VALUE=\"") + value + "\"";
-  const size_t valuePos = xml.find(valueNeedle, namePos);
-  return valuePos != std::string::npos && valuePos < parameterEnd;
-}
-
 class MemoryFile : public I_File {
 public:
   MemoryFile() : cursor_(0), error_(0), closed_(false) {}
@@ -182,112 +163,109 @@ std::string saveSongContentToXml(Song &song) {
 }
 } // namespace
 
-TEST_CASE("Project audio mode defaults to stereo when missing from persisted "
-          "data") {
+TEST_CASE("Project ignores the obsolete audio mode parameter") {
   BoundaryTestEnvironment env;
-  env.fs.AddFile("/project-missing-audio-mode.xml",
+  env.fs.AddFile("/project-obsolete-audio-mode.xml",
                  "<PICOTRACKER><PROJECT VERSION=\"2.3-Beta3\">"
-                 "<PARAMETER NAME=\"tempo\" VALUE=\"138\"/>"
+                 "<PARAMETER NAME=\"projectaudiomode\" VALUE=\"mono\"/>"
                  "</PROJECT></PICOTRACKER>");
 
   Project project("Demo");
   project.Load("Demo");
 
   PersistencyDocument doc;
-  REQUIRE(loadProjectNode(doc, "/project-missing-audio-mode.xml"));
+  REQUIRE(loadProjectNode(doc, "/project-obsolete-audio-mode.xml"));
 
   project.RestoreContent(&doc);
 
-  Variable *audioMode = project.FindVariable(FourCC::VarProjectAudioMode);
-  REQUIRE(audioMode != nullptr);
-  CHECK(project.GetAudioMode() == kProjectAudioModeStereo);
-  CHECK(audioMode->GetInt() == kProjectAudioModeStereo);
-  CHECK(audioMode->GetString() == "stereo");
-  CHECK(project.song_.GetChannelCount() == SONG_CHANNEL_COUNT_STEREO);
+  CHECK(SONG_CHANNEL_COUNT == 8);
+  CHECK(project.FindVariable("projectaudiomode") == nullptr);
 }
 
-TEST_CASE("Project save persists the audio mode parameter") {
-  Project stereoProject("Stereo");
-  const std::string stereoXml = saveProjectContentToXml(stereoProject);
-  CHECK(containsProjectParameterValue(stereoXml, "projectaudiomode", "stereo"));
-
-  Project monoProject("Mono");
-  Variable *audioMode = monoProject.FindVariable(FourCC::VarProjectAudioMode);
-  REQUIRE(audioMode != nullptr);
-  audioMode->SetInt(kProjectAudioModeMono, false);
-
-  const std::string monoXml = saveProjectContentToXml(monoProject);
-  CHECK(containsProjectParameterValue(monoXml, "projectaudiomode", "mono"));
+TEST_CASE("Project save omits the obsolete audio mode parameter") {
+  Project project("Demo");
+  const std::string xml = saveProjectContentToXml(project);
+  CHECK(xml.find("projectaudiomode") == std::string::npos);
 }
 
-TEST_CASE("Project restore syncs the song channel count from audio mode") {
-  BoundaryTestEnvironment env;
-  env.fs.AddFile("/project-mono-audio-mode.xml",
-                 "<PICOTRACKER><PROJECT VERSION=\"2.3-Beta3\">\n"
-                 "<PARAMETER NAME=\"projectaudiomode\" VALUE=\"mono\"/>"
-                 "</PROJECT></PICOTRACKER>");
-
-  Project project("Mono");
-  project.Load("Mono");
-
-  PersistencyDocument doc;
-  REQUIRE(loadProjectNode(doc, "/project-mono-audio-mode.xml"));
-
-  project.RestoreContent(&doc);
-
-  Variable *audioMode = project.FindVariable(FourCC::VarProjectAudioMode);
-  REQUIRE(audioMode != nullptr);
-  CHECK(project.GetAudioMode() == kProjectAudioModeMono);
-  CHECK(audioMode->GetInt() == kProjectAudioModeMono);
-  CHECK(project.song_.GetChannelCount() == SONG_CHANNEL_COUNT_MONO);
-}
-
-TEST_CASE("Song save and restore preserves stereo row packing") {
+TEST_CASE("Song save and restore preserves eight-channel row packing") {
   Song song;
   song.Reset();
-  song.SetChannelCount(SONG_CHANNEL_COUNT_STEREO);
   song.data_[0] = 0x11;
-  song.data_[SONG_CHANNEL_COUNT_STEREO - 1] = 0x22;
-  song.data_[SONG_CHANNEL_COUNT_STEREO] = 0x33;
+  song.data_[SONG_CHANNEL_COUNT - 1] = 0x22;
+  song.data_[SONG_CHANNEL_COUNT] = 0x33;
+  song.SetMidiInputChannel(0, 1);
+  song.SetMidiInputChannel(SONG_CHANNEL_COUNT - 1, 16);
+  song.SetMidiDefaultProgram(0, MIDI_INPUT_MIN_PROGRAM);
+  song.SetMidiDefaultProgram(MIDI_INPUT_CHANNEL_COUNT - 1,
+                             MIDI_INPUT_MAX_PROGRAM);
 
   const std::string xml = saveSongContentToXml(song);
 
   BoundaryTestEnvironment env;
-  env.fs.AddFile("/song-stereo.xml", xml.c_str());
+  env.fs.AddFile("/song-eight-channel.xml", xml.c_str());
 
   PersistencyDocument doc;
-  REQUIRE(loadSongNode(doc, "/song-stereo.xml"));
+  REQUIRE(loadSongNode(doc, "/song-eight-channel.xml"));
 
   Song restored;
   restored.Reset();
-  restored.SetChannelCount(SONG_CHANNEL_COUNT_STEREO);
   restored.RestoreContent(&doc);
 
   CHECK(restored.data_[0] == 0x11);
-  CHECK(restored.data_[SONG_CHANNEL_COUNT_STEREO - 1] == 0x22);
-  CHECK(restored.data_[SONG_CHANNEL_COUNT_STEREO] == 0x33);
+  CHECK(restored.data_[SONG_CHANNEL_COUNT - 1] == 0x22);
+  CHECK(restored.data_[SONG_CHANNEL_COUNT] == 0x33);
+  CHECK(restored.GetMidiInputChannel(0) == 1);
+  CHECK(restored.GetMidiInputChannel(SONG_CHANNEL_COUNT - 1) == 16);
+  CHECK(restored.GetMidiDefaultProgram(0) == MIDI_INPUT_MIN_PROGRAM);
+  CHECK(restored.GetMidiDefaultProgram(MIDI_INPUT_CHANNEL_COUNT - 1) ==
+        MIDI_INPUT_MAX_PROGRAM);
 }
 
-TEST_CASE("Song save and restore preserves mono-only channel columns") {
+TEST_CASE("Song MIDI input assignments provide a reserved polyphony pool") {
   Song song;
   song.Reset();
-  song.SetChannelCount(SONG_CHANNEL_COUNT_MONO);
-  song.data_[SONG_CHANNEL_COUNT_MONO - 1] = 0x44;
-  song.data_[SONG_CHANNEL_COUNT_MONO] = 0x55;
+  song.SetMidiInputChannel(1, 1);
+  song.SetMidiInputChannel(3, 2);
+  song.SetMidiInputChannel(6, 1);
 
-  const std::string xml = saveSongContentToXml(song);
+  CHECK(song.FindAvailableMidiInputSongChannel(0, 0) == 1);
+  CHECK(song.FindAvailableMidiInputSongChannel(0, 1U << 1) == 6);
+  CHECK(song.FindAvailableMidiInputSongChannel(0, (1U << 1) | (1U << 6)) == -1);
+  CHECK(song.FindAvailableMidiInputSongChannel(1, 0) == 3);
+  CHECK(song.FindAvailableMidiInputSongChannel(2, 0) == -1);
+}
 
-  BoundaryTestEnvironment env;
-  env.fs.AddFile("/song-mono.xml", xml.c_str());
+TEST_CASE("Song rejects invalid MIDI input assignments") {
+  Song song;
+  song.Reset();
 
-  PersistencyDocument doc;
-  REQUIRE(loadSongNode(doc, "/song-mono.xml"));
+  song.SetMidiInputChannel(2, MIDI_INPUT_CHANNEL_COUNT + 1);
 
-  Song restored;
-  restored.Reset();
-  restored.SetChannelCount(SONG_CHANNEL_COUNT_MONO);
-  restored.RestoreContent(&doc);
+  CHECK_FALSE(song.IsMidiInputChannelAssigned(2));
+}
 
-  CHECK(restored.data_[SONG_CHANNEL_COUNT_MONO - 1] == 0x44);
-  CHECK(restored.data_[SONG_CHANNEL_COUNT_MONO] == 0x55);
+TEST_CASE("Song MIDI default programs reset and reject invalid programs") {
+  Song song;
+  song.Reset();
+
+  for (int midiChannel = 0; midiChannel < MIDI_INPUT_CHANNEL_COUNT;
+       midiChannel++) {
+    CHECK(song.GetMidiDefaultProgram(midiChannel) ==
+          MIDI_INPUT_DEFAULT_PROGRAM);
+    CHECK(song.GetMidiDefaultInstrumentIndex(midiChannel) == 0);
+  }
+
+  song.SetMidiDefaultProgram(4, 0x2A);
+  CHECK(song.GetMidiDefaultProgram(4) == 0x2A);
+  CHECK(song.GetMidiDefaultInstrumentIndex(4) == 0x2A);
+
+  song.SetMidiDefaultProgram(4, MIDI_INPUT_MAX_PROGRAM);
+  CHECK(song.GetMidiDefaultInstrumentIndex(4) == MAX_INSTRUMENT_COUNT - 1);
+
+  song.SetMidiDefaultProgram(4, MIDI_INPUT_MIN_PROGRAM - 1);
+  CHECK(song.GetMidiDefaultProgram(4) == MIDI_INPUT_DEFAULT_PROGRAM);
+
+  song.SetMidiDefaultProgram(4, MIDI_INPUT_MAX_PROGRAM + 1);
+  CHECK(song.GetMidiDefaultProgram(4) == MIDI_INPUT_DEFAULT_PROGRAM);
 }

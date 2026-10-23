@@ -69,8 +69,11 @@ TickType_t g_usbHostAttachTick = 0;
 bool g_usbHostEnumerationTimedOut = false;
 bool g_usbHostStartupFailed = false;
 
-DWTProfileStats gUsbMidiQueueProfile = {"usb midi q", true,
-                                        kProfileOrderUsbMidiQueue};
+DWTProfileStats gUsbMidiQueueProfile = {
+    .name_ = "usb midi q",
+    .printLast_ = true,
+    .displayOrder_ = kProfileOrderUsbMidiQueue,
+};
 
 bool isApcMiniMk2(uint16_t vendorId, uint16_t productId) {
   return (vendorId == kAkaiVendorId) && (productId == kApcMiniMk2ProductId);
@@ -279,8 +282,7 @@ bool pumpNextItemHost() {
 } // namespace
 
 void sendUSBMidiMessage(uint8_t const *midicmd, uint8_t len) {
-  ScopedDWTProfile usbMidiQueueProfile(&gUsbMidiQueueProfile, 1,
-                                       configTICK_RATE_HZ, 1);
+  ScopedDWTProfile usbMidiQueueProfile(&gUsbMidiQueueProfile);
   if ((midicmd == nullptr) || (len == 0u)) {
     return;
   }

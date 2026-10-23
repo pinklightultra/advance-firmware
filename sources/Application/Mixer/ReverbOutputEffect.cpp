@@ -57,6 +57,10 @@ void ReverbOutputEffect::Reset() {
   tailFramesRemaining_ = 0;
 }
 
+bool ReverbOutputEffect::IsTailActive() const {
+  return tailFramesRemaining_ > 0;
+}
+
 bool ReverbOutputEffect::HasAudibleInput(const AudioSample *input,
                                          int32_t sampleCount) const {
   const int32_t valueCount = sampleCount * 2;

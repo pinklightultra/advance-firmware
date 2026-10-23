@@ -22,11 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-Song::Song()
-    : Persistent("SONG"), chain_(), phrase_(),
-      channelCount_(SONG_CHANNEL_COUNT_STEREO) {
-  Reset();
-};
+Song::Song() : Persistent("SONG"), chain_(), phrase_() { Reset(); };
 
 Song::~Song(){};
 
@@ -34,18 +30,22 @@ void Song::Reset() {
   for (int i = 0; i < SONG_CHANNEL_COUNT * SONG_ROW_COUNT; i++) {
     data_[i] = EMPTY_SONG_VALUE;
   }
+  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    midiInputChannels_[i] = MIDI_INPUT_CHANNEL_NONE;
+  }
+  for (int i = 0; i < MIDI_INPUT_CHANNEL_COUNT; i++) {
+    midiDefaultPrograms_[i] = MIDI_INPUT_DEFAULT_PROGRAM;
+  }
   chain_.Reset();
   phrase_.Reset();
 }
 
-void Song::SetChannelCount(int channelCount) {
-  NAssert(channelCount > 0);
-  NAssert(channelCount <= SONG_CHANNEL_COUNT);
-  channelCount_ = channelCount;
-}
-
 void Song::SaveContent(tinyxml2::XMLPrinter *printer) {
-  saveHexBuffer(printer, "SONG", data_, SONG_ROW_COUNT * channelCount_);
+  saveHexBuffer(printer, "SONG", data_, SONG_ROW_COUNT * SONG_CHANNEL_COUNT);
+  saveHexBuffer(printer, "MIDIINPUTCHANNELS", midiInputChannels_,
+                SONG_CHANNEL_COUNT);
+  saveHexBuffer(printer, "MIDIDEFAULTPROGRAMS", midiDefaultPrograms_,
+                MIDI_INPUT_CHANNEL_COUNT);
   saveHexBuffer(printer, "CHAINS", chain_.data_,
                 CHAIN_COUNT * PHRASES_PER_CHAIN);
   saveHexBuffer(printer, "TRANSPOSES", chain_.transpose_,
@@ -70,6 +70,22 @@ void Song::RestoreContent(PersistencyDocument *doc) {
   while (elem) {
     if (!strcmp("SONG", doc->ElemName())) {
       restoreHexBuffer(doc, data_);
+    };
+    if (!strcmp("MIDIINPUTCHANNELS", doc->ElemName())) {
+      restoreHexBuffer(doc, midiInputChannels_);
+      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+        if (midiInputChannels_[i] > MIDI_INPUT_CHANNEL_COUNT) {
+          midiInputChannels_[i] = MIDI_INPUT_CHANNEL_NONE;
+        }
+      }
+    };
+    if (!strcmp("MIDIDEFAULTPROGRAMS", doc->ElemName())) {
+      restoreHexBuffer(doc, midiDefaultPrograms_);
+      for (int i = 0; i < MIDI_INPUT_CHANNEL_COUNT; i++) {
+        if (midiDefaultPrograms_[i] > MIDI_INPUT_MAX_PROGRAM) {
+          midiDefaultPrograms_[i] = MIDI_INPUT_DEFAULT_PROGRAM;
+        }
+      }
     };
     if (!strcmp("CHAINS", doc->ElemName())) {
       restoreHexBuffer(doc, chain_.data_);
@@ -103,7 +119,7 @@ void Song::RestoreContent(PersistencyDocument *doc) {
   // Restore chain & phrase allocation table
 
   unsigned char *data = data_;
-  for (int i = 0; i < SONG_ROW_COUNT * channelCount_; i++) {
+  for (int i = 0; i < SONG_ROW_COUNT * SONG_CHANNEL_COUNT; i++) {
     if (*data != 0xFF) {
       if (*data < 0x80) {
         chain_.SetUsed(*data);
@@ -155,3 +171,62 @@ void Song::RestoreContent(PersistencyDocument *doc) {
     };
   }
 };
+
+void Song::SetMidiInputChannel(int songChannel, uint8_t midiChannel) {
+  if (songChannel < 0 || songChannel >= SONG_CHANNEL_COUNT) {
+    return;
+  }
+
+  midiInputChannels_[songChannel] = midiChannel <= MIDI_INPUT_CHANNEL_COUNT
+                                        ? midiChannel
+                                        : MIDI_INPUT_CHANNEL_NONE;
+}
+
+uint8_t Song::GetMidiInputChannel(int songChannel) const {
+  if (songChannel < 0 || songChannel >= SONG_CHANNEL_COUNT) {
+    return MIDI_INPUT_CHANNEL_NONE;
+  }
+  return midiInputChannels_[songChannel];
+}
+
+bool Song::IsMidiInputChannelAssigned(int songChannel) const {
+  return GetMidiInputChannel(songChannel) != MIDI_INPUT_CHANNEL_NONE;
+}
+
+int Song::FindAvailableMidiInputSongChannel(
+    uint8_t midiChannel, uint16_t unavailableChannelMask) const {
+  if (midiChannel >= MIDI_INPUT_CHANNEL_COUNT) {
+    return -1;
+  }
+
+  const uint8_t assignment = static_cast<uint8_t>(midiChannel + 1);
+  for (int songChannel = 0; songChannel < SONG_CHANNEL_COUNT; songChannel++) {
+    const uint16_t channelMask =
+        static_cast<uint16_t>(1U << static_cast<uint16_t>(songChannel));
+    if (midiInputChannels_[songChannel] == assignment &&
+        (unavailableChannelMask & channelMask) == 0) {
+      return songChannel;
+    }
+  }
+  return -1;
+}
+
+void Song::SetMidiDefaultProgram(int midiChannel, uint8_t program) {
+  if (midiChannel < 0 || midiChannel >= MIDI_INPUT_CHANNEL_COUNT) {
+    return;
+  }
+
+  midiDefaultPrograms_[midiChannel] =
+      program <= MIDI_INPUT_MAX_PROGRAM ? program : MIDI_INPUT_DEFAULT_PROGRAM;
+}
+
+uint8_t Song::GetMidiDefaultProgram(int midiChannel) const {
+  if (midiChannel < 0 || midiChannel >= MIDI_INPUT_CHANNEL_COUNT) {
+    return MIDI_INPUT_DEFAULT_PROGRAM;
+  }
+  return midiDefaultPrograms_[midiChannel];
+}
+
+uint8_t Song::GetMidiDefaultInstrumentIndex(int midiChannel) const {
+  return GetMidiDefaultProgram(midiChannel);
+}

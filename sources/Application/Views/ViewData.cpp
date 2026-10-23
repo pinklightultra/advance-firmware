@@ -52,7 +52,7 @@ void ViewData::Load(Project *project) {
 }
 
 unsigned char ViewData::UpdateSongChain(int offset) {
-  const int channelCount = song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   unsigned char *c =
       song_->data_ + songX_ + channelCount * (songOffset_ + songY_);
   updateData(c, offset, CHAIN_COUNT - 1, false);
@@ -60,7 +60,7 @@ unsigned char ViewData::UpdateSongChain(int offset) {
 }
 
 void ViewData::SetSongChain(unsigned char value) {
-  const int channelCount = song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   unsigned char *c =
       song_->data_ + songX_ + channelCount * (songOffset_ + songY_);
   *c = value;
@@ -128,7 +128,7 @@ void ViewData::NotifySongOffsetChanged(uint32_t previousOffset) {
 }
 
 void ViewData::checkSongBoundaries() {
-  const int channelCount = song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   if (songX_ > channelCount - 1)
     songX_ = channelCount - 1;
   if (songX_ < 0)
@@ -150,7 +150,7 @@ void ViewData::checkSongBoundaries() {
 }
 
 unsigned char *ViewData::GetCurrentSongPointer() {
-  const int channelCount = song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   return song_->data_ + songX_ + channelCount * (songOffset_ + songY_);
 };
 

@@ -139,7 +139,7 @@ private:
   AnalogOscillatorShape shape_;
   AnalogOscillatorShape previous_shape_;
 
-  static RenderFn fn_table_[];
+  static const RenderFn fn_table_[];
 
   //  DISALLOW_COPY_AND_ASSIGN(AnalogOscillator);
 };

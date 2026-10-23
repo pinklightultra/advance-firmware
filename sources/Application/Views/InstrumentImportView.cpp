@@ -12,14 +12,17 @@
  */
 
 #include "InstrumentImportView.h"
-#include "Application/AppWindow.h"
+#include "Application/Instruments/AdvanceFM6/FM6Dx7Patch.h"
+#include "Application/Instruments/FM6Instrument.h"
 #include "Application/Instruments/I_Instrument.h"
 #include "Application/Persistency/PersistencyService.h"
+#include "Application/Player/Player.h"
 #include "Application/Views/BaseClasses/BrowserEntrySort.h"
 #include "Application/Views/BaseClasses/BrowserPathUtils.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Externals/etl/include/etl/to_string.h"
 #include "ModalDialogs/MessageBox.h"
+#include "System/FileSystem/I_File.h"
 #include "System/FileSystem/PathUtils.h"
 #include <cstring>
 #include <memory>
@@ -53,15 +56,78 @@ getCurrentEntry(const etl::ivector<FileSystemEntry> &entries,
 }
 
 bool resolveEntryPath(const FileSystemPath::PathString &currentDir,
-                      const FileSystemEntry &entry,
+                      const FileSystemEntry &entry, const char *rootDirectory,
                       FileSystemPath::PathString &resolvedPath) {
-  if (entry.name == "..") {
+  if (entry.name == BrowserPathUtils::kParentDirectoryName) {
     return BrowserPathUtils::ResolveParentDirectory(
-        currentDir.c_str(), INSTRUMENTS_DIR, resolvedPath);
+        currentDir.c_str(), rootDirectory, resolvedPath);
   }
 
   return FileSystemPath::JoinPath(currentDir.c_str(), entry.name.c_str(),
                                   resolvedPath);
+}
+
+// Whole-file staging buffer so a candidate .syx is read from the SD card in
+// one go; its 32 voice records back the virtual patch listing until the view
+// leaves it.
+#if defined(HOST_TEST)
+#define DX7_STAGING_ATTRIBUTES __attribute__((aligned(32)))
+#else
+#define DX7_STAGING_ATTRIBUTES                                                 \
+  __attribute__((section(".SDRAM1_NC"))) __attribute__((aligned(32)))
+#endif
+
+static etl::array<uint8_t, fm6::Dx7BankSysexSize> stagedSysex
+    DX7_STAGING_ATTRIBUTES;
+
+#undef DX7_STAGING_ATTRIBUTES
+
+constexpr const char *kSysexBackName = "Back";
+
+const uint8_t *stagedVoiceRecord(size_t patchIndex) {
+  return stagedSysex.data() + fm6::Dx7BankHeaderSize +
+         (patchIndex * fm6::Dx7PatchDataSize);
+}
+
+// Reads a whole bank .syx into stagedSysex and validates it. Nothing else is
+// touched, so a bad file never disturbs the instrument.
+fm6::Dx7BankParseResult readAndValidateSysexFile(const char *path) {
+  auto file = FileSystem::GetInstance()->Open(path, "r");
+  if (!file) {
+    return fm6::Dx7BankParseResult::ReadError;
+  }
+  size_t total = 0;
+  while (total < stagedSysex.size()) {
+    const int read = file->Read(stagedSysex.data() + total,
+                                static_cast<int>(stagedSysex.size() - total));
+    if (read < 0) {
+      return fm6::Dx7BankParseResult::ReadError;
+    }
+    if (read == 0) {
+      break;
+    }
+    total += static_cast<size_t>(read);
+  }
+  uint8_t extra = 0;
+  const int extraRead = file->Read(&extra, 1);
+  if (extraRead < 0 || file->Error() != 0) {
+    return fm6::Dx7BankParseResult::ReadError;
+  }
+  if (total != stagedSysex.size() || extraRead > 0) {
+    return fm6::Dx7BankParseResult::BadSize;
+  }
+  return fm6::ValidateDx7BankSysex(stagedSysex);
+}
+
+const char *parseResultMessage(fm6::Dx7BankParseResult result) {
+  switch (result) {
+  case fm6::Dx7BankParseResult::BadChecksum:
+    return "Invalid DX7 checksum";
+  case fm6::Dx7BankParseResult::ReadError:
+    return "Could not read file";
+  default:
+    return "Invalid DX7 bank file";
+  }
 }
 
 bool isDirectoryListTruncated(FileSystem *fs) {
@@ -79,6 +145,9 @@ void showDirectoryListTruncatedDialog(View &view) {
 
 } // namespace
 
+InstrumentImportView::Mode InstrumentImportView::mode_ =
+    InstrumentImportView::Mode::Instrument;
+
 InstrumentImportView::InstrumentImportView(GUIWindow &w, ViewData *viewData)
     : ScreenView(w, viewData), fileEntries_(GetInstrumentBrowserFileEntries()) {
   toInstrID_ = viewData_->currentInstrumentID_;
@@ -86,22 +155,48 @@ InstrumentImportView::InstrumentImportView(GUIWindow &w, ViewData *viewData)
 
 InstrumentImportView::~InstrumentImportView() {}
 
+void InstrumentImportView::SetMode(Mode mode) { mode_ = mode; }
+
 void InstrumentImportView::Reset() {
   topIndex_ = 0;
   currentIndex_ = 0;
   selected_ = 0;
   toInstrID_ = 0;
+  browsingSysex_ = false;
+  previewKeyHeld_ = false;
   currentDir_.clear();
   fileEntries_.clear();
 }
 
 void InstrumentImportView::ProcessButtonMask(unsigned short mask,
                                              bool pressed) {
-  if (!pressed)
+  if (!pressed) {
+    if (previewKeyHeld_ && !(mask & EPBM_PLAY)) {
+      stopPatchPreview();
+    }
     return;
+  }
 
   if (mask & EPBM_PLAY) {
-    // TODO: audition instrument by temporarily loading it and playing a note
+    const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+    if (browsingSysex_) {
+      if (entry != nullptr && entry->type == PFT_FILE && currentIndex_ > 0) {
+        startPatchPreview(stagedVoiceRecord(currentIndex_ - 1));
+      }
+      return;
+    }
+    FileSystemPath::PathString instrumentPath;
+    if (entry != nullptr && (mask & EPBM_ALT) && entry->type == PFT_FILE &&
+        mode_ == Mode::Instrument) {
+      if (!resolveEntryPath(currentDir_, *entry, INSTRUMENTS_DIR,
+                            instrumentPath)) {
+        return;
+      }
+      Trace::Log("INSTRUMENTIMPORT", "SHIFT play - import");
+      importInstrument(instrumentPath.c_str());
+    } else {
+      // TODO: audition instrument by temporarily loading it and playing a note
+    }
 
     // handle moving up and down the file list
   } else if (mask & EPBM_UP) {
@@ -109,6 +204,7 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
   } else if (mask & EPBM_DOWN) {
     warpToNextInstrument(false);
   } else if ((mask & EPBM_LEFT) && (mask & EPBM_NAV)) {
+    stopPatchPreview();
     ViewType vt = VT_INSTRUMENT;
     ViewEvent ve(VET_SWITCH_VIEW, &vt);
     SetChanged();
@@ -118,12 +214,33 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
     if (mask & EPBM_ENTER) {
       auto fs = FileSystem::GetInstance();
       const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
-      FileSystemPath::PathString selectedPath;
       if (entry == nullptr) {
         return;
       }
 
-      if (!resolveEntryPath(currentDir_, *entry, selectedPath)) {
+      if (browsingSysex_) {
+        if (entry->name == kSysexBackName) {
+          leaveSysexListing();
+        } else if (currentIndex_ > 0) {
+          commitSysexPatch(currentIndex_ - 1);
+        }
+        return;
+      }
+
+      const bool dx7File = mode_ != Mode::Instrument;
+      FileSystemPath::PathString selectedPath;
+      const char *rootDirectory = dx7File ? "/" : INSTRUMENTS_DIR;
+      if (!resolveEntryPath(currentDir_, *entry, rootDirectory, selectedPath)) {
+        // In Dx7Patch mode (entered from the FM6 preset browser) ".." at the
+        // filesystem root has no parent to resolve; it returns to the preset
+        // browser instead.
+        if (mode_ == Mode::Dx7Patch && entry->name == "..") {
+          stopPatchPreview();
+          ViewType vt = VT_FM6_PRESETS;
+          ViewEvent ve(VET_SWITCH_VIEW, &vt);
+          SetChanged();
+          NotifyObservers(&ve);
+        }
         return;
       }
 
@@ -131,6 +248,8 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
         setCurrentFolder(fs, selectedPath.c_str());
         isDirty_ = true;
         topIndex_ = 0;
+      } else if (dx7File) {
+        enterSysexFile(selectedPath.c_str());
       } else {
         importInstrument(selectedPath.c_str());
       }
@@ -141,11 +260,12 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
 void InstrumentImportView::DrawView() {
   Clear();
 
+  // Draw title
+  setTitle(etl::string<23>(mode_ != Mode::Instrument ? "Import DX7 Patch"
+                                                     : "Import Instrument"));
+
   GUITextProperties props;
   GUIPoint pos = GetTitlePosition();
-
-  // Draw title
-  setTitle(etl::string<23>("Import Instrument"));
 
   SetColor(CD_NORMAL);
 
@@ -164,9 +284,28 @@ void InstrumentImportView::DrawView() {
 
     const auto &entry = fileEntries_[i];
     if (entry.type == PFT_DIR) {
-      DrawString(x, y, "[", props);
-      DrawString(x + 1, y, entry.name.c_str(), props);
-      DrawString(x + entry.name.size() + 1, y, "]", props);
+      if (entry.name == BrowserPathUtils::kParentDirectoryName) {
+        if (mode_ == Mode::Dx7Patch && currentDir_ == "/") {
+          DrawString(x, y, "[System]", props);
+        } else {
+          DrawString(x, y, BrowserPathUtils::kParentDirectoryDisplayName,
+                     props);
+        }
+      } else {
+        DrawString(x, y, "[", props);
+        DrawString(x + 1, y, entry.name.c_str(), props);
+        DrawString(x + entry.name.size() + 1, y, "]", props);
+      }
+    } else if (browsingSysex_) {
+      // Hex index drawn in the row-label accent colour, then the patch name,
+      // then the source bank name drawn at a fixed column so the
+      // bank names line up regardless of patch-name length. Index 0 is the
+      // "SDCard" dir entry, so preset program == list index - 1.
+      SetColor(CD_ACCENT);
+      DrawString(x, y, entry.name.c_str(), props);
+      const size_t prefixLen = 3; // "0x "
+      SetColor(i == currentIndex_ ? CD_HILITE2 : CD_NORMAL);
+      DrawString(x + prefixLen, y, entry.name.c_str() + prefixLen, props);
     } else {
       DrawString(x, y, entry.name.c_str(), props);
     }
@@ -177,8 +316,11 @@ void InstrumentImportView::DrawView() {
 void InstrumentImportView::OnPlayerUpdate(PlayerEventType, unsigned int tick) {}
 
 void InstrumentImportView::OnFocus() {
+  toInstrID_ = viewData_->currentInstrumentID_;
+  browsingSysex_ = false;
+  previewKeyHeld_ = false;
   auto fs = FileSystem::GetInstance();
-  setCurrentFolder(fs, INSTRUMENTS_DIR);
+  setCurrentFolder(fs, mode_ != Mode::Instrument ? "/" : INSTRUMENTS_DIR);
 }
 
 void InstrumentImportView::warpToNextInstrument(bool goUp) {
@@ -344,15 +486,116 @@ void InstrumentImportView::onImportSuccess(View &, ModalView &dialog) {
   NotifyObservers(&ve);
 }
 
+void InstrumentImportView::enterSysexFile(const char *path) {
+  const fm6::Dx7BankParseResult result = readAndValidateSysexFile(path);
+  Trace::Log("DX7PATCHIMPORT", "Open %s result %d", path,
+             static_cast<int>(result));
+  if (result != fm6::Dx7BankParseResult::Ok) {
+    MessageBox *dialog =
+        MessageBox::Create(*this, parseResultMessage(result), MBBF_OK);
+    DoModal(dialog);
+    return;
+  }
+
+  // List the staged bank's 32 patches as a virtual directory.
+  fileEntries_.clear();
+  FileSystemEntry parent;
+  parent.name = kSysexBackName;
+  parent.type = PFT_DIR;
+  fileEntries_.push_back(parent);
+  fm6::Dx7VoiceName voiceName{};
+  for (size_t patchIndex = 0; patchIndex < fm6::Dx7BankPatchCount;
+       ++patchIndex) {
+    fm6::ExtractDx7VoiceName(stagedVoiceRecord(patchIndex), patchIndex,
+                             voiceName);
+    FileSystemEntry entry;
+    char name[16];
+    npf_snprintf(name, sizeof(name), "%02X %s",
+                 static_cast<unsigned>(patchIndex + 1), voiceName.data());
+    entry.name = name;
+    entry.type = PFT_FILE;
+    fileEntries_.push_back(entry);
+  }
+  browsingSysex_ = true;
+  currentIndex_ = 0;
+  topIndex_ = 0;
+  isDirty_ = true;
+}
+
+void InstrumentImportView::leaveSysexListing() {
+  stopPatchPreview();
+  browsingSysex_ = false;
+  setCurrentFolder(FileSystem::GetInstance(), currentDir_.c_str());
+}
+
+void InstrumentImportView::commitSysexPatch(size_t patchIndex) {
+  stopPatchPreview();
+  I_Instrument *instrument =
+      viewData_->project_->GetInstrumentBank()->GetInstrument(toInstrID_);
+  if (instrument == nullptr || instrument->GetType() != IT_FM6) {
+    MessageBox *dialog =
+        MessageBox::Create(*this, "Not a FM6 instrument", MBBF_OK);
+    DoModal(dialog);
+    return;
+  }
+  FM6Instrument *fm6Instrument = static_cast<FM6Instrument *>(instrument);
+  fm6Instrument->ImportDx7Patch(stagedVoiceRecord(patchIndex));
+  fm6::Dx7VoiceName voiceName{};
+  fm6::ExtractDx7VoiceName(stagedVoiceRecord(patchIndex), patchIndex,
+                           voiceName);
+  fm6Instrument->SetName(voiceName.data());
+  ViewType viewType = VT_INSTRUMENT;
+  ViewEvent event(VET_SWITCH_VIEW, &viewType);
+  SetChanged();
+  NotifyObservers(&event);
+}
+
+void InstrumentImportView::startPatchPreview(const uint8_t *record) {
+  I_Instrument *instrument =
+      viewData_->project_->GetInstrumentBank()->GetInstrument(toInstrID_);
+  if (instrument == nullptr || instrument->GetType() != IT_FM6 ||
+      viewData_->song_ == nullptr) {
+    return;
+  }
+  if (previewKeyHeld_) {
+    stopPatchPreview();
+  }
+  const int channelCount = SONG_CHANNEL_COUNT;
+  if (channelCount <= 0) {
+    return;
+  }
+  static_cast<FM6Instrument *>(instrument)->SetPreviewPatch(record);
+  previewChannel_ = static_cast<unsigned short>(channelCount - 1);
+  Player::GetInstance()->PlayNote(static_cast<unsigned short>(toInstrID_),
+                                  previewChannel_, 60, 0x7F);
+  previewKeyHeld_ = true;
+}
+
+void InstrumentImportView::stopPatchPreview() {
+  if (!previewKeyHeld_) {
+    return;
+  }
+  Player::GetInstance()->StopNote(static_cast<unsigned short>(toInstrID_),
+                                  previewChannel_);
+  I_Instrument *instrument =
+      viewData_->project_->GetInstrumentBank()->GetInstrument(toInstrID_);
+  if (instrument != nullptr && instrument->GetType() == IT_FM6) {
+    static_cast<FM6Instrument *>(instrument)->ClearPreviewPatch();
+  }
+  previewKeyHeld_ = false;
+}
+
 void InstrumentImportView::setCurrentFolder(FileSystem *fs, const char *name) {
   if (fs == nullptr || name == nullptr) {
     return;
   }
 
+  const bool importingDx7Patch = mode_ != Mode::Instrument;
+  const char *rootDirectory = importingDx7Patch ? "/" : INSTRUMENTS_DIR;
   FileSystemPath::PathString nextDir;
-  if (std::strcmp(name, "..") == 0) {
+  if (std::strcmp(name, BrowserPathUtils::kParentDirectoryName) == 0) {
     if (!BrowserPathUtils::ResolveParentDirectory(currentDir_.c_str(),
-                                                  INSTRUMENTS_DIR, nextDir)) {
+                                                  rootDirectory, nextDir)) {
       return;
     }
   } else if (FileSystemPath::IsAbsolutePath(name)) {
@@ -367,8 +610,10 @@ void InstrumentImportView::setCurrentFolder(FileSystem *fs, const char *name) {
   }
 
   fileEntries_.clear();
-  const bool listed = fs->ListDirectory(nextDir.c_str(), &fileEntries_,
-                                        INSTRUMENT_FILE_EXTENSION, false);
+  const bool listed = fs->ListDirectory(
+      nextDir.c_str(), &fileEntries_,
+      importingDx7Patch ? DX7_BANK_FILE_EXTENSION : INSTRUMENT_FILE_EXTENSION,
+      false);
   const bool truncated = isDirectoryListTruncated(fs);
   if (!listed && !truncated) {
     Trace::Error("INSTRUMENTIMPORT: Failed to list %s", nextDir.c_str());
@@ -385,8 +630,21 @@ void InstrumentImportView::setCurrentFolder(FileSystem *fs, const char *name) {
   currentIndex_ = 0;
   topIndex_ = 0;
   isDirty_ = true;
-  BrowserPathUtils::PrependParentEntry(currentDir_.c_str(), INSTRUMENTS_DIR,
-                                       &fileEntries_);
+  if (!BrowserPathUtils::PrependParentEntry(currentDir_.c_str(), rootDirectory,
+                                            &fileEntries_) &&
+      mode_ == Mode::Dx7Patch) {
+    // At the filesystem root ".." leads back to the FM6 preset browser (this
+    // mode is only ever entered from there).
+    if (fileEntries_.full()) {
+      fileEntries_.pop_back();
+    }
+    FileSystemEntry parentEntry;
+    parentEntry.name = "..";
+    parentEntry.type = PFT_DIR;
+    parentEntry.size = 0;
+    parentEntry.isHidden = false;
+    fileEntries_.insert(fileEntries_.begin(), parentEntry);
+  }
   Trace::Debug("loaded %d files from %s", fileEntries_.size(),
                currentDir_.c_str());
 }

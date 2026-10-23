@@ -44,18 +44,25 @@ public:
   bool RenameLoadedSample(
       const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &oldName,
       const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &newName);
-  // Import a sample into the project, then append it to the pool only after
-  // the backing sample data has been fully loaded. Returns the new sample
-  // index or -1 on error.
-  int ImportSample(const char *name, const char *projectName,
-                   int targetChannelCount);
+  // Compute the filename an import of sourcePath would be stored under in the
+  // project sample directory, applying the same truncation as ImportSample.
+  // Returns false if no valid filename could be extracted.
+  static bool GetProjectSampleFilename(
+      const char *sourcePath,
+      etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &projectSampleFilename);
+  // Returned by ImportSample() when the pool already holds a sample with the
+  // filename the import would be stored under.
+  static constexpr int ImportError = -1;
+  static constexpr int ImportDuplicateNameError = -2;
+  // Returns the new sample index or one of above error codes
+  int ImportSample(const char *name, const char *projectName);
 
   int LoadProjectSample(const char *path);
   void PurgeSample(int i, const char *projectName);
   virtual bool CheckSampleFits(int sampleSize) = 0;
   virtual uint32_t GetAvailableSampleStorageSpace() = 0;
   virtual bool unloadSample(uint32_t i) = 0;
-  int8_t ReloadSample(uint8_t index, const char *name);
+  int32_t ReloadSample(uint8_t index, const char *name);
 
 protected:
   virtual void updateStatus(uint32_t current, uint32_t total,

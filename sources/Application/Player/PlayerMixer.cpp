@@ -21,6 +21,7 @@
 #include "SyncMaster.h"
 #include "System/Console/Trace.h"
 #include "System/System/System.h"
+#include "config/MemorySections.h"
 #include <cstdint>
 #include <math.h>
 #include <stdlib.h>
@@ -142,6 +143,7 @@ etl::array<stereosample, SONG_CHANNEL_COUNT> *PlayerMixer::GetMixerLevels() {
   return &mixerLevels_;
 }
 
+PICOTRACKER_FAST_CODE("player_mixer_update")
 void PlayerMixer::Update(Observable &o, I_ObservableData *d) {
 
   // Notifies the player so that pattern data is processed
@@ -255,6 +257,19 @@ bool PlayerMixer::IsPlaying() {
   }
 
   return false;
+}
+
+bool PlayerMixer::HasTail() {
+  // File and record streamers are deliberately excluded: they represent
+  // preview or monitoring states, not sound released by the sequencer.
+  for (int i = 0; i < SONG_CHANNEL_COUNT; ++i) {
+    if (channel_[i]->GetInstrument() != nullptr) {
+      return true;
+    }
+  }
+
+  MixerService *mixerService = MixerService::GetInstance();
+  return mixerService != nullptr && mixerService->HasOutputEffectTail();
 }
 
 void PlayerMixer::OnPlayerStart(MixerServiceMode msmMode) {

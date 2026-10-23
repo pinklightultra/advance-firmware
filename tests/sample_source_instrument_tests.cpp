@@ -13,6 +13,7 @@
 #include "Application/Instruments/SampleSourceInstrument.h"
 #undef private
 #include "Application/Audio/AudioSample.h"
+#include "Application/Player/SyncMaster.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -193,7 +194,6 @@ void forcePlaybackSpeed(float speed) {
   sampleSourceRenderParams &rp = SampleSourceInstrument::renderParams_[0];
   rp.baseSpeed_ = speed;
   rp.speed_ = speed;
-  rp.krateCount_ = 0;
 }
 
 constexpr AudioSample pcmToAudioSample(int pcm) {
@@ -285,6 +285,28 @@ AudioSample expectedHermiteSample(const int16_t *samples, int baseFrame,
                             pcmToAudioSample(samples[frame0]),
                             pcmToAudioSample(samples[frame1]),
                             pcmToAudioSample(samples[frame2]), fraction);
+}
+
+AudioSample expectedHermiteChannelSample(const int16_t *samples,
+                                         int channelCount, int channelIndex,
+                                         int baseFrame, float fraction,
+                                         int firstFrame, int lastFrame,
+                                         TestPlaybackTopology topology) {
+  const int frameM1 =
+      resolveFrameIndex(baseFrame - 1, firstFrame, lastFrame, topology);
+  const int frame0 =
+      resolveFrameIndex(baseFrame, firstFrame, lastFrame, topology);
+  const int frame1 =
+      resolveFrameIndex(baseFrame + 1, firstFrame, lastFrame, topology);
+  const int frame2 =
+      resolveFrameIndex(baseFrame + 2, firstFrame, lastFrame, topology);
+
+  return hermiteInterpolate(
+      pcmToAudioSample(samples[frameM1 * channelCount + channelIndex]),
+      pcmToAudioSample(samples[frame0 * channelCount + channelIndex]),
+      pcmToAudioSample(samples[frame1 * channelCount + channelIndex]),
+      pcmToAudioSample(samples[frame2 * channelCount + channelIndex]),
+      fraction);
 }
 
 void fillOscillatorComparisonSamples(std::array<int16_t, 4096> &exactSamples,
@@ -1013,6 +1035,41 @@ TEST_CASE("SampleSourceInstrument loop sync mode wraps inside loop range") {
   }
 }
 
+TEST_CASE("SampleSourceInstrument loop sync fast path preserves stereo Hermite "
+          "wrap") {
+  static constexpr std::array<int16_t, 12> kSamples = {
+      30000, -30000, 1000, -2000,  9000,  4000,
+      -7000, 12000,  2000, -11000, 28000, 29000};
+  static constexpr std::array<int, 6> kBaseFrames = {1, 2, 4, 1, 3, 4};
+  static constexpr std::array<float, 6> kFractions = {0.0f, 0.5f, 0.0f,
+                                                      0.5f, 0.0f, 0.5f};
+
+  TestSamplePool pool;
+  SamplePoolInstallGuard poolGuard(&pool);
+  SampleSourceInstrument instrument;
+  TestSoundSource source(kSamples.data(), 6, 44100, 2);
+  configureMonoPlayback(instrument, source, SSLM_LOOPSYNC, 0, 1, 5);
+
+  REQUIRE(instrument.Start(0, 60, true));
+  forcePlaybackSpeed(1.5f);
+
+  std::array<AudioSample, 12> buffer{};
+  REQUIRE(instrument.Render(0, buffer.data(), 3, false));
+  REQUIRE(instrument.Render(0, buffer.data() + 6, 3, false));
+
+  for (size_t frame = 0; frame < kBaseFrames.size(); ++frame) {
+    const size_t index = frame * 2;
+    CHECK(buffer[index] ==
+          doctest::Approx(expectedHermiteChannelSample(
+              kSamples.data(), 2, 0, kBaseFrames[frame], kFractions[frame], 1,
+              4, TestPlaybackTopology::Wrap)));
+    CHECK(buffer[index + 1] ==
+          doctest::Approx(expectedHermiteChannelSample(
+              kSamples.data(), 2, 1, kBaseFrames[frame], kFractions[frame], 1,
+              4, TestPlaybackTopology::Wrap)));
+  }
+}
+
 TEST_CASE("SampleSourceInstrument uses Hermite interpolation by default") {
   static constexpr std::array<int16_t, 5> kSamples = {0, 12000, 0, -12000, 0};
 
@@ -1091,4 +1148,70 @@ TEST_CASE(
       TestPlaybackTopology::Reflect);
 
   CHECK(buffer[7] == doctest::Approx(expected));
+}
+
+TEST_CASE(
+    "SampleSourceInstrument RTG preserves the high-byte playback offset") {
+  static constexpr std::array<int16_t, 8192> samples{};
+
+  TestSamplePool pool;
+  SamplePoolInstallGuard poolGuard(&pool);
+  SampleSourceInstrument instrument;
+  TestSoundSource source(samples.data(), static_cast<int>(samples.size()),
+                         44100, 1);
+  configureMonoPlayback(instrument, source, SSLM_LOOP, 0, 0,
+                        static_cast<int>(samples.size()));
+
+  REQUIRE(instrument.Start(0, 60, true));
+  forcePlaybackSpeed(1.0f);
+  SyncMaster::GetInstance()->SetTempo(120);
+
+  sampleSourceRenderParams &renderParams =
+      SampleSourceInstrument::renderParams_[0];
+  renderParams.position_ = 5000.0f;
+  instrument.ProcessCommand(0, TrackerCommand::InstrumentCommandRetrigger,
+                            0x0102);
+
+  std::array<AudioSample, 1> buffer{};
+  REQUIRE(instrument.Render(0, buffer.data(), 0, true));
+  REQUIRE(instrument.Render(0, buffer.data(), 0, true));
+  CHECK(renderParams.position_ == doctest::Approx(5000.0f));
+
+  REQUIRE(instrument.Render(0, buffer.data(), 0, true));
+  const float expectedPosition =
+      5000.0f -
+      static_cast<int32_t>(SyncMaster::GetInstance()->GetTickSampleCount());
+  CHECK(renderParams.position_ == doctest::Approx(expectedPosition));
+
+  instrument.ProcessCommand(0, TrackerCommand::InstrumentCommandRetrigger,
+                            0x0000);
+  REQUIRE(instrument.Render(0, buffer.data(), 0, true));
+  CHECK(renderParams.position_ == doctest::Approx(expectedPosition));
+}
+
+TEST_CASE("SampleSourceInstrument applies the AudioVoice pitch multiplier to "
+          "playback") {
+  static constexpr std::array<int16_t, 6> samples = {0,    1000, 2000,
+                                                     3000, 4000, 5000};
+
+  TestSamplePool pool;
+  SamplePoolInstallGuard poolGuard(&pool);
+  SampleSourceInstrument instrument;
+  TestSoundSource source(samples.data(), static_cast<int>(samples.size()),
+                         44100, 1);
+  configureMonoOneShot(instrument, source, static_cast<int>(samples.size()));
+
+  REQUIRE(instrument.Start(0, 60, true));
+  instrument.SetPitchMultiplier(0, 2.0f);
+
+  sampleSourceRenderParams &renderParams =
+      SampleSourceInstrument::renderParams_[0];
+  CHECK(renderParams.speed_ == doctest::Approx(renderParams.baseSpeed_ * 2.0f));
+
+  std::array<AudioSample, 3> buffer{};
+  REQUIRE(instrument.Render(0, buffer.data(), static_cast<int>(buffer.size()),
+                            false));
+  CHECK(buffer[0] == doctest::Approx(pcmToAudioSample(0)));
+  CHECK(buffer[1] == doctest::Approx(pcmToAudioSample(2000)));
+  CHECK(buffer[2] == doctest::Approx(pcmToAudioSample(4000)));
 }

@@ -14,12 +14,15 @@ add_library(application_views_baseclasses
   UIBigHexVarField.cpp
   UIField.cpp
   UIFieldInputDispatcher.cpp
+  UIFM6AlgoField.cpp
+  UIFM6ParamField.cpp
   UIIntField.cpp
   UIInsertAmountField.cpp
   UILFOField.cpp
   UIIntVarField.cpp
   UIIntVarOffField.cpp
   UINoteVarField.cpp
+  UIPitchOffsetVarField.cpp
   UISortedVarList.cpp
   UIStaticField.cpp
   UITempoField.cpp

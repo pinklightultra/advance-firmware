@@ -17,42 +17,11 @@
 #include "Application/Player/SyncMaster.h"
 #include "PlayerChannelWetDry.h"
 #include "System/Profiler/DWTProfiler.h"
-
-namespace {
-
-constexpr int kEngineSampleRate = 44100;
-constexpr uint16_t kProfileOrderWetDry = 45;
-
-DWTProfileStats gPlayerChannelOutputProfile = {" wet/dry"};
-
-inline int getProfileVoiceCount() {
-  MixerService *mixerService = MixerService::GetInstance();
-  Project *project = mixerService ? mixerService->GetProject() : nullptr;
-  if (project == nullptr) {
-    return SONG_CHANNEL_COUNT_STEREO;
-  }
-
-  return project->song_.GetChannelCount();
-}
-
-void registerPlayerChannelProfiles() {
-  static bool registered = false;
-  if (registered) {
-    return;
-  }
-
-  gPlayerChannelOutputProfile.displayOrder_ = kProfileOrderWetDry;
-  RegisterDWTProfileStats(&gPlayerChannelOutputProfile);
-  registered = true;
-}
-
-} // namespace
+#include "config/MemorySections.h"
 
 PlayerChannel::PlayerChannel(int index)
     : index_(index), voice_(index), midiInstrument_(nullptr), muted_(false),
-      busIndex_(-1), mixBus_(nullptr) {
-  registerPlayerChannelProfiles();
-}
+      busIndex_(-1), mixBus_(nullptr) {}
 
 PlayerChannel::~PlayerChannel() {}
 
@@ -105,10 +74,24 @@ bool PlayerChannel::ProcessCommand(TrackerCommand command, ushort value) {
   if (midiInstrument_) {
     return false;
   }
+
+  I_Instrument *instrument = voice_.GetInstrument();
+  // Returning false is deliberate for the legacy SampleInstrument: Player and
+  // TablePlayback then fall through to the instrument's locked command path.
+  if (!instrument ||
+      !InstrumentTypeUsesModernAudioVoice(instrument->GetType())) {
+    return false;
+  }
   return voice_.ProcessCommand(command, value);
 }
 
+PICOTRACKER_FAST_CODE("player_channel_render")
 bool PlayerChannel::Render(AudioSample *buffer, int samplecount) {
+  const uint32_t profileChannel = static_cast<uint32_t>(index_);
+  ScopedDWTProfile channelTotalProfile(
+      GetVoiceChannelTotalProfileStats(profileChannel),
+      GetVoicesTotalProfileStats());
+
   if (midiInstrument_) {
     bool tableSlice = SyncMaster::GetInstance()->TableSlice();
     midiInstrument_->Render(index_, buffer, samplecount, tableSlice);
@@ -140,17 +123,10 @@ bool PlayerChannel::Render(AudioSample *buffer, int samplecount) {
   const AudioSample sendGain0 = routing.sendGain[0];
   const AudioSample sendGain1 = routing.sendGain[1];
   const AudioSample sendGain2 = routing.sendGain[2];
-  DWTProfileStats *voiceTotalStats = nullptr;
-  I_Instrument *instrument = voice_.GetInstrument();
-  if (instrument && instrument->GetType() != IT_SAMPLE) {
-    voiceTotalStats = GetVoiceRenderProfileStats();
-  }
 
   const int count = samplecount * 2;
-  const int profileVoiceCount = getProfileVoiceCount();
-  ScopedDWTProfile outputProfile(&gPlayerChannelOutputProfile, samplecount,
-                                 kEngineSampleRate, profileVoiceCount,
-                                 voiceTotalStats, false);
+  ScopedDWTProfile outputProfile(
+      GetVoiceProfileStats(VoiceProfileComponent::WetDry, profileChannel));
 
   // FX sends are post-fader aux sends: source already includes the voice
   // render chain, including insert stages, and sendGain already includes the

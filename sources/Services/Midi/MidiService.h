@@ -29,6 +29,8 @@
 
 #define MIDI_MAX_BUFFERS 20
 
+class Project;
+
 class MidiService : public T_Factory<MidiService>, public I_Observer {
 
 public:
@@ -65,6 +67,9 @@ public:
   void OnMidiClock();
   void RefreshControlSurfaceSelection();
   void ReloadControlSurface();
+  void LoadProjectSettings(const Project &project);
+  // MIDI channel and program values are zero-based at the service boundary.
+  void SetInputProgramForChannel(int midiChannel, uint8_t program);
   bool HasControlSurfaceSongWindow() const;
   uint32_t GetControlSurfaceSongWindowOffset() const;
   uint32_t GetControlSurfaceSongWindowRowCount() const;

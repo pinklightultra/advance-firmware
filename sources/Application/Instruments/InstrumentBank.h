@@ -18,16 +18,24 @@
 #include "Application/Model/Song.h"
 #include "Application/Persistency/Persistent.h"
 #include "Externals/etl/include/etl/variant_pool.h"
+#include "FM6Instrument.h"
 #include "MidiInstrument.h"
 #include "NoneInstrument.h"
+#include "SIDInstrument.h"
 #include "SampleInstrument.h"
 #include "SampleSourceInstrument.h"
+#include "StarLoomInstrument.h"
 #include "VoiceParameters.h"
+#include "picoSwarmInstrument.h"
+#include <cstdint>
 
 #define NO_MORE_INSTRUMENT 0x100
 
 class InstrumentBank : public Persistent {
 public:
+  using SampleAssignmentList =
+      etl::vector<I_Instrument *, MAX_INSTRUMENT_COUNT>;
+
   InstrumentBank();
   ~InstrumentBank();
   void Reset();
@@ -42,6 +50,12 @@ public:
   unsigned short Clone(unsigned short i);
   unsigned short GetNextFreeInstrumentSlotId();
   VoiceParameters *GetVoiceParameters(int i);
+  SampleAssignmentList CaptureSampleAssignments(int32_t sampleIndex) const;
+  void RestoreSampleAssignments(const SampleAssignmentList &assignments,
+                                int32_t sampleIndex) const;
+  bool IsLegacySampleInstrumentSelectionEnabled() const {
+    return legacySampleInstrumentSelectionEnabled_;
+  }
 
   const etl::array<I_Instrument *, MAX_INSTRUMENT_COUNT> &
   InstrumentsList() const {
@@ -49,15 +63,19 @@ public:
   }
 
 private:
+  void assignInstrument(int id, I_Instrument *instrument);
   void attachVoiceParameters(int id, I_Instrument *instrument);
 
   etl::array<I_Instrument *, MAX_INSTRUMENT_COUNT> instruments_;
   etl::array<VoiceParameters, MAX_INSTRUMENT_COUNT> voiceParameters_;
   etl::variant_pool<MAX_INSTRUMENT_COUNT, SampleInstrument,
-                    SampleSourceInstrument, MidiInstrument>
+                    SampleSourceInstrument, MidiInstrument, SIDInstrument,
+                    FM6Instrument, StarLoomInstrument, picoSwarmInstrument>
       instrumentPool_;
   NoneInstrument none_ = NoneInstrument();
-  unsigned short sidOscCount = 0;
+  // Loading or importing a legacy sample instrument opts the project into
+  // creating more of them until another project is loaded.
+  bool legacySampleInstrumentSelectionEnabled_ = false;
 };
 
 #endif

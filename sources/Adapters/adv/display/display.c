@@ -194,7 +194,7 @@ void display_draw_region(uint8_t x, uint8_t y, uint8_t width, uint8_t height) {
 
       uint16_t *dest = (uint16_t *)framebuffer +
                        (h * CHAR_HEIGHT * DISPLAY_WIDTH) +
-                       (w * CHAR_WIDTH + OFFSET);
+                       (w * CHAR_WIDTH + DISPLAY_OFFSET);
 
       /* Most of what happens here is defined on the peripheral configuration.
        * Perpheral is configured in memory to memory mode with blending and

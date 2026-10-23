@@ -14,29 +14,48 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(BRAIDS_SOURCES
+  ../sources/Externals/braids/analog_oscillator.cc
+  ../sources/Externals/braids/digital_oscillator.cc
+  ../sources/Externals/braids/macro_oscillator.cc
+  ../sources/Externals/braids/quantizer.cc
+  ../sources/Externals/braids/random.cc
+  ../sources/Externals/braids/resources.cc
+  ../sources/Externals/braids/settings.cc
+)
+
 add_executable(picoTracker_tests
   adv_usb_host_power_policy_tests.cpp
   audio_voice_tests.cpp
   midi_in_device_tests.cpp
   midi_instrument_tests.cpp
   sample_source_instrument_tests.cpp
+  sid_instrument_tests.cpp
+  pico_swarm_instrument_tests.cpp
   dwt_profiler_tests.cpp
+  fm6_instrument_tests.cpp
+  fm6_dx7_sysex_tests.cpp
+  instrument_audition_tests.cpp
+  starloom_instrument_tests.cpp
   insert_effect_slot_tests.cpp
   model_allocation_tests.cpp
-  project_audio_mode_tests.cpp
+  project_channel_count_tests.cpp
   project_output_effect_type_tests.cpp
-  stubs/project_audio_mode_link_stubs.cpp
+  stubs/application_link_stubs.cpp
   stubs/nanoprintf_impl.c
   browser_entry_sort_tests.cpp
   browser_path_tests.cpp
+  big_hex_field_tests.cpp
   filesystem_api_contract_tests.cpp
   filesystem_path_tests.cpp
   foundation_types_tests.cpp
   charger_host_power_tests.cpp
   charger_watchdog_tests.cpp
+  command_list_tests.cpp
   instrument_pool_tests.cpp
   output_effect_slot_tests.cpp
   play_button_behavior_tests.cpp
+  pitch_offset_field_tests.cpp
   player_channel_wet_dry_tests.cpp
   reverb_output_effect_tests.cpp
   voice_filter_graph_tests.cpp
@@ -60,9 +79,12 @@ add_executable(picoTracker_tests
   ../sources/Application/Instruments/SampleSourceInstrument.cpp
   ../sources/Application/Instruments/SamplePool.cpp
   ../sources/Application/Instruments/SampleVariable.cpp
+  ../sources/Application/Instruments/SIDInstrument.cpp
   ../sources/Application/Instruments/SoundSource.cpp
+  ../sources/Application/Instruments/picoSwarmInstrument.cpp
   ../sources/Application/Instruments/WavFile.cpp
   ../sources/Application/Instruments/WavFileWriter.cpp
+  ../sources/Application/Instruments/AdvanceFM6/FM6Dx7Patch.cpp
   ../sources/Application/Mixer/OutputEffectSlot.cpp
   ../sources/Application/Mixer/ReverbOutputEffect.cpp
   ../sources/Application/Model/Chain.cpp
@@ -77,6 +99,9 @@ add_executable(picoTracker_tests
   ../sources/Application/Utils/HexBuffers.cpp
   ../sources/Application/Utils/char.cpp
   ../sources/Application/Instruments/LFOSettings.cpp
+  ../sources/Application/Instruments/FM6Instrument.cpp
+  ../sources/Application/Instruments/StarLoomInstrument.cpp
+  ../sources/Application/Instruments/AdvanceFM6/FM6Voice.cpp
   ../sources/Application/Instruments/VoiceParameters.cpp
   ../sources/Application/Player/AudioVoice.cpp
   ../sources/Application/Player/InsertEffectSlot.cpp
@@ -98,10 +123,12 @@ add_executable(picoTracker_tests
   ../sources/Externals/SRC/samplerate.c
   ../sources/Externals/SRC/src_linear.c
   ../sources/Externals/SRC/src_sinc_stub.c
+  ../sources/Application/Instruments/AdvanceSID/AdvanceSID.cpp
   ../sources/Externals/TinyXML2/tinyxml2_printer_only.cpp
   ../sources/Externals/TinyXML2/tinyxml2adapter.cpp
   ../sources/Externals/yxml/yxml.c
   ../sources/System/io/Status.cpp
+  ${BRAIDS_SOURCES}
 )
 
 target_include_directories(picoTracker_tests PRIVATE
@@ -208,7 +235,7 @@ target_compile_definitions(picoTracker_boundary_tests PRIVATE
 add_executable(picoTracker_instr_import_e2e_tests
   test_main.cpp
   instrument_import_e2e_tests.cpp
-  stubs/project_audio_mode_link_stubs.cpp
+  stubs/application_link_stubs.cpp
   stubs/nanoprintf_impl.c
   stubs/System/FileSystem/FakeFileSystem.cpp
   ../sources/Application/Instruments/CommandList.cpp
@@ -223,11 +250,18 @@ add_executable(picoTracker_instr_import_e2e_tests
   ../sources/Application/Instruments/SampleSourceInstrument.cpp
   ../sources/Application/Instruments/SamplePool.cpp
   ../sources/Application/Instruments/SampleVariable.cpp
+  ../sources/Application/Instruments/SIDInstrument.cpp
   ../sources/Application/Instruments/SoundSource.cpp
+  ../sources/Application/Instruments/picoSwarmInstrument.cpp
   ../sources/Application/Instruments/WavFile.cpp
   ../sources/Application/Instruments/WavFileWriter.cpp
   ../sources/Application/Instruments/LFOSettings.cpp
+  ../sources/Application/Instruments/FM6Instrument.cpp
+  ../sources/Application/Instruments/StarLoomInstrument.cpp
   ../sources/Application/Instruments/VoiceParameters.cpp
+  ../sources/Application/Instruments/AdvanceFM6/FM6Dx7Patch.cpp
+  ../sources/Application/Instruments/AdvanceFM6/FM6Voice.cpp
+  ../sources/Application/Instruments/AdvanceSID/AdvanceSID.cpp
   ../sources/Application/Mixer/OutputEffectSlot.cpp
   ../sources/Application/Mixer/ReverbOutputEffect.cpp
   ../sources/Application/Model/Chain.cpp
@@ -266,6 +300,7 @@ add_executable(picoTracker_instr_import_e2e_tests
   ../sources/Externals/TinyXML2/tinyxml2adapter.cpp
   ../sources/Externals/yxml/yxml.c
   ../sources/System/io/Status.cpp
+  ${BRAIDS_SOURCES}
 )
 target_include_directories(picoTracker_instr_import_e2e_tests PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/stubs

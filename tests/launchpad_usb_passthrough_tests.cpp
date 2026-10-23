@@ -36,6 +36,9 @@ protected:
   void closeDriver() override {}
   bool startDriver() override { return true; }
   void stopDriver() override {}
+  MidiInputSource getInputSource() const override {
+    return MidiInputSource::Usb;
+  }
 };
 
 } // namespace

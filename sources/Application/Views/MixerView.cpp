@@ -17,6 +17,7 @@
 #include "Application/Views/SampleEditorView.h"
 #include "UIController.h"
 #include <Application/AppWindow.h>
+#include <algorithm>
 
 namespace {
 
@@ -36,7 +37,7 @@ constexpr int MixerStripLabelY = 17;
 constexpr int MixerFieldBaseY = 18;
 #endif
 constexpr int MixerRowLabelX = 1;
-constexpr int MixerMasterStripIndex = SONG_CHANNEL_COUNT_STEREO;
+constexpr int MixerMasterStripIndex = SONG_CHANNEL_COUNT;
 constexpr int MixerVolumeRow = 0;
 constexpr int MixerFirstEffectRow = 1;
 constexpr int MixerEffectRowEnd = MixerFirstEffectRow + OUTPUT_EFFECT_COUNT;
@@ -161,6 +162,11 @@ void MixerView::Reset() {
 
 void MixerView::OnFocus() {
   setTitle(etl::string<23>("Mixer"));
+
+  // SetFocus keeps the Song cursor in sync while navigating the Mixer. Restore
+  // that shared cursor here to keep the opposite direction in sync as well.
+  selectedStrip_ = std::clamp(viewData_->songX_, 0, MixerStripCount - 1);
+
   syncFocusToSelection();
 }
 
@@ -176,7 +182,7 @@ void MixerView::SetFocus(UIField *field) {
       if (fieldGrid_[strip][row] == field) {
         selectedStrip_ = strip;
         selectedRow_ = row;
-        if (strip < SONG_CHANNEL_COUNT_STEREO) {
+        if (strip < SONG_CHANNEL_COUNT) {
           viewData_->songX_ = strip;
         }
         return;
@@ -225,7 +231,7 @@ void MixerView::updateCursor(int dx, int dy) {
 }
 
 void MixerView::switchSoloMode() {
-  if (selectedStrip_ >= SONG_CHANNEL_COUNT_STEREO) {
+  if (selectedStrip_ >= SONG_CHANNEL_COUNT) {
     return;
   }
 
@@ -243,7 +249,7 @@ void MixerView::unMuteAll() {
 };
 
 void MixerView::toggleMute() {
-  if (selectedStrip_ >= SONG_CHANNEL_COUNT_STEREO) {
+  if (selectedStrip_ >= SONG_CHANNEL_COUNT) {
     return;
   }
 
@@ -349,7 +355,7 @@ void MixerView::initMixerFields() {
   fxReturnFields_.clear();
   masterVolumeField_.clear();
 
-  for (int channel = 0; channel < SONG_CHANNEL_COUNT_STEREO; ++channel) {
+  for (int channel = 0; channel < SONG_CHANNEL_COUNT; ++channel) {
     GUIPoint volumePos(GetMixerStripX(channel), MixerFieldBaseY);
     Variable *volume = project->FindVariable(GetChannelVolumeFourCC(channel));
     if (volume) {
@@ -435,7 +441,7 @@ void MixerView::drawMixerLabels(Player *player, GUITextProperties props) {
 
   for (int strip = 0; strip < MixerStripCount; ++strip) {
     char label[3] = {' ', ' ', '\0'};
-    if (strip < SONG_CHANNEL_COUNT_STEREO) {
+    if (strip < SONG_CHANNEL_COUNT) {
       if (player->IsChannelMuted(strip)) {
         label[0] = 'M';
         label[1] = static_cast<char>('1' + strip);
@@ -513,8 +519,7 @@ void MixerView::AnimationUpdate() {
 void MixerView::drawChannelVUMeters(
     etl::array<stereosample, SONG_CHANNEL_COUNT> *levels, Player *player,
     GUITextProperties props, bool forceRedraw) {
-  const int displayChannelCount =
-      std::min(viewData_->song_->GetChannelCount(), SONG_CHANNEL_COUNT_STEREO);
+  constexpr int displayChannelCount = SONG_CHANNEL_COUNT;
   if (!forceRedraw) {
     bool anyChanges = false;
     for (int i = 0; i < displayChannelCount; i++) {
@@ -556,10 +561,10 @@ void MixerView::togglePlay() {
 
   Player *player = Player::GetInstance();
   int startChannel = selectedStrip_;
-  if (startChannel >= SONG_CHANNEL_COUNT_STEREO) {
+  if (startChannel >= SONG_CHANNEL_COUNT) {
     startChannel = viewData_->songX_;
   }
-  if (startChannel < 0 || startChannel >= SONG_CHANNEL_COUNT_STEREO) {
+  if (startChannel < 0 || startChannel >= SONG_CHANNEL_COUNT) {
     startChannel = 0;
   }
 

@@ -30,11 +30,6 @@ const unsigned short MAX_TEMPO = 300;
 const unsigned short MIN_TEMPO = 60;
 const unsigned short DEFAULT_TEMPO = 138;
 
-enum ProjectAudioMode {
-  kProjectAudioModeStereo = 0,
-  kProjectAudioModeMono = 1,
-};
-
 class Project : public Persistent, public VariableContainer, I_Observer {
 public:
   Project(const char *name);
@@ -64,7 +59,6 @@ public:
   uint8_t GetScaleRoot();
   int GetTempo(); // Takes nudging into account
   int GetTranspose();
-  int GetAudioMode();
   void GetProjectName(char *name);
   void SetProjectName(char *name);
   int32_t SampleInUse(etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> filename);
@@ -81,7 +75,7 @@ public:
   virtual void RestoreContent(PersistencyDocument *doc);
 
 private:
-  etl::vector<Variable *, 56> variables_;
+  etl::vector<Variable *, 55> variables_;
 
   InstrumentBank instrumentBank_;
   int tempoNudge_;
@@ -142,11 +136,8 @@ private:
   Variable scale_;
   Variable scaleRoot_;
   StringWatchedVariable<MAX_PROJECT_NAME_LENGTH> projectName_;
-  Variable projectAudioMode_;
   Variable previewVolume_;
   bool mixRoutingDirty_;
-
-  void SyncSongChannelCount();
 };
 
 #endif

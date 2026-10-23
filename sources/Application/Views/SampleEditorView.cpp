@@ -1240,6 +1240,13 @@ bool SampleEditorView::reloadEditedSample() {
     return false;
   }
 
+  // ReloadSample unloads the current pool entry first. The resulting delete
+  // notification clears instruments assigned to that entry, so remember them
+  // before the reload takes place.
+  auto instrumentBank = viewData_->project_->GetInstrumentBank();
+  auto assignedInstruments =
+      instrumentBank->CaptureSampleAssignments(old_index);
+
   int32_t new_index =
       pool->ReloadSample(old_index, viewData_->sampleEditorFilename.c_str());
   if (new_index < 0) {
@@ -1248,24 +1255,7 @@ bool SampleEditorView::reloadEditedSample() {
     return false;
   }
 
-  if (new_index != old_index) {
-    auto instrumentBank = viewData_->project_->GetInstrumentBank();
-    for (I_Instrument *instrument : instrumentBank->InstrumentsList()) {
-      if (instrument && instrument->GetType() == IT_SAMPLE) {
-        SampleInstrument *sampleInstrument =
-            static_cast<SampleInstrument *>(instrument);
-        if (sampleInstrument->GetSampleIndex() == old_index) {
-          sampleInstrument->AssignSample(new_index);
-        }
-      } else if (instrument && instrument->GetType() == IT_SAMPLE_SOURCE) {
-        SampleSourceInstrument *sampleSourceInstrument =
-            static_cast<SampleSourceInstrument *>(instrument);
-        if (sampleSourceInstrument->GetSampleIndex() == old_index) {
-          sampleSourceInstrument->AssignSample(new_index);
-        }
-      }
-    }
-  }
+  instrumentBank->RestoreSampleAssignments(assignedInstruments, new_index);
   return true;
 }
 
@@ -1475,10 +1465,7 @@ bool SampleEditorView::loadSampleToPool(
       return false;
     }
 
-    const int targetChannelCount =
-        viewData_->project_->GetAudioMode() == kProjectAudioModeMono ? 1 : 2;
-    sampleId =
-        pool->ImportSample(savedPath.c_str(), projectName, targetChannelCount);
+    sampleId = pool->ImportSample(savedPath.c_str(), projectName);
     if (sampleId < 0) {
       Trace::Error("SampleEditorView: Import failed for %s", savedPath.c_str());
       return false;

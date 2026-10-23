@@ -30,8 +30,7 @@
 #define BRAIDS_VCO_JITTER_SOURCE_H_
 
 // #include "stmlib/stmlib.h"
-#include "pico/stdlib.h"
-
+#include <cstdint>
 #include <cstring>
 
 #include "Externals/braids/resources.h"

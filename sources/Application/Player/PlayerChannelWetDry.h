@@ -10,6 +10,7 @@
 #define _PLAYER_CHANNEL_WET_DRY_H_
 
 #include "Application/Audio/AudioSample.h"
+#include "config/MemorySections.h"
 #include <stdint.h>
 
 namespace PlayerChannelWetDry {
@@ -76,6 +77,7 @@ inline void Apply(AudioSample *__restrict__ buffer, int count,
   }
 }
 
+PICOTRACKER_FAST_CODE("player_channel_wet_dry")
 inline void
 ApplyWetDryRouting(AudioSample *__restrict__ buffer, int count,
                    AudioSample dryGain, AudioSample *__restrict__ send0,

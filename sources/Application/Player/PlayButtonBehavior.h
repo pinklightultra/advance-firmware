@@ -19,13 +19,13 @@ inline bool HasPlayButtonKillHoldElapsed(bool active, uint32_t pressedAt,
          static_cast<uint32_t>(now - pressedAt) >= playButtonKillHoldMs;
 }
 
-inline bool IsSamplePreviewButtonMask(uint16_t mask, uint16_t playMask,
-                                      uint16_t altMask) {
+inline bool IsInstrumentPreviewButtonMask(uint16_t mask, uint16_t playMask,
+                                          uint16_t altMask) {
   return mask == static_cast<uint16_t>(playMask | altMask);
 }
 
-inline bool IsSamplePreviewComboHeld(uint16_t mask, uint16_t playMask,
-                                     uint16_t altMask) {
+inline bool IsInstrumentPreviewComboHeld(uint16_t mask, uint16_t playMask,
+                                         uint16_t altMask) {
   const uint16_t previewMask = static_cast<uint16_t>(playMask | altMask);
   return (mask & previewMask) == previewMask;
 }
@@ -34,7 +34,8 @@ inline bool ShouldBypassPlayButtonDeferralForPreview(bool previewAvailable,
                                                      uint16_t mask,
                                                      uint16_t playMask,
                                                      uint16_t altMask) {
-  return previewAvailable && IsSamplePreviewButtonMask(mask, playMask, altMask);
+  return previewAvailable &&
+         IsInstrumentPreviewButtonMask(mask, playMask, altMask);
 }
 
 #endif

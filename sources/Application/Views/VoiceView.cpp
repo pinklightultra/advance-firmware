@@ -18,6 +18,7 @@
 #include "Application/Instruments/InstrumentBank.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
 #include "Application/Instruments/VoiceParameters.h"
+#include "Application/Model/Config.h"
 #include "Application/Model/Project.h"
 #include "Application/Player/InsertEffectDefinitions.h"
 #include "Application/Player/PlayButtonBehavior.h"
@@ -75,7 +76,7 @@ Variable *findVoiceVariable(InstrumentBank *bank, I_Instrument *instrument,
     return nullptr;
   }
 
-  if (instrument->GetType() == IT_SAMPLE_SOURCE) {
+  if (InstrumentTypeUsesModernAudioVoice(instrument->GetType())) {
     VoiceParameters *voiceParameters = bank->GetVoiceParameters(instrumentID);
     return voiceParameters ? voiceParameters->FindVariable(id) : nullptr;
   }
@@ -758,8 +759,8 @@ bool getLFOTargetFieldPosition(LFOTarget target, const GUIPoint &anchor,
   return false;
 }
 
-void drawLFOShape(View &view, I_Instrument *instrument, int32_t x, int32_t y,
-                  int32_t width, int32_t height, const LFOConfig &config,
+void drawLFOShape(View &view, int32_t x, int32_t y, int32_t width,
+                  int32_t height, const LFOConfig &config,
                   ColorDefinition baseColor) {
   const int32_t graphLeft = x + EnvelopePaddingX;
   const int32_t graphTop = y + EnvelopePaddingTop;
@@ -773,7 +774,7 @@ void drawLFOShape(View &view, I_Instrument *instrument, int32_t x, int32_t y,
   int maxValue = 0;
   int32_t depthMax = 0xFF;
 
-  if (GetLFOTargetValueRange(instrument, config.target_, minValue, maxValue)) {
+  if (GetLFOTargetValueRange(config.target_, minValue, maxValue)) {
     depthMax = std::max<int32_t>(static_cast<int32_t>(std::abs(minValue)),
                                  static_cast<int32_t>(std::abs(maxValue)));
     if (depthMax <= 0) {
@@ -815,7 +816,7 @@ void drawLFOShape(View &view, I_Instrument *instrument, int32_t x, int32_t y,
 
 VoiceView::VoiceView(GUIWindow &w, ViewData *data)
     : FieldView(w, data), lastFocusIndex_(0), graphKind_(GraphKind::Voice),
-      graphSection_(GraphSection::None), previewKeyHeld_(false),
+      graphSection_(GraphSection::None), previewMode_(PreviewMode::None),
       previewChannel_(0), previewInstrument_(0) {}
 
 VoiceView::~VoiceView() {}
@@ -824,7 +825,7 @@ void VoiceView::Reset() {
   lastFocusIndex_ = 0;
   graphKind_ = GraphKind::Voice;
   graphSection_ = GraphSection::None;
-  previewKeyHeld_ = false;
+  previewMode_ = PreviewMode::None;
 }
 
 I_Instrument *VoiceView::getInstrument() {
@@ -832,24 +833,28 @@ I_Instrument *VoiceView::getInstrument() {
   return bank->GetInstrument(viewData_->currentInstrumentID_);
 }
 
+uint8_t VoiceView::voicePreviewNote(I_Instrument *instrument) {
+  if (!instrument || instrument->GetType() != IT_SAMPLE_SOURCE) {
+    return NOTE_C3;
+  }
+  return static_cast<SampleSourceInstrument *>(instrument)->GetPreviewNote();
+}
+
 bool VoiceView::startVoicePreview(unsigned short mask) {
-  if (!IsSamplePreviewButtonMask(mask, EPBM_PLAY, EPBM_ALT)) {
+  if (!IsInstrumentPreviewButtonMask(mask, EPBM_PLAY, EPBM_ALT)) {
     return false;
   }
 
   I_Instrument *instrument = getInstrument();
-  if (!instrument || instrument->GetType() != IT_SAMPLE_SOURCE ||
-      !viewData_->song_) {
-    return true;
-  }
-  SampleSourceInstrument *sampleSourceInstrument =
-      static_cast<SampleSourceInstrument *>(instrument);
-
-  if (previewKeyHeld_) {
+  if (!SupportsInstrumentPreview(instrument) || !viewData_->song_) {
     return true;
   }
 
-  int channelCount = viewData_->song_->GetChannelCount();
+  if (previewMode_ != PreviewMode::None) {
+    return true;
+  }
+
+  int channelCount = SONG_CHANNEL_COUNT;
   if (channelCount <= 0) {
     return true;
   }
@@ -858,19 +863,38 @@ bool VoiceView::startVoicePreview(unsigned short mask) {
       static_cast<unsigned short>(viewData_->currentInstrumentID_);
   previewChannel_ = static_cast<unsigned short>(channelCount - 1);
   Player::GetInstance()->PlayNote(previewInstrument_, previewChannel_,
-                                  sampleSourceInstrument->GetPreviewNote(),
-                                  0x7F);
-  previewKeyHeld_ = true;
+                                  voicePreviewNote(instrument), 0x7F);
+  previewMode_ = PreviewMode::Manual;
   return true;
 }
 
+void VoiceView::auditionParameterChange() {
+  Config *config = Config::GetInstance();
+  I_Instrument *instrument = getInstrument();
+  Player *player = Player::GetInstance();
+  if (!config || !config->IsInstrumentAuditionEnabled() || !instrument ||
+      !viewData_->song_ || !player || player->IsRunning()) {
+    return;
+  }
+
+  if (previewMode_ != PreviewMode::None) {
+    stopVoicePreview();
+  }
+  previewInstrument_ =
+      static_cast<unsigned short>(viewData_->currentInstrumentID_);
+  previewChannel_ = static_cast<unsigned short>(SONG_CHANNEL_COUNT - 1);
+  player->PlayNote(previewInstrument_, previewChannel_,
+                   voicePreviewNote(instrument), 0x7F);
+  previewMode_ = PreviewMode::Parameter;
+}
+
 void VoiceView::stopVoicePreview() {
-  if (!previewKeyHeld_) {
+  if (previewMode_ == PreviewMode::None) {
     return;
   }
 
   Player::GetInstance()->StopNote(previewInstrument_, previewChannel_);
-  previewKeyHeld_ = false;
+  previewMode_ = PreviewMode::None;
 }
 
 void VoiceView::warpToNext(int offset) {
@@ -891,7 +915,7 @@ void VoiceView::warpToNext(int offset) {
     }
 
     I_Instrument *instr = bank->GetInstrument(nextID);
-    if (instr && instr->GetType() == IT_SAMPLE_SOURCE) {
+    if (SupportsAudioVoiceScreen(instr)) {
       viewData_->currentInstrumentID_ = nextID;
       refreshVoiceFields();
       isDirty_ = true;
@@ -913,10 +937,9 @@ void VoiceView::refreshVoiceFields() {
   I_Instrument *instrument = getInstrument();
   InstrumentBank *bank = viewData_->project_->GetInstrumentBank();
   int instrumentID = viewData_->currentInstrumentID_;
-  VoiceParameters *voiceParams =
-      (instrument && instrument->GetType() == IT_SAMPLE_SOURCE)
-          ? bank->GetVoiceParameters(instrumentID)
-          : nullptr;
+  VoiceParameters *voiceParams = SupportsAudioVoiceScreen(instrument)
+                                     ? bank->GetVoiceParameters(instrumentID)
+                                     : nullptr;
   const GUIPoint anchor = GetAnchor();
 
   if (!instrument) {
@@ -950,16 +973,15 @@ void VoiceView::refreshVoiceFields() {
     fieldList_.insert(fieldList_.end(), &intVarField_.back());
   };
 
-  const auto addLFOField = [this, instrument, voiceParams,
-                            addStatic](int x, int y, size_t lfoIndex,
-                                       LFOFieldKind kind) {
+  const auto addLFOField = [this, voiceParams, addStatic](int x, int y,
+                                                          size_t lfoIndex,
+                                                          LFOFieldKind kind) {
     if (!voiceParams) {
       addStatic(x, y, "Lfo N/A");
       return;
     }
 
-    lfoFields_.emplace_back(GUIPoint(x, y), *instrument, *voiceParams, lfoIndex,
-                            kind);
+    lfoFields_.emplace_back(GUIPoint(x, y), *voiceParams, lfoIndex, kind);
     fieldList_.insert(fieldList_.end(), &lfoFields_.back());
   };
 
@@ -1336,10 +1358,15 @@ bool VoiceView::processNavigationButtonMask(unsigned short mask) {
 void VoiceView::ProcessButtonMask(unsigned short mask, bool pressed) {
   Player *player = Player::GetInstance();
 
-  if (!pressed && previewKeyHeld_ &&
-      !IsSamplePreviewComboHeld(mask, EPBM_PLAY, EPBM_ALT)) {
-    stopVoicePreview();
-    return;
+  if (!pressed && previewMode_ != PreviewMode::None) {
+    const bool previewHeld =
+        previewMode_ == PreviewMode::Parameter
+            ? (mask & EPBM_ENTER) != 0
+            : IsInstrumentPreviewComboHeld(mask, EPBM_PLAY, EPBM_ALT);
+    if (!previewHeld) {
+      stopVoicePreview();
+      return;
+    }
   }
 
   const unsigned short arrowMask = EPBM_DOWN | EPBM_UP | EPBM_RIGHT | EPBM_LEFT;
@@ -1370,7 +1397,23 @@ void VoiceView::ProcessButtonMask(unsigned short mask, bool pressed) {
     return;
   }
 
+  VoiceParameters *voiceParameters = nullptr;
+  VoiceParameters::ValueSnapshot previousValues{};
+  if (pressed && (mask & (EPBM_ENTER | EPBM_EDIT))) {
+    InstrumentBank *bank = viewData_->project_->GetInstrumentBank();
+    voiceParameters =
+        bank ? bank->GetVoiceParameters(viewData_->currentInstrumentID_)
+             : nullptr;
+    if (voiceParameters) {
+      voiceParameters->CaptureValues(previousValues);
+    }
+  }
+
   FieldView::ProcessButtonMask(mask, pressed);
+
+  if (voiceParameters && voiceParameters->ValuesDifferFrom(previousValues)) {
+    auditionParameterChange();
+  }
 
   if (!pressed) {
     return;
@@ -1457,7 +1500,7 @@ void VoiceView::drawSectionHeaders() {
 
 void VoiceView::drawLFOTargetMarkers() {
   I_Instrument *instrument = getInstrument();
-  if (!instrument || instrument->GetType() != IT_SAMPLE_SOURCE) {
+  if (!SupportsAudioVoiceScreen(instrument)) {
     return;
   }
 
@@ -1574,13 +1617,13 @@ void VoiceView::drawEnvelopeGraphs() {
   };
 
   if (graphKind_ == GraphKind::LFO1 || graphKind_ == GraphKind::LFO2) {
-    VoiceParameters *voiceParams = instrument->GetType() == IT_SAMPLE_SOURCE
+    VoiceParameters *voiceParams = SupportsAudioVoiceScreen(instrument)
                                        ? bank->GetVoiceParameters(instrumentID)
                                        : nullptr;
     if (voiceParams) {
       LFOSettings *lfoSettings = voiceParams->GetLFOSettings();
-      drawLFOShape(*this, instrument, EnvelopePanelX, EnvelopeGraphY,
-                   EnvelopePanelWidth, EnvelopeGraphHeight,
+      drawLFOShape(*this, EnvelopePanelX, EnvelopeGraphY, EnvelopePanelWidth,
+                   EnvelopeGraphHeight,
                    lfoSettings->Get(graphKind_ == GraphKind::LFO1 ? 0 : 1),
                    baseGraphColor);
     }

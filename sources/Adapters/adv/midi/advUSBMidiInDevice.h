@@ -37,6 +37,9 @@ protected:
   virtual bool startDriver() { return true; };
   virtual void stopDriver() {}
   virtual void closeDriver() {}
+  MidiInputSource getInputSource() const override {
+    return MidiInputSource::Usb;
+  }
 };
 
 #endif

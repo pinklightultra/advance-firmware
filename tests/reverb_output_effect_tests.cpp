@@ -14,11 +14,11 @@
 TEST_CASE("ReverbOutputEffect outputs silence for silent input") {
   ReverbOutputEffect effect;
   AudioSample input[8] = {};
-  AudioSample output[8] = {1.0f, 1.0f, 1.0f, 1.0f,
-                           1.0f, 1.0f, 1.0f, 1.0f};
+  AudioSample output[8] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 
   effect.Render(input, output, 4);
 
+  CHECK_FALSE(effect.IsTailActive());
   CHECK(output[0] == doctest::Approx(0.0f));
   CHECK(output[1] == doctest::Approx(0.0f));
   CHECK(output[2] == doctest::Approx(0.0f));
@@ -29,11 +29,23 @@ TEST_CASE("ReverbOutputEffect outputs silence for silent input") {
   CHECK(output[7] == doctest::Approx(0.0f));
 }
 
+TEST_CASE("ReverbOutputEffect reports and resets an active tail") {
+  ReverbOutputEffect effect;
+  AudioSample input[2] = {1.0f, 1.0f};
+  AudioSample output[2] = {};
+
+  effect.Render(input, output, 1);
+  CHECK(effect.IsTailActive());
+
+  OutputEffectProcessor &processor = effect;
+  processor.Reset();
+  CHECK_FALSE(effect.IsTailActive());
+}
+
 TEST_CASE("ReverbOutputEffect only writes the requested stereo frames") {
   ReverbOutputEffect effect;
   AudioSample input[4] = {};
-  AudioSample output[8] = {9.0f, 8.0f, 7.0f, 6.0f,
-                           5.0f, 4.0f, 3.0f, 2.0f};
+  AudioSample output[8] = {9.0f, 8.0f, 7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f};
 
   effect.Render(input, output, 2);
 
@@ -47,7 +59,8 @@ TEST_CASE("ReverbOutputEffect only writes the requested stereo frames") {
   CHECK(output[7] == doctest::Approx(2.0f));
 }
 
-TEST_CASE("ReverbOutputEffect returns engine-scaled wet output for audible input") {
+TEST_CASE(
+    "ReverbOutputEffect returns engine-scaled wet output for audible input") {
   ReverbOutputEffect effect;
   constexpr int sampleCount = 256;
   AudioSample input[sampleCount * 2] = {};

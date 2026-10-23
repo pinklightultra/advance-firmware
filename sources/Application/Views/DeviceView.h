@@ -44,8 +44,8 @@ private:
   void drawSectionHeaders();
 
   etl::vector<UIStaticField, 1> staticField_;
-  etl::vector<UIIntVarField, 8> intVarField_;
-  etl::vector<UIActionField, 2> actionField_;
+  etl::vector<UIIntVarField, 9> intVarField_;
+  etl::vector<UIActionField, 3> actionField_;
   etl::vector<UIBigHexVarField, 16> bigHexVarField_;
   etl::vector<UISwatchField, 16> swatchField_;
   bool configDirty_ = false;

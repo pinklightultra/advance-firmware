@@ -50,7 +50,7 @@ private:
   static constexpr int MixerEffectRowCount = 0;
 #endif
   static constexpr int MixerRowCount = 1 + MixerEffectRowCount;
-  static constexpr int MixerStripCount = SONG_CHANNEL_COUNT_STEREO + 1;
+  static constexpr int MixerStripCount = SONG_CHANNEL_COUNT + 1;
 
   void drawChannelVUMeters(etl::array<stereosample, SONG_CHANNEL_COUNT> *levels,
                            Player *player, GUITextProperties props,
@@ -60,9 +60,9 @@ private:
   UIField *GetSelectedField();
   void syncFocusToSelection();
 
-  etl::vector<UIIntVarField, SONG_CHANNEL_COUNT_STEREO> channelVolumeFields_;
+  etl::vector<UIIntVarField, SONG_CHANNEL_COUNT> channelVolumeFields_;
 #if SHOW_FX_SCREEN
-  etl::vector<UIIntVarField, SONG_CHANNEL_COUNT_STEREO * OUTPUT_EFFECT_COUNT>
+  etl::vector<UIIntVarField, SONG_CHANNEL_COUNT * OUTPUT_EFFECT_COUNT>
       channelSendFields_;
   etl::vector<UIIntVarField, OUTPUT_EFFECT_COUNT> fxReturnFields_;
 #else

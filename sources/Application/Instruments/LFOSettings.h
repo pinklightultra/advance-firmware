@@ -16,8 +16,6 @@
 #include <cstddef>
 #include <cstdint>
 
-class I_Instrument;
-
 enum class LFOTarget : uint8_t {
   None = 0,
   VoiceBandpassCutoff,
@@ -136,8 +134,6 @@ const char *GetLFORateModeName(LFORateMode mode);
 const LFOSyncDivision &GetLFOSyncDivision(size_t index);
 size_t GetLFOSyncDivisionCount();
 
-bool IsLFOTargetSupportedForInstrument(int instrumentType, LFOTarget target);
-bool GetLFOTargetValueRange(I_Instrument *instrument, LFOTarget target,
-                            int &minValue, int &maxValue);
+bool GetLFOTargetValueRange(LFOTarget target, int &minValue, int &maxValue);
 
 #endif

@@ -1156,6 +1156,30 @@ float SampleInstrument::GetLengthInSec() {
 
 bool SampleInstrument::IsInitialized() { return (source_ != 0); };
 
+bool SampleInstrument::ShouldAuditionParameterChange(FourCC parameter) const {
+  switch (parameter) {
+  case FourCC::SampleInstrumentVolume:
+  case FourCC::SampleInstrumentPan:
+  case FourCC::SampleInstrumentRootNote:
+  case FourCC::SampleInstrumentFineTune:
+  case FourCC::SampleInstrumentCrushVolume:
+  case FourCC::SampleInstrumentCrush:
+  case FourCC::SampleInstrumentDownsample:
+  case FourCC::SampleInstrumentFilterCutOff:
+  case FourCC::SampleInstrumentFilterResonance:
+  case FourCC::SampleInstrumentFilterType:
+  case FourCC::SampleInstrumentFilterMode:
+  case FourCC::SampleInstrumentInterpolation:
+  case FourCC::SampleInstrumentLoopMode:
+  case FourCC::SampleInstrumentStart:
+  case FourCC::SampleInstrumentLoopStart:
+  case FourCC::SampleInstrumentEnd:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void SampleInstrument::updateInstrumentData(bool search) {
 
   SamplePool *pool = SamplePool::GetInstance();

@@ -406,7 +406,7 @@ void MacroOscillator::RenderSawComb(const uint8_t *sync, int16_t *buffer,
 }
 
 /* static */
-MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
+const MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
     &MacroOscillator::RenderCSaw,      &MacroOscillator::RenderMorph,
     &MacroOscillator::RenderSawSquare, &MacroOscillator::RenderSineTriangle,
     &MacroOscillator::RenderBuzz,      &MacroOscillator::RenderSub,

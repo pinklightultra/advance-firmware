@@ -13,13 +13,22 @@
 
 #include "InstrumentView.h"
 #include "Application/AppWindow.h"
+#include "Application/Instruments/AdvanceFM6/FM6Dx7Patch.h"
+#include "Application/Instruments/FM6Instrument.h"
 #include "Application/Instruments/MidiInstrument.h"
+#include "Application/Instruments/SIDInstrument.h"
 #include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
+#include "Application/Instruments/StarLoomInstrument.h"
+#include "Application/Instruments/StarLoomInstrumentControls.h"
+#include "Application/Instruments/StarLoomInstrumentDSP.h"
+#include "Application/Instruments/StarLoomInstrumentShapeOptions.h"
+#include "Application/Instruments/picoSwarmInstrument.h"
 #include "Application/Model/Config.h"
 #include "Application/Player/PlayButtonBehavior.h"
 #include "Application/Views/ImportView.h"
+#include "Application/Views/InstrumentImportView.h"
 #include "Application/Views/SampleEditorView.h"
 #include "Application/Views/VoiceScreenUtils.h"
 #include "BaseClasses/UIBigHexVarField.h"
@@ -36,15 +45,46 @@
 #include <nanoprintf.h>
 
 static const char *InstrumentTypeDisplayNames[IT_LAST] = {
-    "NONE", "SAMPLE", "MIDI", "ORIGINAL SAMPLE"};
+    "NONE",     "SAMPLE",    "SID",  "FM6",
+    "STARLOOM", "PICOSWARM", "MIDI", "ORIGINAL SAMPLE"};
 
-static constexpr int kMaxSelectableInstrumentTypeIndex = IT_LAST - 1;
+static constexpr int kMaxStandardInstrumentTypeIndex = IT_LAST - 2;
+static constexpr int kMaxLegacyInstrumentTypeIndex = IT_LAST - 1;
 static constexpr InstrumentType kDisplayIndexToInstrumentType[IT_LAST] = {
-    IT_NONE, IT_SAMPLE_SOURCE, IT_MIDI, IT_SAMPLE};
-static constexpr int kInstrumentTypeToDisplayIndex[IT_LAST] = {0, 3, 1, 2};
+    IT_NONE,     IT_SAMPLE_SOURCE, IT_SID,  IT_FM6,
+    IT_STARLOOM, IT_PICO_SWARM,    IT_MIDI, IT_SAMPLE};
+static constexpr int kInstrumentTypeToDisplayIndex[IT_LAST] = {0, 7, 1, 6,
+                                                               2, 3, 4, 5};
 
 constexpr int32_t EmbeddedSlicerGraphXOffset = SampleSlicer::GraphXOffset;
 constexpr int32_t EmbeddedSlicerGraphYOffset = 6 * CHAR_HEIGHT;
+
+void formatFM6FixedFrequency(uint32_t milliHertz, uint8_t coarse, char *buffer,
+                             size_t bufferSize) {
+  switch (coarse & 0x03U) {
+  case 0:
+    npf_snprintf(buffer, bufferSize, "%u.%03uHz",
+                 static_cast<unsigned>(milliHertz / 1000U),
+                 static_cast<unsigned>(milliHertz % 1000U));
+    break;
+  case 1: {
+    const uint32_t centiHertz = (milliHertz + 5U) / 10U;
+    npf_snprintf(buffer, bufferSize, "%u.%02uHz",
+                 static_cast<unsigned>(centiHertz / 100U),
+                 static_cast<unsigned>(centiHertz % 100U));
+  } break;
+  case 2: {
+    const uint32_t deciHertz = (milliHertz + 50U) / 100U;
+    npf_snprintf(buffer, bufferSize, "%u.%01uHz",
+                 static_cast<unsigned>(deciHertz / 10U),
+                 static_cast<unsigned>(deciHertz % 10U));
+  } break;
+  default:
+    npf_snprintf(buffer, bufferSize, "%uHz",
+                 static_cast<unsigned>((milliHertz + 500U) / 1000U));
+    break;
+  }
+}
 
 int displayIndexFromInstrumentType(InstrumentType type) {
   if (type < 0 || type >= IT_LAST) {
@@ -58,8 +98,9 @@ InstrumentView::InstrumentView(GUIWindow &w, ViewData *data)
       instrumentType_(FourCC::VarInstrumentType, InstrumentTypeDisplayNames,
                       IT_LAST, 0),
       lastSampleIndex_(-1), pendingSampleSourceLoopModeDirection_(0),
-      previewKeyHeld_(false), previewChannel_(0), previewInstrument_(0),
-      suppressSampleChangeWarning_(false),
+      previewMode_(PreviewMode::None), previewChannel_(0),
+      previewInstrument_(0), suppressSampleChangeWarning_(false),
+      fm6Selection_(1),
       embeddedSlicer_(
           {GUIPoint(EmbeddedSlicerGraphXOffset, EmbeddedSlicerGraphYOffset),
            GUIPoint(1, 12), false, false, false, true}) {
@@ -68,9 +109,10 @@ InstrumentView::InstrumentView(GUIWindow &w, ViewData *data)
 
   GUIPoint position = GUIPoint(5, 1);
   typeIntVarField_.emplace_back(position, *&instrumentType_, "Type: %s", 0,
-                                kMaxSelectableInstrumentTypeIndex, 1, 1);
+                                kMaxStandardInstrumentTypeIndex, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*typeIntVarField_.rbegin()));
   (*typeIntVarField_.rbegin()).AddObserver(*this);
+  updateInstrumentTypeSelectionAvailability();
   lastFocusID_ = FourCC::VarInstrumentType;
 
   // Create the name field with the actual instrument variable
@@ -111,8 +153,23 @@ void InstrumentView::Reset() {
   lastFocusID_ = FourCC::VarInstrumentType;
   lastFocusWasSliceGraph_ = false;
   pendingSampleSourceLoopModeDirection_ = 0;
+  previewMode_ = PreviewMode::None;
   instrumentType_.SetInt(0, false);
+  updateInstrumentTypeSelectionAvailability();
   sliceCountLabel_.clear();
+}
+
+int InstrumentView::maxSelectableInstrumentTypeIndex() const {
+  return project_->GetInstrumentBank()
+                 ->IsLegacySampleInstrumentSelectionEnabled()
+             ? kMaxLegacyInstrumentTypeIndex
+             : kMaxStandardInstrumentTypeIndex;
+}
+
+void InstrumentView::updateInstrumentTypeSelectionAvailability() {
+  if (!typeIntVarField_.empty()) {
+    typeIntVarField_.front().SetMaximum(maxSelectableInstrumentTypeIndex());
+  }
 }
 
 static void updateSliceCountLabel(etl::string<20> &label,
@@ -226,7 +283,7 @@ void InstrumentView::onInstrumentTypeChange(bool updateUI) {
     // Try to find the next available instrument type
     bool found = false;
     for (int i = displayIndexFromInstrumentType(nuType) + 1;
-         i <= kMaxSelectableInstrumentTypeIndex; i++) {
+         i <= maxSelectableInstrumentTypeIndex(); i++) {
       InstrumentType nextType = kDisplayIndexToInstrumentType[i];
       result = bank->GetNextAndAssignID(nextType, id);
       if (result != NO_MORE_INSTRUMENT) {
@@ -291,7 +348,19 @@ void InstrumentView::refreshInstrumentFields() {
   for (auto &f : intVarField_) {
     f.RemoveObserver(*this);
   }
+  for (auto &f : fm6ActionField_) {
+    f.RemoveObserver(*this);
+  }
+  for (auto &f : fm6AlgoField_) {
+    f.RemoveObserver(*this);
+  }
+  for (auto &f : fm6ParamField_) {
+    f.RemoveObserver(*this);
+  }
   for (auto &f : bigHexVarField_) {
+    f.RemoveObserver(*this);
+  }
+  for (auto &f : pitchOffsetVarField_) {
     f.RemoveObserver(*this);
   }
   for (auto &f : intVarOffField_) {
@@ -306,7 +375,11 @@ void InstrumentView::refreshInstrumentFields() {
 
   fieldList_.clear();
   intVarField_.clear();
+  fm6ActionField_.clear();
+  fm6AlgoField_.clear();
+  fm6ParamField_.clear();
   noteVarField_.clear();
+  pitchOffsetVarField_.clear();
   staticField_.clear();
   bigHexVarField_.clear();
   intVarOffField_.clear();
@@ -363,6 +436,18 @@ void InstrumentView::refreshInstrumentFields() {
   case IT_SAMPLE_SOURCE:
     fillSampleSourceParameters();
     break;
+  case IT_SID:
+    fillSIDParameters();
+    break;
+  case IT_FM6:
+    fillFM6Parameters();
+    break;
+  case IT_STARLOOM:
+    fillStarLoomParameters();
+    break;
+  case IT_PICO_SWARM:
+    fillPicoSwarmParameters();
+    break;
   case IT_LAST:
     // NA
     break;
@@ -376,7 +461,7 @@ void InstrumentView::refreshInstrumentFields() {
       }
       continue;
     }
-    if (!lastFocusWasSliceGraph_ &&
+    if (!lastFocusWasSliceGraph_ && field->HasVariable() &&
         ((UIIntVarField *)field)->GetVariableID() == lastFocusID_) {
       SetFocus(field);
       break;
@@ -391,10 +476,16 @@ void InstrumentView::refreshInstrumentFields() {
   for (auto &f : bigHexVarField_) {
     f.AddObserver(*this);
   }
+  for (auto &f : pitchOffsetVarField_) {
+    f.AddObserver(*this);
+  }
   for (auto &f : intVarOffField_) {
     f.AddObserver(*this);
   }
   for (auto &f : bitmaskVarField_) {
+    f.AddObserver(*this);
+  }
+  for (auto &f : fm6ParamField_) {
     f.AddObserver(*this);
   }
 
@@ -402,6 +493,151 @@ void InstrumentView::refreshInstrumentFields() {
 }
 
 void InstrumentView::fillNoneParameters() {}
+
+void InstrumentView::fillPicoSwarmParameters() {
+  picoSwarmInstrument *instrument =
+      static_cast<picoSwarmInstrument *>(getInstrument());
+  GUIPoint position = GetAnchor();
+  position._y += 2;
+
+  Variable *variable =
+      instrument->FindVariable(FourCC::picoSwarmInstrumentDetune);
+  intVarField_.emplace_back(
+      UIIntVarField(position, *variable, "Detune: %2.2X", 0, 0x7F, 1, 0x10));
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+
+  position._y += 1;
+  variable = instrument->FindVariable(FourCC::picoSwarmInstrumentMix);
+  intVarField_.emplace_back(
+      UIIntVarField(position, *variable, "Mix:    %2.2X", 0, 0x7F, 1, 0x10));
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+
+  position._y += 2;
+  variable =
+      instrument->FindVariable(FourCC::picoSwarmInstrumentTableAutomation);
+  intVarField_.emplace_back(
+      UIIntVarField(position, *variable, "Automation: %s", 0, 1, 1, 1));
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+
+  position._y += 1;
+  variable = instrument->FindVariable(FourCC::picoSwarmInstrumentTable);
+  intVarOffField_.emplace_back(
+      UIIntVarOffField(position, *variable, "Table: %2.2X", 0, 0x7F, 1, 0x10));
+  fieldList_.insert(fieldList_.end(), &intVarOffField_.back());
+}
+
+void InstrumentView::fillSIDParameters() {
+  SIDInstrument *instrument = static_cast<SIDInstrument *>(getInstrument());
+  const GUIPoint anchor = GetAnchor();
+  const int labelX = anchor._x;
+  static constexpr int voiceX[SIDInstrument::VoiceCount] = {11, 18, 25};
+  const FourCC waveformIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentWaveform, FourCC::SIDInstrument2Waveform,
+      FourCC::SIDInstrument3Waveform};
+  const FourCC pulseWidthIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentPulseWidth, FourCC::SIDInstrument2PulseWidth,
+      FourCC::SIDInstrument3PulseWidth};
+  const FourCC syncIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentVSync, FourCC::SIDInstrument2VSync,
+      FourCC::SIDInstrument3VSync};
+  const FourCC ringIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentRingModulator, FourCC::SIDInstrument2RingModulator,
+      FourCC::SIDInstrument3RingModulator};
+  const FourCC adsrIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentADSR, FourCC::SIDInstrument2ADSR,
+      FourCC::SIDInstrument3ADSR};
+  const FourCC filterOnIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentFilterOn, FourCC::SIDInstrument2FilterOn,
+      FourCC::SIDInstrument3FilterOn};
+  const FourCC pitchOffsetIDs[SIDInstrument::VoiceCount] = {
+      FourCC::SIDInstrumentPitchOffset, FourCC::SIDInstrument2PitchOffset,
+      FourCC::SIDInstrument3PitchOffset};
+
+  const auto addStatic = [this](int x, int y, const char *label) {
+    staticField_.emplace_back(GUIPoint(x, y), label);
+    fieldList_.insert(fieldList_.end(), &staticField_.back());
+  };
+  const auto addSectionHeader = [this](int x, int y, const char *label) {
+    staticField_.emplace_back(GUIPoint(x, y), label, CD_HILITE2);
+    fieldList_.insert(fieldList_.end(), &staticField_.back());
+  };
+  const auto addVoiceRow = [this, instrument, labelX](
+                               int y, const char *label, const FourCC *ids,
+                               const char *format, int min, int max,
+                               int fieldXOffset, int xOffset, int yOffset) {
+    staticField_.emplace_back(GUIPoint(labelX, y), label);
+    fieldList_.insert(fieldList_.end(), &staticField_.back());
+    for (int voice = 0; voice < SIDInstrument::VoiceCount; voice++) {
+      Variable *variable = instrument->FindVariable(ids[voice]);
+      intVarField_.emplace_back(GUIPoint(voiceX[voice] + fieldXOffset, y),
+                                *variable, format, min, max, xOffset, yOffset);
+      fieldList_.insert(fieldList_.end(), &intVarField_.back());
+    }
+  };
+  const auto addChipField =
+      [this, instrument](int x, int y, FourCC id, const char *format, int min,
+                         int max, int xOffset, int yOffset) {
+        Variable *variable = instrument->FindVariable(id);
+        intVarField_.emplace_back(GUIPoint(x, y), *variable, format, min, max,
+                                  xOffset, yOffset);
+        fieldList_.insert(fieldList_.end(), &intVarField_.back());
+      };
+
+  // Offset y to account for instrument type, name and export/import fields.
+  const int chipModelY = anchor._y + 2;
+  addChipField(labelX, chipModelY, FourCC::SIDInstrumentChipModel,
+               "Model:       %s", 0, SID_CHIP_LAST - 1, 1, 1);
+  addChipField(labelX, chipModelY + 1, FourCC::SIDInstrument1Volume,
+               "Volume:      %1.1X", 0, 0xF, 1, 1);
+
+  const int voiceHeaderY = chipModelY + 3;
+  addSectionHeader(5, voiceHeaderY, "Voices");
+  addVoiceRow(voiceHeaderY + 1, "Wave:", waveformIDs, "%s", 0, DWF_LAST - 1, 0,
+              1, 1);
+  addStatic(labelX, voiceHeaderY + 2, "Tune:");
+  for (int voice = 0; voice < SIDInstrument::VoiceCount; voice++) {
+    Variable *variable = instrument->FindVariable(pitchOffsetIDs[voice]);
+    pitchOffsetVarField_.emplace_back(
+        GUIPoint(voiceX[voice] - 2, voiceHeaderY + 2), *variable);
+    fieldList_.insert(fieldList_.end(), &pitchOffsetVarField_.back());
+  }
+  addVoiceRow(voiceHeaderY + 3, "Wdth:", pulseWidthIDs, " %3.3X  ", 0, 0xFFF,
+              -1, 1, 0x40);
+  addVoiceRow(voiceHeaderY + 4, "Sync:", syncIDs, "%-6s", 0, 1, 0, 1, 1);
+  addVoiceRow(voiceHeaderY + 5, "Ring:", ringIDs, "%-6s", 0, 1, 0, 1, 1);
+
+  const int adsrY = voiceHeaderY + 6;
+  addStatic(labelX, adsrY, "ADSR:");
+  for (int voice = 0; voice < SIDInstrument::VoiceCount; voice++) {
+    Variable *variable = instrument->FindVariable(adsrIDs[voice]);
+    bigHexVarField_.emplace_back(UIBigHexVarField(
+        GUIPoint(voiceX[voice] - 1, adsrY), *variable, 4, " %4.4X ", 0, 0xFFFF,
+        16, false, UIBigHexEditMode::IndependentDigits));
+    fieldList_.insert(fieldList_.end(), &bigHexVarField_.back());
+  }
+  addVoiceRow(voiceHeaderY + 7, "Filt:", filterOnIDs, "%-6s", 0, 1, 0, 1, 1);
+
+  const int chipHeaderY = voiceHeaderY + 8;
+  addSectionHeader(5, chipHeaderY, "Filter");
+  addChipField(labelX, chipHeaderY + 1, FourCC::SIDInstrument1FilterCut,
+               "Cutoff:      %3.3X", 0, 0x7FF, 1, 0x20);
+  addChipField(labelX, chipHeaderY + 2, FourCC::SIDInstrument1FilterResonance,
+               "Resonance:   %1.1X", 0, 0xF, 1, 1);
+  addChipField(labelX, chipHeaderY + 3, FourCC::SIDInstrument1FilterMode,
+               "Mode:        %s", 0, DFM_LAST - 1, 1, 1);
+
+  const int tableY = chipHeaderY + 5;
+  Variable *table = instrument->FindVariable(FourCC::SIDInstrumentTable);
+  intVarOffField_.emplace_back(GUIPoint(labelX, tableY), *table, "Table: %2.2X",
+                               0x00, TABLE_COUNT - 1, 1, 0x10);
+  fieldList_.insert(fieldList_.end(), &intVarOffField_.back());
+
+  Variable *automation =
+      instrument->FindVariable(FourCC::SIDInstrumentTableAutomation);
+  intVarField_.emplace_back(GUIPoint(labelX + 13, tableY), *automation,
+                            "Auto: %s", 0, 1, 1, 1);
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+}
 
 void InstrumentView::fillSampleParameters() {
   int i = viewData_->currentInstrumentID_;
@@ -645,26 +881,31 @@ bool InstrumentView::isEmbeddedSlicerActive() const {
   return embeddedSlicer_.IsActive();
 }
 
+uint8_t InstrumentView::instrumentPreviewNote(I_Instrument *instrument) {
+  if (!instrument || instrument->GetType() != IT_SAMPLE_SOURCE) {
+    return NOTE_C3;
+  }
+  SampleSourceInstrument *sampleSourceInstrument =
+      static_cast<SampleSourceInstrument *>(instrument);
+  return embeddedSlicer_.IsActive() ? embeddedSlicer_.PreviewNote()
+                                    : sampleSourceInstrument->GetPreviewNote();
+}
+
 bool InstrumentView::startInstrumentPreview(unsigned short mask) {
-  if (!IsSamplePreviewButtonMask(mask, EPBM_PLAY, EPBM_ALT)) {
+  if (!IsInstrumentPreviewButtonMask(mask, EPBM_PLAY, EPBM_ALT)) {
     return false;
   }
 
   I_Instrument *instrument = getInstrument();
-  if (!instrument || !viewData_->song_) {
+  if (!SupportsInstrumentPreview(instrument) || !viewData_->song_) {
     return false;
   }
-  if (instrument->GetType() != IT_SAMPLE_SOURCE) {
-    return false;
-  }
-  SampleSourceInstrument *sampleSourceInstrument =
-      static_cast<SampleSourceInstrument *>(instrument);
 
-  if (previewKeyHeld_) {
+  if (previewMode_ != PreviewMode::None) {
     return true;
   }
 
-  int channelCount = viewData_->song_->GetChannelCount();
+  int channelCount = SONG_CHANNEL_COUNT;
   if (channelCount <= 0) {
     return true;
   }
@@ -672,22 +913,45 @@ bool InstrumentView::startInstrumentPreview(unsigned short mask) {
   previewInstrument_ =
       static_cast<unsigned short>(viewData_->currentInstrumentID_);
   previewChannel_ = static_cast<unsigned short>(channelCount - 1);
-  Player::GetInstance()->PlayNote(
-      previewInstrument_, previewChannel_,
-      embeddedSlicer_.IsActive() ? embeddedSlicer_.PreviewNote()
-                                 : sampleSourceInstrument->GetPreviewNote(),
-      0x7F);
-  previewKeyHeld_ = true;
+  Player::GetInstance()->PlayNote(previewInstrument_, previewChannel_,
+                                  instrumentPreviewNote(instrument), 0x7F);
+  previewMode_ = PreviewMode::Manual;
   return true;
 }
 
+void InstrumentView::auditionParameterChange(FourCC parameter) {
+  Config *config = Config::GetInstance();
+  if (!config || !config->IsInstrumentAuditionEnabled()) {
+    return;
+  }
+
+  I_Instrument *instrument = getInstrument();
+  Player *player = Player::GetInstance();
+  if (!instrument || !viewData_->song_ || !player || player->IsRunning() ||
+      !instrument->ShouldAuditionParameterChange(parameter)) {
+    return;
+  }
+
+  // Parameters such as oscillator shape are captured at note start, so every
+  // accepted change gets a fresh note rather than reusing a sounding voice.
+  if (previewMode_ != PreviewMode::None) {
+    stopInstrumentPreview();
+  }
+  previewInstrument_ =
+      static_cast<unsigned short>(viewData_->currentInstrumentID_);
+  previewChannel_ = static_cast<unsigned short>(SONG_CHANNEL_COUNT - 1);
+  player->PlayNote(previewInstrument_, previewChannel_,
+                   instrumentPreviewNote(instrument), 0x7F);
+  previewMode_ = PreviewMode::Parameter;
+}
+
 void InstrumentView::stopInstrumentPreview() {
-  if (!previewKeyHeld_) {
+  if (previewMode_ == PreviewMode::None) {
     return;
   }
 
   Player::GetInstance()->StopNote(previewInstrument_, previewChannel_);
-  previewKeyHeld_ = false;
+  previewMode_ = PreviewMode::None;
 }
 
 void InstrumentView::drawEmbeddedSlicerWaveform() {
@@ -847,6 +1111,259 @@ void InstrumentView::fillMidiParameters() {
   fieldList_.insert(fieldList_.end(), &(*intVarOffField_.rbegin()));
 };
 
+void InstrumentView::fillStarLoomParameters() {
+  static_assert(StarLoomInstrumentControls::kVisibleParameters.size() == 13);
+  StarLoomInstrument *instrument =
+      static_cast<StarLoomInstrument *>(getInstrument());
+  const GUIPoint anchor = GetAnchor();
+  const int labelX = anchor._x;
+  const int oscillatorX[2] = {12, 22};
+  const FourCC shapeIDs[2] = {FourCC::StarLoomInstrumentShape,
+                              FourCC::StarLoomInstrumentOscillator2Shape};
+  const FourCC pitchOffsetIDs[2] = {
+      FourCC::StarLoomInstrumentOscillator1PitchOffset,
+      FourCC::StarLoomInstrumentOscillator2PitchOffset};
+  const FourCC timbreIDs[2] = {FourCC::StarLoomInstrumentTimbre,
+                               FourCC::StarLoomInstrumentOscillator2Timbre};
+  const FourCC colorIDs[2] = {FourCC::StarLoomInstrumentColor,
+                              FourCC::StarLoomInstrumentOscillator2Color};
+
+  const auto addSectionHeader = [this](int x, int y, const char *label) {
+    staticField_.emplace_back(GUIPoint(x, y), label, CD_HILITE2);
+    fieldList_.insert(fieldList_.end(), &staticField_.back());
+  };
+  const auto addOscillatorRow = [this, instrument, labelX, &oscillatorX](
+                                    int y, const char *label, const FourCC *ids,
+                                    const char *format, int min, int max,
+                                    int xOffset, int yOffset) {
+    staticField_.emplace_back(GUIPoint(labelX, y), label);
+    fieldList_.insert(fieldList_.end(), &staticField_.back());
+    for (size_t oscillator = 0; oscillator < 2; ++oscillator) {
+      Variable *variable = instrument->FindVariable(ids[oscillator]);
+      intVarField_.emplace_back(GUIPoint(oscillatorX[oscillator], y), *variable,
+                                format, min, max, xOffset, yOffset);
+      fieldList_.insert(fieldList_.end(), &intVarField_.back());
+    }
+  };
+
+  const int commonY = anchor._y + 2;
+  Variable *variable = instrument->FindVariable(FourCC::StarLoomInstrumentMix);
+  intVarField_.emplace_back(GUIPoint(labelX, commonY), *variable,
+                            "Mix:      %s", -0x7F, 0x7F, 1, 0x10, 0,
+                            UIIntVarFieldDisplayMode::SignedHex);
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+
+  variable =
+      instrument->FindVariable(FourCC::StarLoomInstrumentInteractionMode);
+  intVarField_.emplace_back(
+      GUIPoint(labelX, commonY + 1), *variable, "Interact: %s", 0,
+      StarLoomInstrumentDSP::kInteractionModeCount - 1, 1, 1);
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+
+  variable = instrument->FindVariable(FourCC::StarLoomInstrumentSignature);
+  intVarField_.emplace_back(GUIPoint(labelX, commonY + 2), *variable,
+                            "Signature: %s", 0, 4, 1, 1);
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+
+  const int voiceHeaderY = commonY + 4;
+  addSectionHeader(labelX, voiceHeaderY, "Voices");
+  addOscillatorRow(voiceHeaderY + 1, "Shape:", shapeIDs, "%-8s", 0,
+                   StarLoomInstrumentShapes::kAllowedShapeCount - 1, 1, 1);
+  addOscillatorRow(voiceHeaderY + 2, "Timbre:", timbreIDs, "%2.2X", 0, 0x7F, 1,
+                   0x10);
+  addOscillatorRow(voiceHeaderY + 3, "Color:", colorIDs, "%2.2X", 0, 0x7F, 1,
+                   0x10);
+  staticField_.emplace_back(GUIPoint(labelX, voiceHeaderY + 4), "Tune:");
+  fieldList_.insert(fieldList_.end(), &staticField_.back());
+  for (size_t oscillator = 0; oscillator < 2; ++oscillator) {
+    Variable *variable = instrument->FindVariable(pitchOffsetIDs[oscillator]);
+    pitchOffsetVarField_.emplace_back(
+        GUIPoint(oscillatorX[oscillator] - 1, voiceHeaderY + 4), *variable);
+    fieldList_.insert(fieldList_.end(), &pitchOffsetVarField_.back());
+  }
+
+  const int tableY = voiceHeaderY + 6;
+  Variable *table = instrument->FindVariable(FourCC::StarLoomInstrumentTable);
+  intVarOffField_.emplace_back(GUIPoint(labelX, tableY), *table, "Table: %2.2X",
+                               0x00, TABLE_COUNT - 1, 1, 0x10);
+  fieldList_.insert(fieldList_.end(), &intVarOffField_.back());
+
+  Variable *automation =
+      instrument->FindVariable(FourCC::StarLoomInstrumentTableAutomation);
+  intVarField_.emplace_back(GUIPoint(labelX + 12, tableY), *automation,
+                            "Auto: %s", 0, 1, 1, 1);
+  fieldList_.insert(fieldList_.end(), &intVarField_.back());
+}
+
+void InstrumentView::fillFM6Parameters() {
+  int i = viewData_->currentInstrumentID_;
+  InstrumentBank *bank = viewData_->project_->GetInstrumentBank();
+  I_Instrument *instr = bank->GetInstrument(i);
+  FM6Instrument *instrument = static_cast<FM6Instrument *>(instr);
+  GUIPoint position = GetAnchor();
+
+  position._y += 2;
+  fm6ActionField_.emplace_back("Presets", FourCC::ActionShowFM6Presets,
+                               position);
+  fm6ActionField_.back().AddObserver(*this);
+  fieldList_.insert(fieldList_.end(), &fm6ActionField_.back());
+
+  position._y += 1;
+  fm6AlgoField_.emplace_back(position, *instrument, fm6Selection_);
+  fm6AlgoField_.back().AddObserver(*this);
+  fieldList_.insert(fieldList_.end(), &fm6AlgoField_.back());
+
+  // The panel below fills the rows between the algorithm row and the table
+  // row, showing whichever block the algorithm field's cursor selects. Every
+  // operator uses the same layout, so moving the cursor between operators
+  // only needs a redraw; switching to or from the global block rebuilds.
+  if (fm6Selection_ >= FM6SelectionGlobal) {
+    fillFM6GlobalPanel(*instrument, position._x, position._y + 1);
+  } else {
+    fillFM6OperatorPanel(*instrument, position._x, position._y + 1);
+  }
+
+  // Clear the 12 rows the panel occupies: a leading blank, then three
+  // sections of a blank-separated heading plus its value rows and then
+  // a blank line
+  position._y += 14;
+  Variable *v = instrument->FindVariable(FourCC::FM6InstrumentTable);
+  intVarOffField_.emplace_back(position, *v, "Table: %2.2X", 0x00,
+                               TABLE_COUNT - 1, 1, 0x10);
+  fieldList_.insert(fieldList_.end(), &(*intVarOffField_.rbegin()));
+
+  position._x += 13;
+  v = instrument->FindVariable(FourCC::FM6InstrumentTableAutomation);
+  intVarField_.emplace_back(position, *v, "Auto: %s", 0, 1, 1, 1);
+  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
+}
+
+void InstrumentView::addFM6Label(int x, int y, const char *text) {
+  staticField_.emplace_back(GUIPoint(x, y), text);
+  fieldList_.insert(fieldList_.end(), &staticField_.back());
+}
+
+// Section headings follow the same convention as the SID screen: the plain
+// section name in CD_HILITE2, with no rule drawn around it.
+void InstrumentView::addFM6SectionHeader(int x, int y, const char *text) {
+  staticField_.emplace_back(GUIPoint(x, y), text, CD_HILITE2);
+  fieldList_.insert(fieldList_.end(), &staticField_.back());
+}
+
+void InstrumentView::addFM6Param(int x, int y, FM6Instrument &instrument,
+                                 const FM6ParamDef &def) {
+  fm6ParamField_.emplace_back(GUIPoint(x, y), instrument, fm6Selection_, def);
+  fieldList_.insert(fieldList_.end(), &fm6ParamField_.back());
+}
+
+void InstrumentView::fillFM6OperatorPanel(FM6Instrument &instrument, int x,
+                                          int y) {
+  addFM6SectionHeader(x, y + 1, "Envelope");
+  addFM6Label(x, y + 2, "Rate:");
+  addFM6Label(x, y + 3, "Level:");
+  for (int i = 0; i < 4; ++i) {
+    addFM6Param(x + 6 + (i * 4), y + 2, instrument, kFM6OpRate[i]);
+    addFM6Param(x + 6 + (i * 4), y + 3, instrument, kFM6OpLevel[i]);
+  }
+
+  addFM6SectionHeader(x, y + 5, "Scaling");
+  addFM6Label(x, y + 6, "Break:");
+  addFM6Param(x + 6, y + 6, instrument, kFM6OpBreakPoint);
+  addFM6Label(x + 12, y + 6, "Depth:");
+  addFM6Param(x + 18, y + 6, instrument, kFM6OpLeftDepth);
+  addFM6Label(x + 20, y + 6, "/");
+  addFM6Param(x + 21, y + 6, instrument, kFM6OpRightDepth);
+  addFM6Label(x, y + 7, "Curve:");
+  addFM6Param(x + 6, y + 7, instrument, kFM6OpLeftCurve);
+  addFM6Label(x + 10, y + 7, "/");
+  addFM6Param(x + 11, y + 7, instrument, kFM6OpRightCurve);
+  addFM6Label(x + 17, y + 7, "Rs:");
+  addFM6Param(x + 20, y + 7, instrument, kFM6OpRateScaling);
+
+  addFM6SectionHeader(x, y + 9, "Oscillator");
+  staticField_.emplace_back(GUIPoint(x + 12, y + 9), fm6FixedFrequencyLabel_,
+                            CD_EMPHASIS);
+  fieldList_.insert(fieldList_.end(), &staticField_.back());
+  addFM6Label(x, y + 10, "Mode:");
+  addFM6Param(x + 5, y + 10, instrument, kFM6OpFixedMode);
+  addFM6Label(x + 12, y + 10, "Crs:");
+  addFM6Param(x + 16, y + 10, instrument, kFM6OpCoarse);
+  addFM6Label(x + 19, y + 10, "Fine:");
+  addFM6Param(x + 24, y + 10, instrument, kFM6OpFine);
+  addFM6Label(x, y + 11, "Out:");
+  addFM6Param(x + 4, y + 11, instrument, kFM6OpOutputLevel);
+  addFM6Label(x + 8, y + 11, "Det:");
+  addFM6Param(x + 12, y + 11, instrument, kFM6OpDetune);
+  addFM6Label(x + 15, y + 11, "Vel:");
+  addFM6Param(x + 19, y + 11, instrument, kFM6OpVelSens);
+  addFM6Label(x + 21, y + 11, "AM:");
+  addFM6Param(x + 24, y + 11, instrument, kFM6OpAmpModSens);
+}
+
+void InstrumentView::updateFM6FixedFrequencyLabel() {
+  fm6FixedFrequencyLabel_[0] = '\0';
+
+  I_Instrument *instrument = getInstrument();
+  if (!instrument || instrument->GetType() != IT_FM6 || fm6Selection_ == 0U ||
+      fm6Selection_ >= FM6SelectionGlobal) {
+    return;
+  }
+
+  FM6Instrument *fm6Instrument = static_cast<FM6Instrument *>(instrument);
+  const size_t sliceIndex = fm6::OperatorCount - fm6Selection_;
+  const uint8_t modeAndCoarse =
+      fm6Instrument->GetPatchByte(sliceIndex, kFM6OpFixedMode.offset);
+  const uint8_t mode =
+      (modeAndCoarse >> kFM6OpFixedMode.shift) & kFM6OpFixedMode.valueMask;
+  if (mode == 0U) {
+    return;
+  }
+
+  const uint8_t coarse =
+      (modeAndCoarse >> kFM6OpCoarse.shift) & kFM6OpCoarse.valueMask;
+  const uint8_t fineByte =
+      fm6Instrument->GetPatchByte(sliceIndex, kFM6OpFine.offset);
+  const uint8_t fine = (fineByte >> kFM6OpFine.shift) & kFM6OpFine.valueMask;
+  const uint32_t milliHertz = fm6::Dx7FixedFrequencyMilliHertz(coarse, fine);
+  formatFM6FixedFrequency(milliHertz, coarse, fm6FixedFrequencyLabel_,
+                          sizeof(fm6FixedFrequencyLabel_));
+}
+
+void InstrumentView::fillFM6GlobalPanel(FM6Instrument &instrument, int x,
+                                        int y) {
+  addFM6SectionHeader(x, y + 1, "Pitch EG");
+  addFM6Label(x, y + 2, "Rate:");
+  addFM6Label(x, y + 3, "Level:");
+  for (int i = 0; i < 4; ++i) {
+    addFM6Param(x + 6 + (i * 4), y + 2, instrument, kFM6PitchEgRate[i]);
+    addFM6Param(x + 6 + (i * 4), y + 3, instrument, kFM6PitchEgLevel[i]);
+  }
+
+  addFM6SectionHeader(x, y + 5, "LFO");
+  addFM6Label(x, y + 6, "Wave:");
+  addFM6Param(x + 5, y + 6, instrument, kFM6LfoWave);
+  addFM6Label(x + 11, y + 6, "Sync:");
+  addFM6Param(x + 16, y + 6, instrument, kFM6LfoSync);
+  addFM6Label(x, y + 7, "Spd:");
+  addFM6Param(x + 4, y + 7, instrument, kFM6LfoSpeed);
+  addFM6Label(x + 8, y + 7, "Dly:");
+  addFM6Param(x + 12, y + 7, instrument, kFM6LfoDelay);
+  addFM6Label(x + 16, y + 7, "PMD:");
+  addFM6Param(x + 20, y + 7, instrument, kFM6LfoPitchDepth);
+  addFM6Label(x, y + 8, "AMD:");
+  addFM6Param(x + 4, y + 8, instrument, kFM6LfoAmpDepth);
+  addFM6Label(x + 8, y + 8, "PMS:");
+  addFM6Param(x + 12, y + 8, instrument, kFM6PitchModSens);
+  addFM6Label(x + 16, y + 8, "OscSy:");
+  addFM6Param(x + 22, y + 8, instrument, kFM6OscSync);
+
+  addFM6SectionHeader(x, y + 10, "Voice");
+  addFM6Label(x, y + 11, "Feedback:");
+  addFM6Param(x + 9, y + 11, instrument, kFM6Feedback);
+  addFM6Label(x + 13, y + 11, "Transp:");
+  addFM6Param(x + 20, y + 11, instrument, kFM6Transpose);
+}
+
 void InstrumentView::warpToNext(int offset) {
   int instrument = viewData_->currentInstrumentID_ + offset;
   if (instrument >= MAX_INSTRUMENT_COUNT) {
@@ -863,8 +1380,11 @@ void InstrumentView::warpToNext(int offset) {
 void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
 
   if (!pressed) {
-    if (previewKeyHeld_ &&
-        !IsSamplePreviewComboHeld(mask, EPBM_PLAY, EPBM_ALT)) {
+    const bool previewHeld =
+        previewMode_ == PreviewMode::Parameter
+            ? (mask & EPBM_ENTER) != 0
+            : IsInstrumentPreviewComboHeld(mask, EPBM_PLAY, EPBM_ALT);
+    if (previewMode_ != PreviewMode::None && !previewHeld) {
       stopInstrumentPreview();
       return;
     }
@@ -910,9 +1430,8 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
     if (getInstrument()->GetType() == IT_SAMPLE ||
         getInstrument()->GetType() == IT_SAMPLE_SOURCE) {
       UIField *focus = GetFocus();
-      UIIntVarField *field = embeddedSlicer_.HasGraphFocus(focus)
-                                 ? nullptr
-                                 : (UIIntVarField *)focus;
+      UIIntVarField *field =
+          (focus && focus->HasVariable()) ? (UIIntVarField *)focus : nullptr;
       Variable *endVar = nullptr;
       int sampleSize = 0;
       if (instr->GetType() == IT_SAMPLE) {
@@ -948,8 +1467,24 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
       pendingSampleSourceLoopModeDirection_ = -1;
     }
   }
+  const bool fm6WasGlobal = fm6Selection_ >= FM6SelectionGlobal;
   FieldView::ProcessButtonMask(mask, pressed);
   pendingSampleSourceLoopModeDirection_ = 0;
+
+  // ENTER+LEFT/RIGHT on the focused algorithm field can move its cursor
+  // between an operator and the global block, which changes which parameter
+  // fields exist. Rebuilding out here rather than inside the field's own
+  // handler keeps the field alive for the rest of the input dispatch.
+  if (!fm6AlgoField_.empty() &&
+      fm6WasGlobal != (fm6Selection_ >= FM6SelectionGlobal)) {
+    // Drop the focus pointer before the fields behind it are destroyed.
+    ClearFocus();
+    refreshInstrumentFields();
+    if (!fm6AlgoField_.empty()) {
+      SetFocus(&fm6AlgoField_.back());
+    }
+    isDirty_ = true;
+  }
   if (embeddedSlicerActive) {
     uint32_t pointSample = 0;
     bool hasPointSample = focusedEmbeddedSlicerPointSample(pointSample);
@@ -970,7 +1505,7 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
     // Get the current field to check if we're on the sample field
     UIField *focus = GetFocus();
     UIIntVarField *currentField =
-        embeddedSlicer_.HasGraphFocus(focus) ? nullptr : (UIIntVarField *)focus;
+        (focus && focus->HasVariable()) ? (UIIntVarField *)focus : nullptr;
 
     // Only allow sample import when the sample field is selected
     Variable *sampleVar = nullptr;
@@ -1001,8 +1536,6 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
           DoModal(mb);
         } else {
           ImportView::SetSourceViewType(VT_INSTRUMENT);
-          // set browser into sample import mode in top level samples dir
-          viewData_->importViewStartDir = SAMPLES_LIB_DIR;
 
           // Go to import sample
           ViewType vt = VT_IMPORT;
@@ -1048,9 +1581,8 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
   if (viewMode_ == VM_CLONE) {
     if ((mask & EPBM_ENTER) && (mask & EPBM_ALT)) {
       UIField *focus = GetFocus();
-      UIIntVarField *field = embeddedSlicer_.HasGraphFocus(focus)
-                                 ? nullptr
-                                 : (UIIntVarField *)focus;
+      UIIntVarField *field =
+          (focus && focus->HasVariable()) ? (UIIntVarField *)focus : nullptr;
       mask &= (0xFFFF - EPBM_ENTER);
       if (!field) {
         return;
@@ -1151,13 +1683,14 @@ void InstrumentView::ProcessButtonMask(unsigned short mask, bool pressed) {
   UIField *focus = GetFocus();
   lastFocusWasSliceGraph_ = embeddedSlicer_.HasGraphFocus(focus);
   UIIntVarField *field =
-      lastFocusWasSliceGraph_ ? nullptr : (UIIntVarField *)focus;
+      (focus && focus->HasVariable()) ? (UIIntVarField *)focus : nullptr;
   if (field) {
     lastFocusID_ = field->GetVariableID();
   }
 };
 
 void InstrumentView::DrawView() {
+  updateFM6FixedFrequencyLabel();
   Clear();
 
   GUITextProperties props;
@@ -1203,6 +1736,10 @@ void InstrumentView::AnimationUpdate() {
 
 void InstrumentView::OnFocus() {
   Trace::Log("INSTRUMENTVIEW", "onFocus");
+
+  // Importing a legacy sample instrument can enable it after the view's last
+  // reset, so refresh the rotation limit whenever the screen is entered.
+  updateInstrumentTypeSelectionAvailability();
 
   // Get latest selected instrument, ensures we display the instrument that was
   // selected in the PhraseView
@@ -1339,7 +1876,11 @@ void InstrumentView::Update(Observable &o, I_ObservableData *data) {
       }
     } else {
       MessageBox *mb = MessageBox::Create(*this, "Not while playing", MBBF_OK);
-      DoModal(mb);
+      clearEmbeddedSlicerWaveform();
+      DoModal(mb,
+              ModalViewCallback::create<InstrumentView,
+                                        &InstrumentView::onSimpleModalDismiss>(
+                  *this));
     }
     break;
   }
@@ -1348,7 +1889,15 @@ void InstrumentView::Update(Observable &o, I_ObservableData *data) {
   } break;
   case FourCC::ActionImport: {
     // Switch to the InstrumentImportView
+    InstrumentImportView::SetMode(InstrumentImportView::Mode::Instrument);
     ViewType vt = VT_INSTRUMENT_IMPORT;
+    ViewEvent ve(VET_SWITCH_VIEW, &vt);
+    SetChanged();
+    NotifyObservers(&ve);
+  } break;
+  case FourCC::ActionShowFM6Presets: {
+    stopInstrumentPreview();
+    ViewType vt = VT_FM6_PRESETS;
     ViewEvent ve(VET_SWITCH_VIEW, &vt);
     SetChanged();
     NotifyObservers(&ve);
@@ -1475,6 +2024,7 @@ void InstrumentView::Update(Observable &o, I_ObservableData *data) {
   default:
     break;
   }
+  auditionParameterChange(FourCC(static_cast<FourCC::value_type>(fourcc)));
 }
 
 bool InstrumentView::checkInstrumentModified() {
@@ -1665,4 +2215,11 @@ void InstrumentView::onConfirmExportOverwrite(View &, ModalView &dialog) {
   PersistencyService::GetInstance()->ExportInstrument(instrument, name, true);
   Trace::Log("INSTRUMENTVIEW", "Instrument '%s' exported with overwrite",
              name.c_str());
+}
+
+void InstrumentView::onSimpleModalDismiss(View &, ModalView &) {
+  if (isEmbeddedSlicerActive()) {
+    embeddedSlicer_.MarkModalRecovery(2);
+    isDirty_ = true;
+  }
 }

@@ -20,6 +20,7 @@
 #include "I_Instrument.h"
 #include "Services/Midi/MidiMessage.h"
 #include "Services/Midi/MidiService.h"
+#include "config/MemorySections.h"
 
 #define MAX_MIDI_CHORD_NOTES 4
 #define INITIAL_NOTE_VELOCITY 0x7F
@@ -56,6 +57,7 @@ public:
 
   virtual bool IsEmpty() { return false; };
 
+  PICOTRACKER_FAST_CODE("midi_instrument_get_type")
   virtual InstrumentType GetType() { return IT_MIDI; };
 
   virtual etl::string<MAX_INSTRUMENT_NAME_LENGTH> GetDefaultName();
@@ -83,6 +85,21 @@ public:
   };
 
 private:
+  struct VolumeCommandState {
+    float current_;
+    float target_;
+    uint16_t ticksRemaining_;
+    uint8_t lastSent_;
+    bool overrideActive_;
+    bool rampActive_;
+  };
+
+  void ResetVolumeCommand(int channel);
+  void StartVolumeCommand(int channel, uint16_t value);
+  void AdvanceVolumeCommand(int channel);
+  void SendVolume(uint8_t value);
+  static uint8_t EncodeVolume(float value);
+
   etl::vector<Variable *, 25> variables_;
 
   etl::array<uint8_t, MAX_MIDI_CHORD_NOTES + 1> lastNotes_[SONG_CHANNEL_COUNT];
@@ -104,6 +121,7 @@ private:
   float interpolationAlpha_ = 0.1f;
   bool pitchBend_;
   bool useLogCurve_;
+  VolumeCommandState volumeCommand_[SONG_CHANNEL_COUNT];
 
   Variable channel_;
   Variable noteLen_;

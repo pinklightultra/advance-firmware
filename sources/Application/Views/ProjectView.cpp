@@ -16,6 +16,7 @@
 #include "Application/Model/Scale.h"
 #include "Application/Model/Song.h"
 #include "Application/Persistency/PersistencyService.h"
+#include "Application/Utils/char.h"
 #include "Application/Utils/randomnames.h"
 #include "Application/Views/BaseClasses/BrowserPathUtils.h"
 #include "Application/Views/ImportView.h"
@@ -34,6 +35,55 @@
 #include <etl/to_string.h>
 
 static void SaveAsOverwriteCallback(View &v, ModalView &dialog);
+
+ProjectMidiValueField::ProjectMidiValueField(const GUIPoint &position,
+                                             uint8_t &value, uint8_t minimum,
+                                             uint8_t maximum,
+                                             uint8_t defaultValue)
+    : UIField(position), value_(&value), minimum_(minimum), maximum_(maximum),
+      defaultValue_(defaultValue) {}
+
+void ProjectMidiValueField::Draw(GUIWindow &w, int offset) {
+  GUITextProperties props;
+  GUIPoint position = GetPosition();
+  position._y += offset;
+
+  char value[3];
+  hex2char(*value_, value);
+  if (focus_) {
+    static_cast<AppWindow &>(w).SetColor(CD_HILITE2);
+    props.invert_ = true;
+  } else {
+    static_cast<AppWindow &>(w).SetColor(CD_NORMAL);
+  }
+  w.DrawString(value, position, props);
+}
+
+void ProjectMidiValueField::ProcessArrow(unsigned short mask) {
+  int16_t next = *value_;
+  switch (mask) {
+  case EPBM_UP:
+    next += 0x10;
+    break;
+  case EPBM_DOWN:
+    next -= 0x10;
+    break;
+  case EPBM_LEFT:
+    next -= 0x01;
+    break;
+  case EPBM_RIGHT:
+    next += 0x01;
+    break;
+  }
+
+  next = std::clamp(next, static_cast<int16_t>(minimum_),
+                    static_cast<int16_t>(maximum_));
+  *value_ = static_cast<uint8_t>(next);
+}
+
+void ProjectMidiValueField::ProcessClear() { *value_ = defaultValue_; }
+
+uint8_t ProjectMidiValueField::GetValue() const { return *value_; }
 
 static bool SaveAsProject(ProjectView &projectView) {
   PersistencyService *persist = PersistencyService::GetInstance();
@@ -218,6 +268,42 @@ ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
   stemsField_ = &(*actionField_.rbegin());
   (*actionField_.rbegin()).AddObserver(*this);
   position._x = xalign;
+
+  // MIDI input routing and default programs use the remaining six rows. MIDI
+  // channels are ordered left-to-right, then top-to-bottom.
+  position._y += 1;
+  staticField_.emplace_back(position, "MIDI CHANNEL MAP", CD_HILITE2);
+  fieldList_.insert(fieldList_.end(), &(*staticField_.rbegin()));
+
+  position._y += 1;
+  for (int songChannel = 0; songChannel < SONG_CHANNEL_COUNT; songChannel++) {
+    midiMapField_.emplace_back(
+        position, project_->song_.midiInputChannels_[songChannel],
+        MIDI_INPUT_CHANNEL_NONE, MIDI_INPUT_CHANNEL_COUNT,
+        MIDI_INPUT_CHANNEL_NONE);
+    fieldList_.insert(fieldList_.end(), &(*midiMapField_.rbegin()));
+    position._x += 3;
+  }
+
+  position._x = xalign;
+  position._y += 2;
+  staticField_.emplace_back(position, "MIDI DEFAULT PROGRAM", CD_HILITE2);
+  fieldList_.insert(fieldList_.end(), &(*staticField_.rbegin()));
+
+  position._y += 1;
+  for (int midiChannel = 0; midiChannel < MIDI_INPUT_CHANNEL_COUNT;
+       midiChannel++) {
+    if (midiChannel == SONG_CHANNEL_COUNT) {
+      position._x = xalign;
+      position._y += 1;
+    }
+    midiDefaultProgramField_.emplace_back(
+        position, project_->song_.midiDefaultPrograms_[midiChannel],
+        MIDI_INPUT_MIN_PROGRAM, MIDI_INPUT_MAX_PROGRAM,
+        MIDI_INPUT_DEFAULT_PROGRAM);
+    fieldList_.insert(fieldList_.end(), &(*midiDefaultProgramField_.rbegin()));
+    position._x += 3;
+  }
 }
 
 ProjectView::~ProjectView() {}
@@ -227,7 +313,48 @@ void ProjectView::ProcessButtonMask(unsigned short mask, bool pressed) {
   if (!pressed)
     return;
 
+  int8_t editedSongChannel = -1;
+  uint8_t previousMidiMapValue = MIDI_INPUT_CHANNEL_NONE;
+  int8_t editedMidiChannel = -1;
+  uint8_t previousDefaultProgram = MIDI_INPUT_DEFAULT_PROGRAM;
+  UIField *focusedField = GetFocus();
+  for (size_t i = 0; i < midiMapField_.size(); i++) {
+    if (focusedField == &midiMapField_[i]) {
+      editedSongChannel = static_cast<int8_t>(i);
+      previousMidiMapValue = midiMapField_[i].GetValue();
+      break;
+    }
+  }
+  for (size_t i = 0; i < midiDefaultProgramField_.size(); i++) {
+    if (focusedField == &midiDefaultProgramField_[i]) {
+      editedMidiChannel = static_cast<int8_t>(i);
+      previousDefaultProgram = midiDefaultProgramField_[i].GetValue();
+      break;
+    }
+  }
+
   FieldView::ProcessButtonMask(mask, pressed);
+
+  if (editedSongChannel >= 0 &&
+      previousMidiMapValue !=
+          midiMapField_[static_cast<size_t>(editedSongChannel)].GetValue()) {
+    Player::GetInstance()->OnMidiInputAssignmentChanged(
+        static_cast<uint8_t>(editedSongChannel));
+  }
+
+  if (editedMidiChannel >= 0 &&
+      previousDefaultProgram !=
+          midiDefaultProgramField_[static_cast<size_t>(editedMidiChannel)]
+              .GetValue()) {
+    // Match a received Program Change for future notes while leaving the
+    // edited project value in place as this channel's new default.
+    MidiService *midiService = MidiService::GetInstance();
+    if (midiService != nullptr) {
+      midiService->SetInputProgramForChannel(
+          editedMidiChannel,
+          project_->song_.GetMidiDefaultInstrumentIndex(editedMidiChannel));
+    }
+  }
 
   if (mask & EPBM_EDIT) {
     if (mask & EPBM_PLAY) {
@@ -321,7 +448,7 @@ void ProjectView::DrawRenderSelectionSummary(const GUIRect &selectionRect) {
   etl::to_string(endRow, rowText, rowFormat, true);
   rowText += ']';
 
-  const uint8_t channelCount = viewData_->song_->GetChannelCount();
+  const uint8_t channelCount = SONG_CHANNEL_COUNT;
   const int32_t lastChannel = channelCount > 0 ? channelCount - 1 : 0;
   const int32_t startChannel = std::max(int32_t{0}, left);
   const int32_t endChannel = std::min(right, lastChannel);

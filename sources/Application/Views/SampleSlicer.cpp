@@ -785,8 +785,7 @@ void SampleSlicer::startPreview(ViewData &viewData) {
 
   uint8_t note = PreviewNote();
 
-  previewChannel_ =
-      static_cast<unsigned short>(viewData.song_->GetChannelCount() - 1);
+  previewChannel_ = static_cast<unsigned short>(SONG_CHANNEL_COUNT - 1);
   Player::GetInstance()->PlayNote(static_cast<unsigned short>(instrumentIndex_),
                                   previewChannel_, note, 0x7F);
   previewNote_ = note;
@@ -801,8 +800,7 @@ void SampleSlicer::stopPreview(ViewData *viewData) {
   }
   unsigned short channel = previewChannel_;
   if (viewData && viewData->song_) {
-    channel =
-        static_cast<unsigned short>(viewData->song_->GetChannelCount() - 1);
+    channel = static_cast<unsigned short>(SONG_CHANNEL_COUNT - 1);
   }
   Player::GetInstance()->StopNote(static_cast<unsigned short>(instrumentIndex_),
                                   channel);

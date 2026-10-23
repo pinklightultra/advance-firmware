@@ -38,6 +38,12 @@ public:
 
   virtual bool IsStatic();
 
+  // True only for fields that expose GetVariableID(). Callers that look a
+  // field up by variable id must check this before casting to
+  // UIIntVarField: several field types (actions, text, and the FM6 algorithm
+  // and parameter fields) derive from UIField directly.
+  virtual bool HasVariable() const;
+
 protected:
   uint8_t x_;
   uint8_t y_;

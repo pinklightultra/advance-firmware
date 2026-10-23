@@ -34,6 +34,7 @@
 #define RECORDINGS_DIR "/recordings"
 #define INSTRUMENT_FILE_EXTENSION ".pti"
 #define THEME_FILE_EXTENSION ".ptt"
+#define DX7_BANK_FILE_EXTENSION ".syx"
 
 #define RECORDING_FILENAME "REC01.wav"
 

@@ -28,6 +28,24 @@
 
 template <uint8_t MaxLength> class UITextField;
 
+class ProjectMidiValueField : public UIField {
+public:
+  ProjectMidiValueField(const GUIPoint &position, uint8_t &value,
+                        uint8_t minimum, uint8_t maximum, uint8_t defaultValue);
+
+  void Draw(GUIWindow &w, int offset = 0) override;
+  void ProcessArrow(unsigned short mask) override;
+  void ProcessClear() override;
+  void OnClick() override {}
+  uint8_t GetValue() const;
+
+private:
+  uint8_t *value_;
+  uint8_t minimum_;
+  uint8_t maximum_;
+  uint8_t defaultValue_;
+};
+
 class ProjectView : public FieldView, public I_Observer {
 public:
   ProjectView(GUIWindow &w, ViewData *data);
@@ -70,8 +88,11 @@ private:
   etl::vector<UITempoField, 1> tempoField_;
   etl::vector<UIIntVarField, 4> intVarField_;
   etl::vector<UIActionField, 10> actionField_;
-  etl::vector<UIStaticField, 1> staticField_;
+  etl::vector<UIStaticField, 3> staticField_;
   etl::vector<UITextField<MAX_PROJECT_NAME_LENGTH>, 1> textField_;
+  etl::vector<ProjectMidiValueField, SONG_CHANNEL_COUNT> midiMapField_;
+  etl::vector<ProjectMidiValueField, MIDI_INPUT_CHANNEL_COUNT>
+      midiDefaultProgramField_;
 
   // References to specific fields that need direct access
   UITextField<MAX_PROJECT_NAME_LENGTH> *nameField_;

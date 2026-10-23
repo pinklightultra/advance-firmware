@@ -63,13 +63,15 @@ enum ViewType {
   VT_MASTER_EFFECTS,
   VT_IMPORT,            // Sample file import
   VT_INSTRUMENT_IMPORT, // Instrument file import
+  VT_FM6_PRESETS,       // FM6 built-in preset browser
   VT_SELECTPROJECT,     // Select project
   VT_THEME,             // Theme settings
   VT_SELECTTHEME,       // Theme selection
   VT_THEME_IMPORT,      // Theme file import
   VT_SAMPLE_EDITOR,     // Sample Editor
   VT_SAMPLE_SLICES,     // Sample slice editor
-  VT_RECORD             // Recording screen
+  VT_RECORD,            // Recording screen
+  VT_CREDITS            // Credits screen
 };
 
 enum ViewMode {

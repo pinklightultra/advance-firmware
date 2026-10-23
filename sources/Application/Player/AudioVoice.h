@@ -32,9 +32,24 @@
 struct DWTProfileStats;
 class AccumulatingDWTProfile;
 
-// Exposes the aggregate voice profile so the channel wet/dry pass can
-// contribute its cost to the overall voice total.
-DWTProfileStats *GetVoiceRenderProfileStats();
+enum class VoiceProfileComponent : uint8_t {
+  Source,
+  Bandwidth,
+  Filter,
+  Amp,
+  Pan,
+  Lfo,
+  Insert1,
+  Insert2,
+  PlayerControl,
+  WetDry,
+  Count,
+};
+
+DWTProfileStats *GetVoiceProfileStats(VoiceProfileComponent component,
+                                      uint32_t channel);
+DWTProfileStats *GetVoiceChannelTotalProfileStats(uint32_t channel);
+DWTProfileStats *GetVoicesTotalProfileStats();
 
 class AudioVoice {
 public:
@@ -53,6 +68,11 @@ public:
 
 private:
   static constexpr int InsertSlotCount = 2;
+  // Source pitch ramps are evaluated this many times per sequencer slice.
+  // Their remaining duration is stored in sequencer steps, so changing this
+  // only affects smoothness.
+  static constexpr uint8_t SourceCommandSubdivisionsPerSlice = 8;
+  static constexpr uint8_t PitchUpdaterCapacity = 8;
   using InsertEffectPool =
       etl::variant_pool<InsertSlotCount, PassthroughInsertEffect,
                         OverdriveInsertEffect, BitcrushInsertEffect,
@@ -90,6 +110,13 @@ private:
     float lowpassOut_ = 0.0f;
   };
 
+  struct BandpassCoefficientState {
+    int base_ = -1;
+    int width_ = -1;
+    float highpassAlpha_ = 0.0f;
+    float lowpassAlpha_ = 0.0f;
+  };
+
   struct StandardFilterState {
     float ic1eq_ = 0.0f;
     float ic2eq_ = 0.0f;
@@ -115,9 +142,70 @@ private:
   struct CommandValueState {
     float current_ = 0.0f;
     float target_ = 0.0f;
-    float step_ = 0.0f;
+    float stepsRemaining_ = 0.0f;
     bool overrideActive_ = false;
     bool rampActive_ = false;
+  };
+
+  struct PitchUpdater {
+    virtual ~PitchUpdater() = default;
+    virtual bool AdvanceControl(float sequencerSteps) {
+      (void)sequencerSteps;
+      return false;
+    }
+    virtual bool AdvanceTick() { return false; }
+    virtual bool HasActiveRamp() const { return false; }
+    virtual float GetCurrentRatio() const = 0;
+    virtual void Reset() = 0;
+
+    bool registered_ = false;
+  };
+
+  struct FixedDurationLinearPitchRampState final : PitchUpdater {
+    bool AdvanceControl(float sequencerSteps) override;
+    bool HasActiveRamp() const override { return active_; }
+    float GetCurrentRatio() const override { return current_; }
+    void Reset() override;
+
+    float current_ = 1.0f;
+    float target_ = 1.0f;
+    float stepsRemaining_ = 0.0f;
+    bool active_ = false;
+  };
+
+  struct FixedDurationLogPitchRampState final : PitchUpdater {
+    bool AdvanceControl(float sequencerSteps) override;
+    bool HasActiveRamp() const override { return active_; }
+    float GetCurrentRatio() const override { return current_; }
+    void Reset() override;
+
+    float current_ = 1.0f;
+    float target_ = 1.0f;
+    float stepsRemaining_ = 0.0f;
+    bool active_ = false;
+  };
+
+  struct ArpeggiatorState final : PitchUpdater {
+    void Configure(uint16_t value);
+    bool AdvanceTick() override;
+    float GetCurrentRatio() const override { return current_; }
+    void Reset() override;
+
+    uint8_t values_[5] = {};
+    uint8_t position_ = 0;
+    uint8_t length_ = 0;
+    float current_ = 1.0f;
+    bool active_ = false;
+  };
+
+  struct PitchCommandState {
+    FixedDurationLinearPitchRampState pitchSlide_;
+    FixedDurationLogPitchRampState legato_;
+    FixedDurationLogPitchRampState fineTune_;
+    ArpeggiatorState arpeggiator_;
+    float currentMultiplier_ = 1.0f;
+    bool multiplierDirty_ = true;
+    etl::vector<PitchUpdater *, PitchUpdaterCapacity> contributors_;
   };
 
   void refreshParameterRefs();
@@ -133,16 +221,30 @@ private:
                       Variable *variable, int defaultValue,
                       bool clampPanValue = false);
   void cancelCommandRamp(CommandValueState &state);
-  void advanceCommandRamp(CommandValueState &state, int samplecount);
-  void advanceCommandRamps(int samplecount);
-  float getCommandRampStep(float target, float start, float speedParam) const;
+  void advanceCommandRamp(CommandValueState &state, float sequencerSteps);
+  void advanceCommandRamps(float sequencerSteps);
+  // This is the single speed-byte conversion used by every AudioVoice ramp.
+  // One speed unit is one sequencer slice.
+  static float commandSpeedDurationSteps(float speedParam);
+  bool processPitchCommand(TrackerCommand command, ushort value);
+  bool registerPitchUpdater(PitchUpdater &updater);
+  void resetPitchCommands();
+  void advancePitchTick();
+  void advancePitchRamps(float sequencerSteps);
+  int getPitchRampCompletionSamples(float stepSampleCount) const;
+  bool hasActivePitchRamp() const;
+  void markPitchMultiplierDirty();
+  void updatePitchMultiplier();
+  void applyPitchMultiplier();
+  bool renderSourceWithControl(AudioSample *buffer, AudioBufferLayout layout,
+                               int samplecount, bool updateTick,
+                               float stepSampleCount);
   void resetStageState();
   void updateFilterEnvelopeParameters();
   void updateAmpEnvelopeParameters();
   void syncFilterType();
-  void runStage(AccumulatingDWTProfile &chainProfile,
-                AccumulatingDWTProfile &lfoProfile,
-                AccumulatingDWTProfile &stageProfile, uint8_t lfoMask,
+  void runStage(AccumulatingDWTProfile &lfoProfile,
+                AccumulatingDWTProfile *stageProfile, uint8_t lfoMask,
                 AudioSample *inputBuffer, AudioBufferLayout inputLayout,
                 AudioSample *outputBuffer, AudioBufferLayout outputLayout,
                 int samplecount,
@@ -183,6 +285,9 @@ private:
 
   int channel_;
   I_Instrument *source_;
+  int16_t currentNote_;
+  int16_t previousNote_;
+  bool legatoNotePending_;
   ParameterRefs params_;
   InsertEffectPool insertEffectPool_;
   InsertEffectSlot insertEffectSlots_[InsertSlotCount];
@@ -191,6 +296,7 @@ private:
   etl::vector<InsertEffectSlot *, InsertSlotCount> preInsertChain_;
   etl::vector<InsertEffectSlot *, InsertSlotCount> postInsertChain_;
   BaseWidthState bandpassState_[2];
+  BandpassCoefficientState bandpassCoefficients_;
   StandardFilterState standardFilterState_[2];
   FilterMorphState filterMorph_;
   StageLFOMasks stageLfoMasks_;
@@ -198,6 +304,9 @@ private:
   CommandValueState panCommand_;
   CommandValueState filterCutoffCommand_;
   CommandValueState filterResonanceCommand_;
+  PitchCommandState pitchCommand_;
+  float appliedPitchMultiplier_ = 1.0f;
+  bool pitchMultiplierApplied_ = false;
   ChannelLFOBank lfoBank_;
   VoiceADSR ampEnvelope_;
   VoiceADSR filterEnvelope_;

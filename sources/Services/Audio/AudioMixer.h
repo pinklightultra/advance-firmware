@@ -37,9 +37,6 @@ public:
   void SetRenderGain(AudioSample gain);
   void SetName(etl::string<12> name) { name_ = name; };
   void SetRenderProfileStats(DWTProfileStats *stats) { profileStats_ = stats; }
-  void SetRenderProfileSlotCount(uint32_t slotCount) {
-    profileSlotCount_ = slotCount > 0 ? slotCount : 1;
-  }
   void SetProfileMixMath(bool enabled) { profileMixMath_ = enabled; }
 
   stereosample GetMixerLevels() { return peakMixerLevel_; }
@@ -55,7 +52,6 @@ private:
   AudioSample renderGain_;
   etl::string<12> name_;
   DWTProfileStats *profileStats_ = nullptr;
-  uint32_t profileSlotCount_ = 1;
   bool profileMixMath_ = false;
   static constexpr size_t MaxModules = 16;
   etl::vector<AudioModule *, MaxModules> modules_;

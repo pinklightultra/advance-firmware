@@ -292,7 +292,7 @@ void MasterEffectsView::togglePlay() {
     return;
   }
 
-  const int32_t songChannelCount = viewData_->song_->GetChannelCount();
+  const int32_t songChannelCount = SONG_CHANNEL_COUNT;
   if (songChannelCount <= 0) {
     return;
   }

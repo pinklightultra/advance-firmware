@@ -16,13 +16,34 @@
 
 #include "Foundation/Observable.h"
 #include "UIIntVarField.h"
+#include <cstdint>
+
+enum class UIBigHexEditMode : uint8_t { Carry, IndependentDigits };
+
+namespace UIBigHexVarFieldDetail {
+
+inline int AdjustIndependentHexDigit(int value, uint8_t position,
+                                     int direction) {
+  const uint8_t shift = position * 4;
+  const int digit = (value >> shift) & 0xF;
+  if (direction > 0 && digit < 0xF) {
+    return value + (1 << shift);
+  }
+  if (direction < 0 && digit > 0) {
+    return value - (1 << shift);
+  }
+  return value;
+}
+
+} // namespace UIBigHexVarFieldDetail
 
 class UIBigHexVarField : public UIIntVarField {
 
 public:
   UIBigHexVarField(const GUIPoint &position, Variable &v, int precision,
                    const char *format, int min, int max, int power,
-                   bool wrap = false);
+                   bool wrap = false,
+                   UIBigHexEditMode editMode = UIBigHexEditMode::Carry);
   virtual ~UIBigHexVarField(){};
   virtual void Draw(GUIWindow &w, int offset = 0);
   virtual void ProcessArrow(unsigned short mask);
@@ -39,5 +60,6 @@ private:
   unsigned int power_;
   unsigned int position_;
   bool wrap_;
+  UIBigHexEditMode editMode_;
 };
 #endif

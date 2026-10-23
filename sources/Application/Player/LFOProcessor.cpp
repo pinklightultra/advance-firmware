@@ -9,6 +9,7 @@
 #include "LFOProcessor.h"
 #include "Services/Audio/Audio.h"
 #include "SyncMaster.h"
+#include "config/MemorySections.h"
 #include <algorithm>
 #include <cmath>
 
@@ -113,6 +114,7 @@ void ChannelLFOBank::Advance(int samplecount) {
                samplecount);
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_advance_slots")
 void ChannelLFOBank::AdvanceSlots(uint8_t slotMask, int samplecount) {
   if (!instrument_) {
     return;
@@ -139,6 +141,7 @@ void ChannelLFOBank::Reset() {
   }
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_get_live_value")
 int ChannelLFOBank::GetLiveModulatedValue(LFOTarget target, int baseValue,
                                           int minValue, int maxValue) const {
   const int configIndex = findConfigIndex(target);
@@ -180,6 +183,7 @@ void ChannelLFOBank::resetState(size_t index) {
   state.currentValue_ = evaluateCurrentValue(index);
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_advance_state")
 void ChannelLFOBank::advanceState(size_t index, int samplecount) {
   if (!instrument_) {
     return;
@@ -262,6 +266,7 @@ LFOConfig ChannelLFOBank::readConfig(size_t index) const {
   return config;
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_evaluate_value")
 float ChannelLFOBank::evaluateCurrentValue(size_t index) const {
   if (!instrument_) {
     return 0.0f;
@@ -271,6 +276,7 @@ float ChannelLFOBank::evaluateCurrentValue(size_t index) const {
                        states_[index].randomValue_);
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_random_bipolar")
 float ChannelLFOBank::randomBipolar(size_t index) {
   RuntimeState &state = states_[index];
   state.rngState_ = state.rngState_ * 1664525u + 1013904223u;
@@ -279,6 +285,7 @@ float ChannelLFOBank::randomBipolar(size_t index) {
   return (normalized * 2.0f) - 1.0f;
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_phase_increment")
 float ChannelLFOBank::phaseIncrement(const LFOConfig &config) const {
   if (config.rateMode_ == LFORateMode::Sync) {
     const LFOSyncDivision &division =
@@ -290,6 +297,7 @@ float ChannelLFOBank::phaseIncrement(const LFOConfig &config) const {
   return LFOSettings::RateValueToHertz(config.rate_) / sampleRate();
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_find_config")
 int ChannelLFOBank::findConfigIndex(LFOTarget target) const {
   if (!instrument_ || target == LFOTarget::None) {
     return -1;
@@ -304,6 +312,7 @@ int ChannelLFOBank::findConfigIndex(LFOTarget target) const {
   return -1;
 }
 
+PICOTRACKER_FAST_CODE("channel_lfo_apply_depth")
 int ChannelLFOBank::applyDepth(int baseValue, int minValue, int maxValue,
                                float normalized, int depth) {
   const int offset = static_cast<int>(std::lround(normalized * depth));

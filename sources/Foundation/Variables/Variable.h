@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _VARIABLE_H_
@@ -36,6 +40,11 @@ public:
 
   Type GetType();
   void SetInt(int value, bool notify = true);
+  // Set the current value and adopt it as the default (baseline) value, so
+  // IsModified()/Reset() treat this value as the instrument's clean state
+  // rather than a user modification. Used for per-instrument initial values
+  // that differ from the variable's constructed default.
+  void SetIntAsDefault(int32_t value);
   int GetInt();
   void SetFloat(float value, bool notify = true);
   float GetFloat();
@@ -43,7 +52,7 @@ public:
   virtual etl::string<MAX_VARIABLE_STRING_LENGTH> GetString();
   void SetBool(bool value, bool notify = true);
   bool GetBool();
-  void CopyFrom(Variable &other);
+  virtual void CopyFrom(Variable &other);
   // Not very clean !
   uint8_t GetListSize();
   const char *const *GetListPointer();

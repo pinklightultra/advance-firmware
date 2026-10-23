@@ -8,6 +8,7 @@
 
 #include "OutputEffectSlot.h"
 #include "System/Console/n_assert.h"
+#include "config/MemorySections.h"
 #include <string.h>
 
 OutputEffectSlot::OutputEffectSlot(AudioSample *wetBuffer,
@@ -19,10 +20,12 @@ OutputEffectSlot::OutputEffectSlot(AudioSample *wetBuffer,
   memset(wetBuffer_, 0, MAX_SAMPLE_COUNT * 2 * sizeof(AudioSample));
 }
 
+PICOTRACKER_FAST_CODE("output_effect_slot_begin_render_cycle")
 void OutputEffectSlot::BeginRenderCycle(AudioSample returnGain) {
   returnGain_ = returnGain;
 }
 
+PICOTRACKER_FAST_CODE("output_effect_slot_clear_accumulation")
 void OutputEffectSlot::ClearAccumulationBuffer() {
   memset(wetBuffer_, 0, MAX_SAMPLE_COUNT * 2 * sizeof(AudioSample));
 }
@@ -32,6 +35,8 @@ void OutputEffectSlot::ResetState() {
   effect_->Reset();
 }
 
+bool OutputEffectSlot::IsTailActive() const { return effect_->IsTailActive(); }
+
 AudioSample *OutputEffectSlot::GetAccumulationBuffer() { return wetBuffer_; }
 
 void OutputEffectSlot::SetEffect(OutputEffectProcessor *effect) {
@@ -40,6 +45,7 @@ void OutputEffectSlot::SetEffect(OutputEffectProcessor *effect) {
 
 OutputEffectProcessor *OutputEffectSlot::GetEffect() const { return effect_; }
 
+PICOTRACKER_FAST_CODE("output_effect_slot_render")
 bool OutputEffectSlot::Render(AudioSample *buffer, int samplecount) {
   const int count = samplecount * 2;
   effect_->Render(wetBuffer_, buffer, samplecount);

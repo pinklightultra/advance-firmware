@@ -557,7 +557,7 @@ void AnalogOscillator::RenderBuzz(const uint8_t *sync_in, int16_t *buffer,
 }
 
 /* static */
-AnalogOscillator::RenderFn AnalogOscillator::fn_table_[] = {
+const AnalogOscillator::RenderFn AnalogOscillator::fn_table_[] = {
     &AnalogOscillator::RenderSaw,          &AnalogOscillator::RenderVariableSaw,
     &AnalogOscillator::RenderCSaw,         &AnalogOscillator::RenderSquare,
     &AnalogOscillator::RenderTriangle,     &AnalogOscillator::RenderSine,

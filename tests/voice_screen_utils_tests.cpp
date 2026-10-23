@@ -16,7 +16,8 @@ namespace {
 
 class TestInstrumentBase : public I_Instrument {
 public:
-  TestInstrumentBase() : I_Instrument(&variables_) {}
+  explicit TestInstrumentBase(InstrumentType type)
+      : I_Instrument(&variables_), type_(type) {}
 
   bool Init() override { return true; }
 
@@ -35,7 +36,7 @@ public:
 
   bool IsEmpty() override { return false; }
 
-  InstrumentType GetType() override { return IT_SAMPLE_SOURCE; }
+  InstrumentType GetType() override { return type_; }
 
   void ProcessCommand(int channel, TrackerCommand cc, ushort value) override {
     (void)channel;
@@ -64,28 +65,36 @@ public:
 
 private:
   etl::vector<Variable *, 1> variables_;
-};
-
-class DefaultVoiceScreenInstrument : public TestInstrumentBase {};
-
-class AudioVoiceScreenInstrument : public TestInstrumentBase {
-public:
-  bool SupportsAudioVoiceScreen() const override { return true; }
+  InstrumentType type_;
 };
 
 } // namespace
 
-TEST_CASE("Audio voice screen support is opt-in per instrument type") {
-  DefaultVoiceScreenInstrument legacyInstrument;
-  AudioVoiceScreenInstrument audioVoiceInstrument;
+TEST_CASE("Audio voice parameters exclude only non-audio and legacy paths") {
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_NONE));
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_SAMPLE));
+  CHECK_FALSE(InstrumentTypeUsesModernAudioVoice(IT_MIDI));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_SAMPLE_SOURCE));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_SID));
+  CHECK(InstrumentTypeUsesModernAudioVoice(IT_STARLOOM));
+}
 
-  CHECK_FALSE(legacyInstrument.SupportsAudioVoiceScreen());
-  CHECK(audioVoiceInstrument.SupportsAudioVoiceScreen());
+TEST_CASE("Instrument preview supports audio instruments but not MIDI") {
+  TestInstrumentBase noneInstrument(IT_NONE);
+  TestInstrumentBase sampleInstrument(IT_SAMPLE);
+  TestInstrumentBase midiInstrument(IT_MIDI);
+  TestInstrumentBase synthInstrument(IT_FM6);
+
+  CHECK_FALSE(SupportsInstrumentPreview(nullptr));
+  CHECK_FALSE(SupportsInstrumentPreview(&noneInstrument));
+  CHECK(SupportsInstrumentPreview(&sampleInstrument));
+  CHECK_FALSE(SupportsInstrumentPreview(&midiInstrument));
+  CHECK(SupportsInstrumentPreview(&synthInstrument));
 }
 
 TEST_CASE("Audio voice map marker is only shown on eligible screens") {
-  DefaultVoiceScreenInstrument legacyInstrument;
-  AudioVoiceScreenInstrument audioVoiceInstrument;
+  TestInstrumentBase legacyInstrument(IT_SAMPLE);
+  TestInstrumentBase audioVoiceInstrument(IT_SID);
 
   CHECK_FALSE(ShouldShowAudioVoiceScreenOnMap(VT_INSTRUMENT, nullptr));
   CHECK_FALSE(

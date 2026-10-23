@@ -44,7 +44,7 @@ else()
 endif()
 
 # Enable profiling
-add_definitions(-DENABLE_PROFILING=0)
+add_compile_definitions(ENABLE_PROFILING=$<BOOL:${ENABLE_PROFILING}>)
 
 # Enable stats for RTOS
 #add_definitions(-DRTOS_STATS)

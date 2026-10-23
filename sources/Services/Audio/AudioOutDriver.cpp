@@ -14,13 +14,19 @@
 #include "AudioOutDriver.h"
 #include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
+#include "config/MemorySections.h"
 #include <algorithm>
 
 namespace {
 
-constexpr int kEngineSampleRate = 44100;
+constexpr uint16_t kProfileOrderGrandTotal = 65;
 
-DWTProfileStats gGrandTotalProfile = {"grand total", true};
+DWTProfileStats gGrandTotalProfile = {
+    .name_ = "grand total",
+    .printLast_ = true,
+    .flushBoundary_ = true,
+    .displayOrder_ = kProfileOrderGrandTotal,
+};
 
 void registerAudioOutProfiles() {
   static bool registered = false;
@@ -68,10 +74,10 @@ void AudioOutDriver::SetAudioActive(bool active) {
 
 stereosample AudioOutDriver::GetLastPeakLevels() { return lastPeakVolume_; };
 
+PICOTRACKER_FAST_CODE("audio_out_driver_trigger")
 void AudioOutDriver::Trigger() {
   prepareMixBuffers();
-  ScopedDWTProfile grandTotalProfile(&gGrandTotalProfile, sampleCount_,
-                                     kEngineSampleRate, 1);
+  ScopedDWTProfile grandTotalProfile(&gGrandTotalProfile);
   hasSound_ = AudioMixer::Render(primarySoundBuffer_, sampleCount_) > 0;
   clipToMix();
   driver_->AddBuffer(mixBuffer_, sampleCount_);
@@ -82,10 +88,12 @@ void AudioOutDriver::Update(Observable &o, I_ObservableData *d) {
   NotifyObservers(d);
 }
 
+PICOTRACKER_FAST_CODE("audio_out_driver_prepare_mix_buffers")
 void AudioOutDriver::prepareMixBuffers() {
   sampleCount_ = getPlaySampleCount();
 };
 
+PICOTRACKER_FAST_CODE("audio_out_driver_clip_to_mix")
 void AudioOutDriver::clipToMix() {
 
   bool interlaced = driver_->Interlaced();

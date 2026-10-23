@@ -13,13 +13,15 @@
  *  - Player::IsStreamingActive() returns a narrower predicate than IsPlaying()
  *  - Sample pool mutation is correct and consistent after ImportSample
  *  - FileSystem operations during import have no unexpected side effects
- *  - Import with resampling/downmixing works through the safe path
+ *  - Import with resampling preserves source channel layout through the safe
+ *    path
  */
 
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Instruments/WavHeader.h"
 #include "Application/Player/Player.h"
 #include "Application/Player/PlayerMixer.h"
+#include "Application/Views/BaseClasses/PlaybackStatusIndicator.h"
 #include "System/FileSystem/FakeFileSystem.h"
 #include "doctest/doctest.h"
 #include <algorithm>
@@ -175,9 +177,8 @@ bool operationLogHasNoChdir(const FakeFileSystem &fs) {
 // ImportSample — basic functionality
 // ============================================================================
 
-TEST_CASE(
-    "ImportSample imports from an absolute source path without "
-    "cwd changes") {
+TEST_CASE("ImportSample imports from an absolute source path without "
+          "cwd changes") {
   FakeFileSystem fs;
   FileSystemInstallGuard installGuard(&fs);
   fs.AddDirectory("/imports");
@@ -187,8 +188,7 @@ TEST_CASE(
   TestSamplePool pool;
   fs.ClearOperationLog();
 
-  const int sampleIndex =
-      pool.ImportSample("/imports/Drum Loop.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/Drum Loop.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   REQUIRE(pool.loadedPaths().size() == 1);
@@ -209,8 +209,7 @@ TEST_CASE("ImportSample returns -1 when pool is full") {
   pool.SetMaxSamples(1);
   pool.SeedLoadedSample("Existing.wav");
 
-  const int sampleIndex =
-      pool.ImportSample("/imports/Full.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/Full.wav", "demo");
 
   CHECK(sampleIndex == -1);
   CHECK(pool.sampleCount() == 1);
@@ -224,16 +223,14 @@ TEST_CASE("ImportSample returns -1 when input file does not exist") {
   fs.AddDirectory("/projects/demo/samples");
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/NonExistent.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/NonExistent.wav", "demo");
 
   CHECK(sampleIndex == -1);
   CHECK(pool.sampleCount() == 0);
 }
 
-TEST_CASE(
-    "ImportSample truncates overlong source leaf names to a valid "
-    "project sample filename") {
+TEST_CASE("ImportSample truncates overlong source leaf names to a valid "
+          "project sample filename") {
   FakeFileSystem fs;
   FileSystemInstallGuard installGuard(&fs);
   fs.AddDirectory("/imports");
@@ -243,7 +240,7 @@ TEST_CASE(
   TestSamplePool pool;
 
   const int sampleIndex =
-      pool.ImportSample("/imports/abcdefghijklmnopqrstuvwxyz.wav", "demo", 2);
+      pool.ImportSample("/imports/abcdefghijklmnopqrstuvwxyz.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   CHECK(pool.storedName(0) == "abcdefghijklmnopqrst.wav");
@@ -261,7 +258,7 @@ TEST_CASE("ImportSample writes to correct project path") {
   TestSamplePool pool;
 
   const int sampleIndex =
-      pool.ImportSample("/imports/CorrectPath.wav", "newproj", 2);
+      pool.ImportSample("/imports/CorrectPath.wav", "newproj");
 
   REQUIRE(sampleIndex == 0);
   CHECK(fs.exists("/projects/newproj/samples/CorrectPath.wav"));
@@ -269,29 +266,29 @@ TEST_CASE("ImportSample writes to correct project path") {
 }
 
 // ============================================================================
-// ImportSample — resampling and downmixing
+// ImportSample — resampling and channel layout
 // ============================================================================
 
-TEST_CASE(
-    "ImportSample keeps exact 44.1 kHz imports bit-identical to "
-    "source") {
+TEST_CASE("ImportSample keeps exact 44.1 kHz imports bit-identical to "
+          "source") {
   FakeFileSystem fs;
   FileSystemInstallGuard installGuard(&fs);
   fs.AddDirectory("/imports");
   fs.AddDirectory("/projects/demo/samples");
 
-  const std::array<int16_t, 8> samples = {0, 1024, -1024, 0,
-                                          2048, -2048, 512, -512};
+  const std::array<int16_t, 8> samples = {0,    1024,  -1024, 0,
+                                          2048, -2048, 512,   -512};
   writeTestWav(fs, "/imports/Exact.wav", 44100, 1, samples.data(), 4);
 
   TestSamplePool pool;
-  const int sampleIndex = pool.ImportSample("/imports/Exact.wav", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/Exact.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   auto imported = fs.Open("/projects/demo/samples/Exact.wav", "r");
   REQUIRE(imported);
   WavHeaderInfo headerInfo;
-  const std::vector<int16_t> pcm = readPcm16Data(fs, "/projects/demo/samples/Exact.wav", headerInfo);
+  const std::vector<int16_t> pcm =
+      readPcm16Data(fs, "/projects/demo/samples/Exact.wav", headerInfo);
   CHECK(std::equal(pcm.begin(), pcm.end(), samples.begin()));
 }
 
@@ -303,8 +300,7 @@ TEST_CASE("ImportSample resamples 48 kHz imports to 44.1 kHz") {
   writeTestWav(fs, "/imports/ResampleMe.wav", 48000);
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/ResampleMe.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/ResampleMe.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
 
@@ -316,9 +312,7 @@ TEST_CASE("ImportSample resamples 48 kHz imports to 44.1 kHz") {
   CHECK(header->dataChunkSize > 0);
 }
 
-TEST_CASE(
-    "ImportSample downmixes stereo imports to mono for mono "
-    "projects") {
+TEST_CASE("ImportSample preserves stereo imports") {
   FakeFileSystem fs;
   FileSystemInstallGuard installGuard(&fs);
   fs.AddDirectory("/imports");
@@ -326,26 +320,22 @@ TEST_CASE(
 
   const std::array<int16_t, 8> stereoSamples = {1000,  -1000, 3000, 1000,
                                                 -2000, -4000, 2000, 2000};
-  writeTestWav(fs, "/imports/StereoToMono.wav", 44100, 2, stereoSamples.data(),
-               4);
+  writeTestWav(fs, "/imports/Stereo.wav", 44100, 2, stereoSamples.data(), 4);
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/StereoToMono.wav", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/Stereo.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   WavHeaderInfo headerInfo;
   const std::vector<int16_t> imported =
-      readPcm16Data(fs, "/projects/demo/samples/StereoToMono.wav", headerInfo);
+      readPcm16Data(fs, "/projects/demo/samples/Stereo.wav", headerInfo);
 
   CHECK(headerInfo.sampleRate == 44100);
-  CHECK(headerInfo.numChannels == 1);
-  CHECK(imported == std::vector<int16_t>({0, 2000, -3000, 2000}));
+  CHECK(headerInfo.numChannels == 2);
+  CHECK(std::equal(imported.begin(), imported.end(), stereoSamples.begin()));
 }
 
-TEST_CASE(
-    "ImportSample downmixes resampled stereo imports to mono for "
-    "mono projects") {
+TEST_CASE("ImportSample preserves stereo channels while resampling") {
   FakeFileSystem fs;
   FileSystemInstallGuard installGuard(&fs);
   fs.AddDirectory("/imports");
@@ -353,22 +343,21 @@ TEST_CASE(
 
   const std::array<int16_t, 8> stereoSamples = {0,     1000,  1000, 0,
                                                 -1000, -1000, 0,    0};
-  writeTestWav(fs, "/imports/StereoResampleToMono.wav", 48000, 2,
+  writeTestWav(fs, "/imports/StereoResample.wav", 48000, 2,
                stereoSamples.data(), 4);
 
   TestSamplePool pool;
   const int sampleIndex =
-      pool.ImportSample("/imports/StereoResampleToMono.wav", "demo", 1);
+      pool.ImportSample("/imports/StereoResample.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
 
-  auto imported =
-      fs.Open("/projects/demo/samples/StereoResampleToMono.wav", "r");
+  auto imported = fs.Open("/projects/demo/samples/StereoResample.wav", "r");
   REQUIRE(imported);
   auto header = WavHeaderWriter::ReadHeader(imported.get());
   REQUIRE(header.has_value());
   CHECK(header->sampleRate == 44100);
-  CHECK(header->numChannels == 1);
+  CHECK(header->numChannels == 2);
   CHECK(header->dataChunkSize > 0);
 }
 
@@ -387,9 +376,9 @@ TEST_CASE("ImportSample supports multiple sequential imports") {
 
   TestSamplePool pool;
 
-  const int idxA = pool.ImportSample("/imports/SampleA.wav", "demo", 1);
-  const int idxB = pool.ImportSample("/imports/SampleB.wav", "demo", 1);
-  const int idxC = pool.ImportSample("/imports/SampleC.wav", "demo", 1);
+  const int idxA = pool.ImportSample("/imports/SampleA.wav", "demo");
+  const int idxB = pool.ImportSample("/imports/SampleB.wav", "demo");
+  const int idxC = pool.ImportSample("/imports/SampleC.wav", "demo");
 
   REQUIRE(idxA == 0);
   REQUIRE(idxB == 1);
@@ -410,9 +399,8 @@ TEST_CASE("ImportSample with duplicate filename uses truncated name") {
 
   TestSamplePool pool;
 
-  const int idx1 = pool.ImportSample("/imports/Snare.wav", "demo", 1);
-  const int idx2 =
-      pool.ImportSample("/imports/Snare (2).wav", "demo", 1);
+  const int idx1 = pool.ImportSample("/imports/Snare.wav", "demo");
+  const int idx2 = pool.ImportSample("/imports/Snare (2).wav", "demo");
 
   REQUIRE(idx1 == 0);
   REQUIRE(idx2 == 1);
@@ -435,8 +423,7 @@ TEST_CASE("ImportSample performs expected file operations") {
   TestSamplePool pool;
   fs.ClearOperationLog();
 
-  const int sampleIndex =
-      pool.ImportSample("/imports/OpTest.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/OpTest.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
 
@@ -453,7 +440,8 @@ TEST_CASE("ImportSample performs expected file operations") {
   CHECK(std::any_of(fs.operationLog().begin(), fs.operationLog().end(),
                     [](const FakeFileSystemOperation &entry) {
                       return entry.type == FakeFileSystemOperationType::Open &&
-                             entry.path == "/projects/demo/samples/OpTest.wav" &&
+                             entry.path ==
+                                 "/projects/demo/samples/OpTest.wav" &&
                              entry.success;
                     }));
 
@@ -478,8 +466,7 @@ TEST_CASE("ImportSample handles failed project file creation") {
   TestSamplePool pool;
 
   // Import with null project name — should fail gracefully
-  const int sampleIndex =
-      pool.ImportSample("/imports/Valid.wav", nullptr, 2);
+  const int sampleIndex = pool.ImportSample("/imports/Valid.wav", nullptr);
 
   CHECK(sampleIndex == -1);
 }
@@ -495,13 +482,12 @@ TEST_CASE("ImportSample does not corrupt existing samples on failure") {
   TestSamplePool pool;
   pool.SeedLoadedSample("Existing.wav");
 
-  // This should succeed and add a second sample
-  const int idx =
-      pool.ImportSample("/imports/Existing.wav", "demo", 1);
-  REQUIRE(idx == 1);
-  CHECK(pool.sampleCount() == 2);
+  // The pool already holds a sample under this name, so the import must be
+  // refused rather than truncate the file that entry is backed by
+  const int idx = pool.ImportSample("/imports/Existing.wav", "demo");
+  REQUIRE(idx == SamplePool::ImportDuplicateNameError);
+  CHECK(pool.sampleCount() == 1);
   CHECK(pool.storedName(0) == "Existing.wav");
-  CHECK(pool.storedName(1) == "Existing.wav");
 }
 
 // ============================================================================
@@ -515,18 +501,16 @@ TEST_CASE("ImportSample produces the expected mono import result") {
   fs.AddDirectory("/imports_b");
   fs.AddDirectory("/projects/demo/samples");
 
-  const std::array<int16_t, 8> samples = {0, 1024, -1024, 0,
-                                          2048, -2048, 512, -512};
+  const std::array<int16_t, 8> samples = {0,    1024,  -1024, 0,
+                                          2048, -2048, 512,   -512};
   writeTestWav(fs, "/imports_a/EqTest.wav", 44100, 1, samples.data(), 4);
   writeTestWav(fs, "/imports_b/EqTest.wav", 44100, 1, samples.data(), 4);
 
   TestSamplePool poolA;
-  const int idxA =
-      poolA.ImportSample("/imports_a/EqTest.wav", "demo", 1);
+  const int idxA = poolA.ImportSample("/imports_a/EqTest.wav", "demo");
 
   TestSamplePool poolB;
-  const int idxB =
-      poolB.ImportSample("/imports_b/EqTest.wav", "demo", 1);
+  const int idxB = poolB.ImportSample("/imports_b/EqTest.wav", "demo");
 
   REQUIRE(idxA == 0);
   REQUIRE(idxB == 0);
@@ -562,6 +546,66 @@ TEST_CASE("PlayerMixer stub IsStreamingActive returns false when no streamer") {
 TEST_CASE("Player stub IsStreamingActive returns false when no streamer") {
   // Same as above — verifies the Player-level API contract.
   CHECK_FALSE(Player::GetInstance()->IsStreamingActive());
+}
+
+TEST_CASE("Sample preview has a distinct playback status") {
+  const PlaybackStatusIndicator status =
+      ResolvePlaybackStatusIndicator(false, false, false, true, false, PM_SONG);
+
+  CHECK(status == PlaybackStatusIndicator::SamplePreview);
+  CHECK(ShowsPlaybackIcon(status));
+  CHECK(GetPlaybackStatusSuffix(status)[0] == 'S');
+}
+
+TEST_CASE("Playback status applies audition and sample preview precedence") {
+  CHECK(ResolvePlaybackStatusIndicator(true, false, false, true, false,
+                                       PM_PHRASE) ==
+        PlaybackStatusIndicator::SamplePreview);
+  CHECK(ResolvePlaybackStatusIndicator(false, false, false, true, true,
+                                       PM_SONG) ==
+        PlaybackStatusIndicator::SamplePreview);
+  CHECK(
+      ResolvePlaybackStatusIndicator(true, true, true, true, false, PM_CHAIN) ==
+      PlaybackStatusIndicator::Audition);
+  CHECK(ResolvePlaybackStatusIndicator(true, false, true, true, false,
+                                       PM_CHAIN) ==
+        PlaybackStatusIndicator::MidiInput);
+  CHECK(ResolvePlaybackStatusIndicator(true, false, false, false, false,
+                                       PM_PHRASE) ==
+        PlaybackStatusIndicator::Phrase);
+  CHECK(ResolvePlaybackStatusIndicator(false, false, false, false, true,
+                                       PM_SONG) ==
+        PlaybackStatusIndicator::Tail);
+}
+
+TEST_CASE("MIDI input has a distinct playback status") {
+  const PlaybackStatusIndicator status =
+      ResolvePlaybackStatusIndicator(false, false, true, false, false, PM_SONG);
+
+  CHECK(status == PlaybackStatusIndicator::MidiInput);
+  CHECK(ShowsPlaybackIcon(status));
+  CHECK(GetPlaybackStatusSuffix(status)[0] == 'M');
+}
+
+TEST_CASE("Channel visualizer is shown for sequencer or MIDI input playback") {
+  CHECK(ShowsChannelPlaybackVisualizer(true, false, false));
+  CHECK_FALSE(ShowsChannelPlaybackVisualizer(true, true, false));
+  CHECK(ShowsChannelPlaybackVisualizer(false, false, true));
+  CHECK_FALSE(ShowsChannelPlaybackVisualizer(false, false, false));
+}
+
+TEST_CASE("Playback status preserves normal, chain, and idle states") {
+  CHECK(ResolvePlaybackStatusIndicator(true, false, false, false, false,
+                                       PM_SONG) ==
+        PlaybackStatusIndicator::Normal);
+  CHECK(ResolvePlaybackStatusIndicator(true, false, false, false, false,
+                                       PM_CHAIN) ==
+        PlaybackStatusIndicator::Chain);
+
+  const PlaybackStatusIndicator idle = ResolvePlaybackStatusIndicator(
+      false, false, false, false, false, PM_SONG);
+  CHECK(idle == PlaybackStatusIndicator::None);
+  CHECK_FALSE(ShowsPlaybackIcon(idle));
 }
 
 // ============================================================================
@@ -605,8 +649,7 @@ TEST_CASE("ImportSample notifies observers with SPET_INSERT") {
   SamplePoolEventCounter counter;
   pool.AddObserver(counter);
 
-  const int sampleIndex =
-      pool.ImportSample("/imports/Notify.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/Notify.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   CHECK(counter.eventCount() == 1);
@@ -624,8 +667,7 @@ TEST_CASE("ImportSample on failure does not notify observers") {
   SamplePoolEventCounter counter;
   pool.AddObserver(counter);
 
-  const int sampleIndex =
-      pool.ImportSample("/imports/NoFile.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/NoFile.wav", "demo");
 
   CHECK(sampleIndex == -1);
   CHECK(counter.eventCount() == 0);
@@ -650,8 +692,7 @@ TEST_CASE("ImportSample handles very short mono WAV files") {
   REQUIRE(WavHeaderWriter::UpdateFileSize(file.get(), 1, 1, 2));
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/Short.wav", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/Short.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   CHECK(pool.sampleCount() == 1);
@@ -662,8 +703,7 @@ TEST_CASE("ImportSample handles very short mono WAV files") {
   CHECK(pcm[0] == 42);
 }
 
-TEST_CASE("ImportSample handles stereo WAV without downmix for stereo "
-          "project") {
+TEST_CASE("ImportSample keeps exact stereo WAV data unchanged") {
   FakeFileSystem fs;
   FileSystemInstallGuard installGuard(&fs);
   fs.AddDirectory("/imports");
@@ -673,8 +713,7 @@ TEST_CASE("ImportSample handles stereo WAV without downmix for stereo "
   writeTestWav(fs, "/imports/Stereo.wav", 44100, 2, stereoSamples.data(), 2);
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/Stereo.wav", "demo", 2);
+  const int sampleIndex = pool.ImportSample("/imports/Stereo.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   WavHeaderInfo headerInfo;
@@ -683,8 +722,7 @@ TEST_CASE("ImportSample handles stereo WAV without downmix for stereo "
 
   CHECK(headerInfo.sampleRate == 44100);
   CHECK(headerInfo.numChannels == 2);
-  CHECK(std::equal(imported.begin(), imported.end(),
-                   stereoSamples.begin()));
+  CHECK(std::equal(imported.begin(), imported.end(), stereoSamples.begin()));
 }
 
 // ============================================================================
@@ -700,8 +738,7 @@ TEST_CASE("ImportSample handles WAV files with no extension in path") {
 
   TestSamplePool pool;
   // extractSampleFilename should still extract "TestFile" from the path
-  const int sampleIndex =
-      pool.ImportSample("/imports/TestFile", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/TestFile", "demo");
 
   // The source file was opened — the WavFile::Open may or may not succeed
   // depending on whether it requires .wav extension. In HOST_TEST builds,
@@ -721,7 +758,7 @@ TEST_CASE("ImportSample handles deeply nested import paths") {
 
   TestSamplePool pool;
   const int sampleIndex =
-      pool.ImportSample("/imports/deep/nested/dir/DeepFile.wav", "demo", 1);
+      pool.ImportSample("/imports/deep/nested/dir/DeepFile.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   CHECK(pool.storedName(0) == "DeepFile.wav");
@@ -746,8 +783,7 @@ TEST_CASE("ImportSample updates count_ and nameStore_ consistently") {
   CHECK(pool.storedName(0) == "First.wav");
 
   fs.ClearOperationLog();
-  const int sampleIndex =
-      pool.ImportSample("/imports/Consistent.wav", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/Consistent.wav", "demo");
 
   REQUIRE(sampleIndex == 1);
   CHECK(pool.sampleCount() == 2);
@@ -765,8 +801,7 @@ TEST_CASE("ImportSample loadSample is called exactly once") {
   writeTestWav(fs, "/imports/Once.wav", 44100);
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/Once.wav", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/Once.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   CHECK(pool.loadCallCount() == 1);
@@ -784,8 +819,7 @@ TEST_CASE("ImportSample result can be loaded by Load()") {
   writeTestWav(fs, "/imports/Loadable.wav", 44100);
 
   TestSamplePool pool;
-  const int sampleIndex =
-      pool.ImportSample("/imports/Loadable.wav", "demo", 1);
+  const int sampleIndex = pool.ImportSample("/imports/Loadable.wav", "demo");
 
   REQUIRE(sampleIndex == 0);
   CHECK(pool.sampleCount() == 1);

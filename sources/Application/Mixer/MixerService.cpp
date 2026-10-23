@@ -28,6 +28,7 @@
 #include "System/Console/Trace.h"
 #include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
+#include "config/MemorySections.h"
 #include "platform.h"
 #include <algorithm>
 #include <cmath>
@@ -41,13 +42,19 @@ constexpr uint16_t kProfileOrderOutputFx1 = 60;
 constexpr uint16_t kProfileOrderOutputFx2 = 61;
 constexpr uint16_t kProfileOrderOutputFx3 = 62;
 constexpr uint16_t kProfileOrderOutputFxTotal = 63;
+constexpr uint32_t kOutputEffectsBudgetPctX1000 = 40000U;
+constexpr uint32_t kOutputEffectBudgetPctX1000 = ComputeDWTBudgetSharePctX1000(
+    kOutputEffectsBudgetPctX1000, OUTPUT_EFFECT_COUNT);
 
 DWTProfileStats gOutputEffectProfiles[OUTPUT_EFFECT_COUNT] = {
-    {" fx1 total"},
-    {" fx2 total"},
-    {" fx3 total"},
+    {.name_ = "ofx1", .budgetPctX1000_ = kOutputEffectBudgetPctX1000},
+    {.name_ = "ofx2", .budgetPctX1000_ = kOutputEffectBudgetPctX1000},
+    {.name_ = "ofx3", .budgetPctX1000_ = kOutputEffectBudgetPctX1000},
 };
-DWTProfileStats gOutputEffectTotalProfile = {"out fx total"};
+DWTProfileStats gOutputEffectTotalProfile = {
+    .name_ = "fx total",
+    .budgetPctX1000_ = kOutputEffectsBudgetPctX1000,
+};
 
 void registerOutputEffectProfiles() {
   static bool registered = false;
@@ -59,7 +66,6 @@ void registerOutputEffectProfiles() {
   gOutputEffectProfiles[1].displayOrder_ = kProfileOrderOutputFx2;
   gOutputEffectProfiles[2].displayOrder_ = kProfileOrderOutputFx3;
   gOutputEffectTotalProfile.displayOrder_ = kProfileOrderOutputFxTotal;
-  gOutputEffectTotalProfile.slotCountOverride_ = 1;
   gOutputEffectTotalProfile.aggregateChildren_[0] = &gOutputEffectProfiles[0];
   gOutputEffectTotalProfile.aggregateChildren_[1] = &gOutputEffectProfiles[1];
   gOutputEffectTotalProfile.aggregateChildren_[2] = &gOutputEffectProfiles[2];
@@ -81,14 +87,6 @@ float ToUnitRange(int value, int maxValue) {
   }
 
   return static_cast<float>(value) / static_cast<float>(maxValue);
-}
-
-void ResetChannelRouting(ChannelOutputRouting &routing) {
-  routing.channelGain = kAudioSampleZero;
-  for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-    routing.sendGain[fx] = kAudioSampleZero;
-    routing.sendBuffer[fx] = nullptr;
-  }
 }
 
 } // namespace
@@ -151,7 +149,6 @@ bool MixerService::Init() {
       npf_snprintf(buffer, sizeof(buffer), "F%d", fxIndex + 1);
       bus_[i].SetName(etl::string<12>(buffer));
       bus_[i].SetRenderProfileStats(&gOutputEffectProfiles[fxIndex]);
-      bus_[i].SetRenderProfileSlotCount(OUTPUT_EFFECT_COUNT);
       bus_[i].AddModule(outputEffects_[fxIndex]);
     }
     master_.AddModule(bus_[i]);
@@ -242,6 +239,16 @@ OutputEffectProcessor *MixerService::GetOutputEffect(int index) const {
   return outputEffects_[index].GetEffect();
 }
 
+bool MixerService::HasOutputEffectTail() const {
+  for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
+    if (effectReturnRouting_[fx].returnGain != kAudioSampleZero &&
+        outputEffects_[fx].IsTailActive()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void MixerService::ClearOutputEffectTails() {
   Lock();
   ClearOutputEffectTailsLocked();
@@ -254,6 +261,7 @@ void MixerService::ClearOutputEffectTailsLocked() {
   }
 }
 
+PICOTRACKER_FAST_CODE("mixer_service_update")
 void MixerService::Update(Observable &o, I_ObservableData *d) {
 
   AudioDriver::Event *event = (AudioDriver::Event *)d;
@@ -332,21 +340,11 @@ AudioSample MixerService::GetOutputRenderGain() const {
 void MixerService::RefreshMixRouting(Project *project) {
   NAssert(project);
   project_ = project;
-  const int trackBusCount = project->song_.GetChannelCount();
-
-  master_.ClearModules();
-  for (int i = 0; i < trackBusCount; ++i) {
-    master_.AddModule(bus_[i]);
-  }
-  master_.AddModule(bus_[STREAM_MIX_BUS]);
-  for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
-    master_.AddModule(bus_[OUTPUT_EFFECT_BUS_BASE + fx]);
-  }
 
   master_.SetVolume(ToLogVolume(project->GetMasterVolume(), 100));
   SyncOutputEffects(project);
 
-  for (int i = 0; i < trackBusCount; ++i) {
+  for (int i = 0; i < TRACK_MIX_BUS_COUNT; ++i) {
     bus_[i].SetVolume(kAudioSampleOne);
     channelRouting_[i].channelGain =
         ToLogVolume(project->GetChannelVolume(i), 99);
@@ -364,11 +362,6 @@ void MixerService::RefreshMixRouting(Project *project) {
     }
   }
 
-  for (int i = trackBusCount; i < TRACK_MIX_BUS_COUNT; ++i) {
-    bus_[i].SetVolume(kAudioSampleOne);
-    ResetChannelRouting(channelRouting_[i]);
-  }
-
   bus_[STREAM_MIX_BUS].SetVolume(kAudioSampleOne);
 
   for (int fx = 0; fx < OUTPUT_EFFECT_COUNT; ++fx) {
@@ -380,6 +373,7 @@ void MixerService::RefreshMixRouting(Project *project) {
   project->ClearMixRoutingDirty();
 }
 
+PICOTRACKER_FAST_CODE("mixer_service_prepare_render_pass")
 void MixerService::PrepareRenderPass(Project *project) {
   NAssert(project);
   if (project->IsMixRoutingDirty()) {
@@ -427,9 +421,7 @@ void MixerService::setRenderingMode(MixerServiceMode mode) {
   case MSM_FILESPLIT:
     out_->SetRenderGain(kAudioSampleOne);
     out_->EnableRendering(false);
-    const int channelCount = project_ ? project_->song_.GetChannelCount()
-                                      : SONG_CHANNEL_COUNT_STEREO;
-    for (int i = 0; i < channelCount; i++) {
+    for (int i = 0; i < TRACK_MIX_BUS_COUNT; i++) {
       bus_[i].SetRenderGain(kAudioSampleOne);
       bus_[i].EnableRendering(true);
     };
@@ -530,6 +522,8 @@ void MixerService::Execute(FourCC id, float value) {
 
 AudioOut *MixerService::GetAudioOut() { return out_; };
 
+PICOTRACKER_FAST_CODE("mixer_service_lock")
 void MixerService::Lock() { sync_->Lock(); }
 
+PICOTRACKER_FAST_CODE("mixer_service_unlock")
 void MixerService::Unlock() { sync_->Unlock(); }

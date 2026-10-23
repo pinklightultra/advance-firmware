@@ -24,6 +24,7 @@ public:
   void BeginRenderCycle(AudioSample returnGain);
   void ClearAccumulationBuffer();
   void ResetState();
+  bool IsTailActive() const;
   AudioSample *GetAccumulationBuffer();
   void SetEffect(OutputEffectProcessor *effect);
   OutputEffectProcessor *GetEffect() const;

@@ -23,12 +23,19 @@
 #include "RowFx.h"
 #include "SelectionResampleRequest.h"
 #include "Services/Midi/ControlSurface/ControlSurfaceState.h"
+#include "Services/Midi/MidiNoteTracker.h"
 #include "SyncMaster.h"
 #include "System/Timer/Timer.h"
 #include "config/StringLimits.h"
 #include <cstdint>
 
-enum PlayerEventType { PET_START, PET_UPDATE, PET_STOP, PET_STATE_CHANGE };
+enum PlayerEventType {
+  PET_START,
+  PET_UPDATE,
+  PET_STOP,
+  PET_STATE_CHANGE,
+  PET_NOTE_UPDATE
+};
 
 enum SequencerMode { SM_SONG, SM_LIVE };
 enum PlayerStopMode { PSM_RELEASE, PSM_PANIC };
@@ -43,6 +50,25 @@ enum QueueingMode {
 };
 
 typedef uint32_t MixerStereoLevel;
+
+// Direct note sources use separate instances so their playback indicators and
+// lifetimes do not get conflated.
+class DirectNoteChannelState {
+public:
+  void StartChannel(uint8_t channel) {
+    channelMask_ |= static_cast<uint32_t>(1UL << channel);
+  }
+
+  void StopChannel(uint8_t channel) {
+    channelMask_ &= ~static_cast<uint32_t>(1UL << channel);
+  }
+
+  void Clear() { channelMask_ = 0; }
+  bool IsActive() const { return channelMask_ != 0; }
+
+private:
+  uint32_t channelMask_ = 0;
+};
 
 class I_Instrument;
 class PlayerEvent : public ViewEvent {
@@ -64,6 +90,10 @@ private: // Singleton
   Player();
 
 public:
+  // Unlike GetInstance(), this does not construct the player during early
+  // service initialization.
+  static Player *GetExistingInstance();
+
   bool Init(Project *, ViewData *);
   void BindProject(Project *, ViewData *);
   void Reset();
@@ -98,9 +128,12 @@ public:
   bool IsPlaying();
 
   bool IsRunning();
+  bool IsAuditioning() const;
+  bool IsMidiInputPlaying() const;
+  bool IsTailPlaying();
   bool GetStopAtEnd() { return stopAtEnd_; }
 
-  void ProcessCommands();
+  void ProcessCommands(bool profileChannels = false);
   bool ProcessChannelCommand(int channel, TrackerCommand cmd, ushort param);
 
   void StartStreaming(const char *name, int startSample = 0);
@@ -155,10 +188,16 @@ public:
   Project *GetProject() { return project_; }
   ViewData *GetViewData() { return viewData_; }
 
-  // Direct note playback methods for MIDI
+  // Direct note playback methods
   void PlayNote(unsigned short instrumentIndex, unsigned short channel,
                 unsigned char note, unsigned char velocity);
   void StopNote(unsigned short instrumentIndex, unsigned short channel);
+  void PlayMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
+                    uint8_t instrumentIndex, uint8_t note, uint8_t velocity);
+  void StopMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
+                    uint8_t note);
+  void ReleaseMidiInputSource(MidiInputSource inputSource);
+  void OnMidiInputAssignmentChanged(uint8_t songChannel);
 
   void FillControlSurfaceState(ControlSurfaceState &state, int windowOffset,
                                int matrixSize);
@@ -202,6 +241,10 @@ private:
 
   void ResetLastActiveCommands();
   void RecordLastActiveCommand(int channel, TrackerCommand cmd, ushort param);
+  void PlayDirectNote(unsigned short instrumentIndex, unsigned short channel,
+                      unsigned char note, unsigned char velocity,
+                      DirectNoteChannelState &state);
+  void StopDirectNote(unsigned short channel, DirectNoteChannelState &state);
   void stopLocked(PlayerStopMode stopMode);
   bool shouldStopSelectionRenderAtChainRow(int channel, int nextChainRow) const;
   bool shouldStopSelectionRenderAtPhraseRow(int channel,
@@ -215,6 +258,9 @@ private:
   PlayMode mode_;
   bool isRunning_;
   bool stopAtEnd_;
+  DirectNoteChannelState directNoteAuditionState_;
+  DirectNoteChannelState midiInputNoteState_;
+  MidiNoteTracker midiNoteTracker_;
 
   unsigned long startClock_; // .Used to time display live queued chains
                              //  for blinking effect

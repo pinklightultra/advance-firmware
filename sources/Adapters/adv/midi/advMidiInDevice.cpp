@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advMidiInDevice.h"
@@ -70,9 +74,9 @@ void advMidiInDevice::closeDriver() {
   Trace::Log("MIDI", "Closed MIDI input driver");
 }
 
-bool advMidiInDevice::Start() { return startDriver(); }
+bool advMidiInDevice::Start() { return MidiInDevice::Start(); }
 
-void advMidiInDevice::Stop() { stopDriver(); }
+void advMidiInDevice::Stop() { MidiInDevice::Stop(); }
 
 bool advMidiInDevice::startDriver() {
   // Clear the queue

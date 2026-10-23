@@ -48,6 +48,8 @@ static volatile uint8_t savingProgressPercent = 0;
 static volatile bool lastRecordingSavedAudio = false;
 // True only for explicit recording sessions (not monitor-only streaming).
 static volatile bool recordingSessionActive = false;
+// Set when the recording is to be thrown away rather than saved to the sdcard.
+static volatile bool cancelRequested = false;
 
 static volatile bool monitoringOnly = false;
 static volatile uint8_t buffersToSkip = 0;
@@ -150,6 +152,14 @@ static bool PersistRecordingToWav(const char *filename, const uint8_t *data,
   uint32_t bytesWrittenTotal = 0;
   writeInProgress = true;
   while (bytesWrittenTotal < bytesToWrite) {
+    if (cancelRequested) {
+      Trace::Log("RECORD", "cancelled while saving, discarding %s",
+                 recordingPath.c_str());
+      writeInProgress = false;
+      RecordFile.reset();
+      DeleteRecordingFile(filename);
+      return false;
+    }
     uint32_t chunk = bytesToWrite - bytesWrittenTotal;
     if (chunk > kRecordDumpChunkBytes) {
       chunk = kRecordDumpChunkBytes;
@@ -293,6 +303,7 @@ bool StartRecording(const char *filename, uint8_t threshold,
     RecordFile.reset();
   }
   recordingSessionActive = false;
+  cancelRequested = false;
 
   // TODO 0 milliseconds indicates unlimited duration recording
   if (milliseconds != 0) {
@@ -370,6 +381,14 @@ void StopRecording() {
   FinishStopRecording();
 }
 
+void CancelRecording() {
+  // Flag first so the record task throws the captured audio away instead of
+  // writing it out, and closes and deletes the file if a write already started.
+  cancelRequested = true;
+  RequestStopRecording();
+  FinishStopRecording();
+}
+
 void RequestStopRecording() {
   if (!recordingActive) {
     return;
@@ -416,7 +435,14 @@ void Record(void *) {
 
       bool writeFailed = false;
       if (recordingSessionActive) {
-        if (recordRamSamples > 0) {
+        if (cancelRequested) {
+          // Cancelled: throw away whatever is in the ram buffer. No file was
+          // created unless a write had already started, and that path closes
+          // and deletes it itself.
+          savingInProgress = false;
+          lastRecordingSavedAudio = false;
+          totalSamplesWritten = 0;
+        } else if (recordRamSamples > 0) {
           savingInProgress = true;
           savingProgressPercent = 0;
           const uint32_t bytesToWrite = recordRamSamples * sizeof(uint16_t);
@@ -443,7 +469,9 @@ void Record(void *) {
 
         Trace::Log("RECORD", "STOP Recording: dur:%d samples:%d status:%s",
                    (xTaskGetTickCount() - start), totalSamplesWritten,
-                   writeFailed ? "FAILED" : "OK");
+                   cancelRequested ? "CANCELLED"
+                   : writeFailed   ? "FAILED"
+                                   : "OK");
       }
 
       if (recordingFinishedSemaphore != NULL) {

@@ -19,6 +19,7 @@
 #include "Application/Utils/HelpLegend.h"
 #include "Application/Utils/char.h"
 #include "Application/Utils/mathutils.h"
+#include "Application/Views/BaseClasses/PlaybackStatusIndicator.h"
 #include "Application/Views/RecordView.h"
 #include "Application/Views/SampleEditorView.h"
 #include "Application/Views/VoiceScreenUtils.h"
@@ -46,7 +47,7 @@ BatteryState batteryDisplayState = {
 uint32_t lastBatteryPollFrame = 0;
 bool batteryDisplayInitialized = false;
 
-bool currentInstrumentIsSampleSource(ViewData *viewData) {
+bool currentInstrumentSupportsPreview(ViewData *viewData) {
   if (!viewData || !viewData->project_) {
     return false;
   }
@@ -58,7 +59,7 @@ bool currentInstrumentIsSampleSource(ViewData *viewData) {
 
   I_Instrument *instrument =
       bank->GetInstrument(viewData->currentInstrumentID_);
-  return instrument && instrument->GetType() == IT_SAMPLE_SOURCE;
+  return SupportsInstrumentPreview(instrument);
 }
 
 } // namespace
@@ -237,16 +238,19 @@ void View::drawNotes() {
   GUITextProperties props;
 
   Player *player = Player::GetInstance();
+  const bool showPlaybackVisualizer = ShowsChannelPlaybackVisualizer(
+      player->IsRunning(), viewData_->playMode_ == PM_AUDITION,
+      player->IsMidiInputPlaying());
 
   props.invert_ = true;
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   for (int i = 0; i < channelCount; i++) {
     if (i == viewData_->songX_) {
       SetColor(CD_HILITE2);
     } else {
       SetColor(CD_HILITE1);
     }
-    if (player->IsRunning() && viewData_->playMode_ != PM_AUDITION) {
+    if (showPlaybackVisualizer) {
       uint8_t sliceIndex = 0;
       if (player->GetPlayedSliceIndex(i, sliceIndex)) {
         DrawString(pos._x, pos._y, "SL", props);
@@ -476,7 +480,7 @@ bool View::shouldDeferPlayButton(uint16_t mask) const {
   Player *player = Player::GetInstance();
   if ((viewType_ == VT_INSTRUMENT || viewType_ == VT_VOICE) &&
       ShouldBypassPlayButtonDeferralForPreview(
-          currentInstrumentIsSampleSource(viewData_), mask, EPBM_PLAY,
+          currentInstrumentSupportsPreview(viewData_), mask, EPBM_PLAY,
           EPBM_ALT)) {
     return false;
   }
@@ -561,12 +565,19 @@ bool View::handleDeferredPlayButton(uint16_t eventMask, uint16_t heldMask,
     deferredPlayButtonPressedAt_ = 0;
 
     if (!killTriggered) {
-      if (deferredMask == static_cast<uint16_t>(EPBM_ALT | EPBM_PLAY)) {
-        Player *player = Player::GetInstance();
-        if (player != nullptr && viewData_ != nullptr) {
-          player->OnStartButton(PM_SONG, viewData_->songX_, false,
-                                viewData_->songX_);
-        }
+      Player *player = Player::GetInstance();
+      const bool isAltPlay =
+          (deferredMask == static_cast<uint16_t>(EPBM_ALT | EPBM_PLAY));
+      // ALT+PLAY starts/stops the song from any screen while the sequencer
+      // is in Song mode. On the song screen in Live mode it queues the
+      // current row instead, so it needs to be handled by SongView itself.
+      const bool startStopSong =
+          isAltPlay &&
+          (viewType_ != VT_SONG ||
+           (player != nullptr && player->GetSequencerMode() == SM_SONG));
+      if (startStopSong && player != nullptr && viewData_ != nullptr) {
+        player->OnStartButton(PM_SONG, viewData_->songX_, false,
+                              viewData_->songX_);
       } else {
         ProcessButtonMask(deferredMask, true);
       }
@@ -668,7 +679,7 @@ void View::drawTitlebar(GUITextProperties &props) {
 void View::drawStatusIndicators(GUITextProperties &props) {
   // Layout: columns 23-27 (5 chars for status indicators)
   //   23: playing indicator (>)
-  //   24: phrase/chain indicator (P/C)
+  //   24: audition/MIDI/sample/phrase/chain/tail indicator (A/M/S/P/C/T)
   //   25: live mode indicator (music note glyph)
   //   26: USB host MIDI indicator (host glyph)
   //   27: gap (space)
@@ -680,10 +691,22 @@ void View::drawStatusIndicators(GUITextProperties &props) {
 
   // Status indicators at columns 23-26 (each draws space when inactive)
   Player *player = Player::GetInstance();
+  const bool isRunning = player != nullptr && player->IsRunning();
+  const bool isAuditioning = player != nullptr && player->IsAuditioning();
+  const bool isMidiInputPlaying =
+      player != nullptr && player->IsMidiInputPlaying();
+  const bool isSamplePreviewing =
+      player != nullptr && player->IsStreamingActive();
+  const bool isTailPlaying =
+      player != nullptr && !isSamplePreviewing && player->IsTailPlaying();
+  const PlayMode playMode = viewData_ ? viewData_->playMode_ : PM_SONG;
+  const PlaybackStatusIndicator playbackStatus = ResolvePlaybackStatusIndicator(
+      isRunning, isAuditioning, isMidiInputPlaying, isSamplePreviewing,
+      isTailPlaying, playMode);
   int indicatorX = kStatusWidgetStartX; // column 23
 
-  // Playing indicator: ">" when running, space otherwise
-  if (player != nullptr && player->IsRunning()) {
+  // Playing indicator: ">" while any playback status is active.
+  if (ShowsPlaybackIcon(playbackStatus)) {
     SetColor(CD_INFO);
     DrawString(indicatorX, statusPos._y, char_playback_play_s, normalProps);
   } else {
@@ -691,18 +714,14 @@ void View::drawStatusIndicators(GUITextProperties &props) {
   }
   indicatorX++;
 
-  // Phrase/Chain indicator: "P" when playing a phrase or chain, space otherwise
-  if (viewData_ && player->IsRunning() &&
-      (viewData_->playMode_ == PM_PHRASE || viewData_->playMode_ == PM_CHAIN)) {
+  // Audition takes precedence over MIDI input and sample preview, which take
+  // precedence over sequencer mode. Tail is only active once those states have
+  // stopped.
+  const char *statusSuffix = GetPlaybackStatusSuffix(playbackStatus);
+  if (statusSuffix[0] != ' ') {
     SetColor(CD_INFO);
-    if (viewData_->playMode_ == PM_PHRASE) {
-      DrawString(indicatorX, statusPos._y, "P", normalProps);
-    } else {
-      DrawString(indicatorX, statusPos._y, "C", normalProps);
-    }
-  } else {
-    DrawString(indicatorX, statusPos._y, " ", normalProps);
   }
+  DrawString(indicatorX, statusPos._y, statusSuffix, normalProps);
   indicatorX++;
 
   // Live mode indicator: music note glyph when in live sequencer mode, space
@@ -772,7 +791,9 @@ void View::drawPowerButtonUI(GUITextProperties &props) {
     if (remainingSeconds == 0) {
       Trace::Debug("Power button held for threshold time, Powerdown!");
 
-      System::GetInstance()->PowerDown();
+      // goes via AppWindow so that the project gets auto saved before we
+      // actually power off
+      static_cast<AppWindow &>(w_).PowerDown();
     }
 
     // Calculate center position for the message

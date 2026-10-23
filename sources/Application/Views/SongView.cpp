@@ -227,7 +227,7 @@ void SongView::clonePosition() {
 
 void SongView::extendSelection() {
   GUIRect rect = getSelectionRect();
-  const int lastChannel = viewData_->song_->GetChannelCount() - 1;
+  const int lastChannel = SONG_CHANNEL_COUNT - 1;
   if (rect.Left() > 0 || rect.Right() < lastChannel) {
     if (viewData_->songX_ < selection_.anchorX_) {
       viewData_->songX_ = 0;
@@ -263,7 +263,7 @@ void SongView::OnFocus() {
 
   // eg. if the user was in master channel in mixerview and came to songview
   // we need to make sure we're not outside channel range
-  if (viewData_->songX_ > viewData_->song_->GetChannelCount() - 1) {
+  if (viewData_->songX_ > SONG_CHANNEL_COUNT - 1) {
     viewData_->songX_ = 0; // default to channel 1
   }
 };
@@ -339,7 +339,7 @@ void SongView::fillClipboardData() {
   clipboard_.width_ = selRect.Width() + 1;
   clipboard_.height_ = selRect.Height() + 1;
 
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   unsigned char *src =
       viewData_->song_->data_ + selRect.Left() + channelCount * selRect.Top();
   unsigned char *dst = clipboard_.data_;
@@ -379,7 +379,7 @@ void SongView::cutSelection() {
 
   fillClipboardData();
   GUIRect selRect = getSelectionRect();
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
 
   // now move all rows up for cut
 
@@ -428,7 +428,7 @@ void SongView::pasteClipboard() {
 
   int width = clipboard_.width_;
   int height = clipboard_.height_;
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
 
   if (viewData_->songX_ + width > channelCount) {
     width = channelCount - viewData_->songX_;
@@ -522,8 +522,7 @@ void SongView::onStart() {
 void SongView::startCurrentRow() {
   Player *player = Player::GetInstance();
   player->SetSequencerMode(SM_LIVE);
-  player->OnSongStartButton(0, viewData_->song_->GetChannelCount() - 1, false,
-                            false);
+  player->OnSongStartButton(0, SONG_CHANNEL_COUNT - 1, false, false);
 }
 
 void SongView::startImmediate() {
@@ -549,7 +548,7 @@ void SongView::onStop() {
 void SongView::jumpToNextSection(int direction) {
 
   int current = viewData_->songY_ + viewData_->songOffset_;
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   bool foundGap = false;
   for (int i = 0; i < SONG_ROW_COUNT; i++) {
     unsigned char *start =
@@ -831,7 +830,7 @@ void SongView::processNormalButtonMask(unsigned int mask) {
   }
 
   if ((!(mask & EPBM_ENTER)) && updatingChain_) {
-    const int channelCount = viewData_->song_->GetChannelCount();
+    const int channelCount = SONG_CHANNEL_COUNT;
     unsigned char *c = viewData_->song_->data_ + updateX_ +
                        channelCount * (viewData_->songOffset_ + updateY_);
     viewData_->song_->chain_.SetUsed(*c);
@@ -959,6 +958,30 @@ void SongView::DrawView() {
   // Compute song grid location
   GUIPoint anchor = GetAnchor();
 
+  // Draw MIDI input assignments directly above their reserved song channels.
+  // Unassigned columns stay blank and the row is informational only.
+  bool hasMidiInputAssignment = false;
+  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    if (viewData_->song_->IsMidiInputChannelAssigned(i)) {
+      hasMidiInputAssignment = true;
+      break;
+    }
+  }
+
+  if (hasMidiInputAssignment) {
+    SetColor(CD_HILITE2);
+    DrawString(anchor._x - 3, anchor._y - 1, "IN", props);
+  }
+  char midiInputChannel[3];
+  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    const uint8_t assignment = viewData_->song_->GetMidiInputChannel(i);
+    if (assignment != MIDI_INPUT_CHANNEL_NONE) {
+      SetColor(CD_ACCENT);
+      hex2char(assignment, midiInputChannel);
+      DrawString(anchor._x + (3 * i), anchor._y - 1, midiInputChannel, props);
+    }
+  }
+
   // Display row numbers
   SetColor(CD_HILITE1);
   char row[3];
@@ -1004,7 +1027,7 @@ void SongView::DrawView() {
   SetColor(CD_NORMAL);
 
   pos = anchor;
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   unsigned char *data =
       viewData_->song_->data_ + (channelCount * viewData_->songOffset_);
   short dx = 3;
@@ -1034,7 +1057,9 @@ void SongView::DrawView() {
 
       // draw current step
       unsigned char d = *data++;
-      if (d == 0xFE) {
+      if (viewData_->song_->IsMidiInputChannelAssigned(i)) {
+        SetColor(CD_ACCENTALT);
+      } else if (d == 0xFE) {
         SetColor(CD_ACCENT);
       } else if (d == 0x00) {
         SetColor(CD_HILITE1);
@@ -1128,7 +1153,7 @@ void SongView::AnimationUpdate() {
     SetColor(CD_CURSOR);
 
     // Loop on all channels
-    const int channelCount = viewData_->song_->GetChannelCount();
+    const int channelCount = SONG_CHANNEL_COUNT;
     for (int i = 0; i < channelCount; i++) {
       // Clear all current positions
       int y = lastPlayedPosition_[i] - viewData_->songOffset_;

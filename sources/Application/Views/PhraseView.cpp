@@ -42,15 +42,27 @@ char instrumentTypeLetter(I_Instrument *instrument) {
   }
 
   switch (instrument->GetType()) {
+  case IT_NONE:
+    return 'N';
   case IT_MIDI:
     return 'M';
   case IT_SAMPLE_SOURCE:
     return 'S';
   case IT_SAMPLE:
     return 'O';
-  default:
-    return 'I';
+  case IT_FM6:
+    return 'F';
+  case IT_SID:
+    return 'C';
+  case IT_STARLOOM:
+    return 'L';
+  case IT_PICO_SWARM:
+    return 'W';
+  case IT_LAST:
+    return '_';
   }
+  // Defensive fallback for an invalid InstrumentType value.
+  return '_';
 }
 
 void formatInstrumentId(char *buffer, size_t bufferSize, InstrumentBank *bank,
@@ -234,16 +246,16 @@ void PhraseView::updateCursorValue(ViewUpdateDirection direction, int xOffset,
     }
     switch (direction) {
     case VUD_RIGHT:
-      *cc = CommandList::GetNext(*cc);
+      *cc = CommandList::GetNext(*cc, CommandContext::Phrase);
       break;
     case VUD_UP:
-      *cc = CommandList::GetNextAlpha(*cc);
+      *cc = CommandList::GetNextAlpha(*cc, CommandContext::Phrase);
       break;
     case VUD_LEFT:
-      *cc = CommandList::GetPrev(*cc);
+      *cc = CommandList::GetPrev(*cc, CommandContext::Phrase);
       break;
     case VUD_DOWN:
-      *cc = CommandList::GetPrevAlpha(*cc);
+      *cc = CommandList::GetPrevAlpha(*cc, CommandContext::Phrase);
       break;
     }
     lastCmd_ = *cc;
@@ -308,16 +320,16 @@ void PhraseView::updateCursorValue(ViewUpdateDirection direction, int xOffset,
     }
     switch (direction) {
     case VUD_RIGHT:
-      *cc = CommandList::GetNext(*cc);
+      *cc = CommandList::GetNext(*cc, CommandContext::Phrase);
       break;
     case VUD_UP:
-      *cc = CommandList::GetNextAlpha(*cc);
+      *cc = CommandList::GetNextAlpha(*cc, CommandContext::Phrase);
       break;
     case VUD_LEFT:
-      *cc = CommandList::GetPrev(*cc);
+      *cc = CommandList::GetPrev(*cc, CommandContext::Phrase);
       break;
     case VUD_DOWN:
-      *cc = CommandList::GetPrevAlpha(*cc);
+      *cc = CommandList::GetPrevAlpha(*cc, CommandContext::Phrase);
       break;
     }
     lastCmd_ = *cc;
@@ -577,7 +589,7 @@ void PhraseView::warpInChain(int offset) {
 }
 
 void PhraseView::warpToNeighbour(int offset) {
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   int oldSongX = viewData_->songX_;
   unsigned char oldChain = viewData_->currentChain_;
 
@@ -1451,7 +1463,7 @@ void PhraseView::DrawView() {
   // Draw title (help text will overwrite it when cursor is on a command column)
   etl::string<23> title("Phrase ");
   etl::format_spec format;
-  format.width(2).fill('0');
+  format.width(2).fill('0').hex().upper_case(true);
   etl::to_string(viewData_->currentPhrase_, title, format, true);
   setTitle(title);
 
@@ -1738,7 +1750,7 @@ void PhraseView::AnimationUpdate() {
     // Only update play position if player is running
     if (player->IsRunning()) {
       // Loop on all channels to see if one of them is playing current phrase
-      const int channelCount = viewData_->song_->GetChannelCount();
+      const int channelCount = SONG_CHANNEL_COUNT;
       for (int i = 0; i < channelCount; i++) {
         if (player->IsChannelPlaying(i)) {
           if (viewData_->currentPlayPhrase_[i] == viewData_->currentPhrase_ &&
@@ -1765,13 +1777,13 @@ void PhraseView::AnimationUpdate() {
       pos._x -= 1;
       SetColor(CD_ACCENT);
 
-      const int channelCount = viewData_->song_->GetChannelCount();
+      const int channelCount = SONG_CHANNEL_COUNT;
       for (int i = 0; i < channelCount; i++) {
         if (player->GetQueueingMode(i) != QM_NONE) {
           // find the chain queued in channel
           unsigned char songPos = player->GetQueuePosition(i);
-          unsigned char *chain = viewData_->song_->data_ + i +
-                                 viewData_->song_->GetChannelCount() * songPos;
+          unsigned char *chain =
+              viewData_->song_->data_ + i + SONG_CHANNEL_COUNT * songPos;
           if (*chain == viewData_->currentChain_) {
             const char *indicator = player->GetLiveIndicator(i);
             DrawString(pos._x, pos._y, indicator, props);

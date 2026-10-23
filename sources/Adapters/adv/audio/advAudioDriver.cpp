@@ -17,6 +17,7 @@
 #include "System/Profiler/DWTProfiler.h"
 #include "System/Profiler/Profiler.h"
 #include "System/System/System.h"
+#include "config/MemorySections.h"
 #include "main.h" // has to come before FreeRTOS.h due to linkage of SystemCoreClock
 #include "sai.h"
 // Don't delete this space
@@ -50,6 +51,7 @@ void HAL_SAI_TxCpltCallback(SAI_HandleTypeDef *hsai) {
 
 void advAudioDriver::IRQHandler() { instance_->OnChunkDone(); }
 
+PICOTRACKER_FAST_CODE("advance_audio_thread")
 void AudioThread(void *) {
   MixerService *mixer = MixerService::GetInstance();
 
@@ -80,6 +82,7 @@ void AudioOutput(void *) {
   }
 }
 
+PICOTRACKER_FAST_CODE("advance_audio_buffer_needed")
 void advAudioDriver::BufferNeeded() { instance_->OnNewBufferNeeded(); }
 
 advAudioDriver::advAudioDriver(AudioSettings &settings)

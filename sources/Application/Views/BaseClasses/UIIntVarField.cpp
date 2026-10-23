@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "UIIntVarField.h"
@@ -21,7 +25,8 @@
 
 UIIntVarField::UIIntVarField(const GUIPoint &position, Variable &v,
                              const char *format, int min, int max, int xOffset,
-                             int yOffset, int displayOffset)
+                             int yOffset, int displayOffset,
+                             UIIntVarFieldDisplayMode displayMode)
     : UIField(position), src_(v) {
   format_ = format;
   min_ = min;
@@ -29,6 +34,7 @@ UIIntVarField::UIIntVarField(const GUIPoint &position, Variable &v,
   xOffset_ = xOffset;
   yOffset_ = yOffset;
   displayOffset_ = displayOffset;
+  displayMode_ = displayMode;
 };
 
 void UIIntVarField::Draw(GUIWindow &w, int offset) {
@@ -42,7 +48,21 @@ void UIIntVarField::Draw(GUIWindow &w, int offset) {
   switch (type) {
   case Variable::INT: {
     int ivalue = src_.GetInt() + displayOffset_;
-    npf_snprintf(buffer, sizeof(buffer), format_, ivalue, ivalue);
+    if (displayMode_ == UIIntVarFieldDisplayMode::SignedHex) {
+      char value[12];
+      if (ivalue < 0) {
+        npf_snprintf(value, sizeof(value), "-%X",
+                     static_cast<unsigned int>(-ivalue));
+      } else if (ivalue > 0) {
+        npf_snprintf(value, sizeof(value), "+%X",
+                     static_cast<unsigned int>(ivalue));
+      } else {
+        strcpy(value, "0");
+      }
+      npf_snprintf(buffer, sizeof(buffer), format_, value);
+    } else {
+      npf_snprintf(buffer, sizeof(buffer), format_, ivalue, ivalue);
+    }
   } break;
   case Variable::CHAR_LIST:
     // if no value initialize with "NONE"
@@ -55,8 +75,7 @@ void UIIntVarField::Draw(GUIWindow &w, int offset) {
     }
     break;
   case Variable::BOOL: {
-    auto value = src_.GetString();
-    const char *cvalue = value.c_str();
+    const char *cvalue = src_.GetInt() ? "on" : "off";
     npf_snprintf(buffer, sizeof(buffer), format_, cvalue);
   } break;
 
@@ -74,7 +93,8 @@ void UIIntVarField::Draw(GUIWindow &w, int offset) {
 };
 
 void UIIntVarField::ProcessArrow(unsigned short mask) {
-  int value = src_.GetInt();
+  const int previous = src_.GetInt();
+  int value = previous;
 
   switch (mask) {
   case EPBM_UP:
@@ -97,8 +117,11 @@ void UIIntVarField::ProcessArrow(unsigned short mask) {
     value = max_;
   }
 
-  src_.SetInt(value);
+  if (value == previous) {
+    return;
+  }
 
+  src_.SetInt(value);
   SetChanged();
   NotifyObservers(reinterpret_cast<I_ObservableData *>(
       static_cast<uintptr_t>(src_.GetID())));

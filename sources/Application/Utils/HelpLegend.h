@@ -62,8 +62,8 @@ inline HelpLegendPair getHelpLegend(TrackerCommand command) {
     result[1] = "hop to bb aa times";
     break;
   case TrackerCommand::InstrumentCommandLegato:
-    result[0] = "Legato: aabb";
-    result[1] = "slide to pitch bb at speed aa";
+    result[0] = "Legato: aaxx";
+    result[1] = "slide to tied note at speed aa";
     break;
   case TrackerCommand::InstrumentCommandRetrigger:
     result[0] = "Retrigger: aabb";

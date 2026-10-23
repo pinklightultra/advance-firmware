@@ -1,13 +1,18 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Groove.h"
+#include "config/MemorySections.h"
 
 unsigned char Groove::data_[MAX_GROOVES][16];
 
@@ -58,6 +63,7 @@ void Groove::RestoreContent(PersistencyDocument *doc) {
 }
 
 // Trigger grooves so we go to the next step
+PICOTRACKER_FAST_CODE("groove_trigger")
 void Groove::Trigger() {
   for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
     ChannelGroove &c = channelGroove_[i];
@@ -65,6 +71,7 @@ void Groove::Trigger() {
   }
 };
 
+PICOTRACKER_FAST_CODE("groove_update")
 bool Groove::UpdateGroove(ChannelGroove &c, bool reverse) {
 
   bool stepped = false;
@@ -112,6 +119,7 @@ void Groove::SetGroove(int channel, int groove) {
 // Returns true if, according to current groove setting it is time to go
 // to the next sequencing step
 
+PICOTRACKER_FAST_CODE("groove_trigger_channel")
 bool Groove::TriggerChannel(int i) {
   ChannelGroove &c = channelGroove_[i];
   return ((c.ticks_) % (data_[c.groove_][c.position_]) == 0);

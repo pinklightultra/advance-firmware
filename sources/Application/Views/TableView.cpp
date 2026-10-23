@@ -440,28 +440,16 @@ void TableView::updateCursorValue(int offset, int xOffset, int yOffset) {
     }
     switch (offset) {
     case 0x01:
-      *cc = CommandList::GetNext(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetNext(*cc);
-      }
+      *cc = CommandList::GetNext(*cc, CommandContext::Table);
       break;
     case 0x10:
-      *cc = CommandList::GetNextAlpha(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetNextAlpha(*cc);
-      }
+      *cc = CommandList::GetNextAlpha(*cc, CommandContext::Table);
       break;
     case -0x01:
-      *cc = CommandList::GetPrev(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetPrev(*cc);
-      }
+      *cc = CommandList::GetPrev(*cc, CommandContext::Table);
       break;
     case -0x10:
-      *cc = CommandList::GetPrevAlpha(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetPrevAlpha(*cc);
-      }
+      *cc = CommandList::GetPrevAlpha(*cc, CommandContext::Table);
       break;
     }
     lastCmd_ = *cc;
@@ -517,28 +505,16 @@ void TableView::updateCursorValue(int offset, int xOffset, int yOffset) {
     }
     switch (offset) {
     case 0x01:
-      *cc = CommandList::GetNext(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetNext(*cc);
-      }
+      *cc = CommandList::GetNext(*cc, CommandContext::Table);
       break;
     case 0x10:
-      *cc = CommandList::GetNextAlpha(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetNextAlpha(*cc);
-      }
+      *cc = CommandList::GetNextAlpha(*cc, CommandContext::Table);
       break;
     case -0x01:
-      *cc = CommandList::GetPrev(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetPrev(*cc);
-      }
+      *cc = CommandList::GetPrev(*cc, CommandContext::Table);
       break;
     case -0x10:
-      *cc = CommandList::GetPrevAlpha(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetPrevAlpha(*cc);
-      }
+      *cc = CommandList::GetPrevAlpha(*cc, CommandContext::Table);
       break;
     }
     lastCmd_ = *cc;
@@ -594,28 +570,16 @@ void TableView::updateCursorValue(int offset, int xOffset, int yOffset) {
     }
     switch (offset) {
     case 0x01:
-      *cc = CommandList::GetNext(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetNext(*cc);
-      }
+      *cc = CommandList::GetNext(*cc, CommandContext::Table);
       break;
     case 0x10:
-      *cc = CommandList::GetNextAlpha(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetNextAlpha(*cc);
-      }
+      *cc = CommandList::GetNextAlpha(*cc, CommandContext::Table);
       break;
     case -0x01:
-      *cc = CommandList::GetPrev(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetPrev(*cc);
-      }
+      *cc = CommandList::GetPrev(*cc, CommandContext::Table);
       break;
     case -0x10:
-      *cc = CommandList::GetPrevAlpha(*cc);
-      if (*cc == TrackerCommand::InstrumentCommandTable) {
-        *cc = CommandList::GetPrevAlpha(*cc);
-      }
+      *cc = CommandList::GetPrevAlpha(*cc, CommandContext::Table);
       break;
     }
     lastCmd_ = *cc;

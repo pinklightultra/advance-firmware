@@ -60,6 +60,10 @@ public:
     previous_parameter_[1] = 0;
   }
 
+  inline void AttachDelayLines(DigitalOscillatorDelayLines *delay_lines) {
+    digital_oscillator_.AttachDelayLines(delay_lines);
+  }
+
   inline void set_shape(MacroOscillatorShape shape) {
     if (shape != shape_) {
       Strike();
@@ -104,7 +108,7 @@ private:
   DigitalOscillator digital_oscillator_;
 
   MacroOscillatorShape shape_;
-  static RenderFn fn_table_[];
+  static const RenderFn fn_table_[];
 };
 
 } // namespace braids

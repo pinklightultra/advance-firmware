@@ -26,6 +26,11 @@ static etl::pool<PI_File, FF_FS_LOCK> filePool;
 
 namespace {
 
+static constexpr uint32_t FileCopyBufferSize = 64U * 1024U;
+
+static BYTE fileCopyBuffer[FileCopyBufferSize]
+    __attribute__((section(".SDRAM1_NC"))) __attribute__((aligned(32)));
+
 bool matchesFilter(const FileSystemPath::PathString &entryName,
                    const FileSystemPath::PathString &filter) {
   if (filter.empty()) {
@@ -313,11 +318,11 @@ bool advFileSystem::CopyFile(const char *srcFilename,
 
   // Copy source to destination
   for (;;) {
-    res = f_read(&fsrc, fileBuffer_, sizeof(fileBuffer_),
+    res = f_read(&fsrc, fileCopyBuffer, sizeof(fileCopyBuffer),
                  &br); // Read a chunk of data from the source file
     if (br == 0)
       break; // error or eof
-    res = f_write(&fdst, fileBuffer_, br,
+    res = f_write(&fdst, fileCopyBuffer, br,
                   &bw); // Write it to the destination file
     if (bw < br)
       break; // error or disk full

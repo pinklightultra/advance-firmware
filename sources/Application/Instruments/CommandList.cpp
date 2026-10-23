@@ -13,6 +13,7 @@
 
 #include "CommandList.h"
 #include <algorithm>
+#include <stddef.h>
 
 // Keep command entries grouped by displayed mnemonic first letter;
 // GetNextAlpha/GetPrevAlpha depend on this ordering.
@@ -49,9 +50,45 @@ static TrackerCommand _all[] = {
     TrackerCommand::InstrumentCommandVolume,
 };
 
+struct CommandRestriction {
+  TrackerCommand command;
+  uint8_t allowedContexts;
+};
+
+static const CommandRestriction _restrictions[] = {
+    {TrackerCommand::InstrumentCommandInstrumentRetrigger,
+     static_cast<uint8_t>(CommandContext::Table)},
+    {TrackerCommand::InstrumentCommandLegato,
+     static_cast<uint8_t>(CommandContext::Phrase)},
+    {TrackerCommand::InstrumentCommandTable,
+     static_cast<uint8_t>(CommandContext::Phrase)},
+};
+
+static constexpr size_t kCommandCount = sizeof(_all) / sizeof(_all[0]);
+
 static char GetCommandGroupLetter(TrackerCommand command) {
   const char *name = TrackerCommand(command).c_str();
   return (name && name[0]) ? name[0] : '\0';
+}
+
+static size_t FindCommandIndex(TrackerCommand command) {
+  for (size_t i = 0; i < kCommandCount; i++) {
+    if (_all[i] == command) {
+      return i;
+    }
+  }
+  return kCommandCount;
+}
+
+bool CommandList::IsCommandAllowed(TrackerCommand command,
+                                   CommandContext context) {
+  const uint8_t contextMask = static_cast<uint8_t>(context);
+  for (const CommandRestriction &restriction : _restrictions) {
+    if (restriction.command == command) {
+      return (restriction.allowedContexts & contextMask) != 0;
+    }
+  }
+  return true;
 }
 
 // Applies command-specific range limits to parameter values
@@ -78,72 +115,86 @@ ushort CommandList::RangeLimitCommandParam(TrackerCommand command,
   return paramValue;
 }
 
-TrackerCommand CommandList::GetNext(TrackerCommand current) {
-  for (uint i = 0; i < sizeof(_all) / sizeof(TrackerCommand) - 1; i++) {
-    if (_all[i] == current) {
-      return _all[i + 1];
-    };
-  };
+TrackerCommand CommandList::GetNext(TrackerCommand current,
+                                    CommandContext context) {
+  const size_t currentIndex = FindCommandIndex(current);
+  for (size_t i = currentIndex + 1; i < kCommandCount; i++) {
+    if (IsCommandAllowed(_all[i], context)) {
+      return _all[i];
+    }
+  }
   return current;
 };
 
-TrackerCommand CommandList::GetPrev(TrackerCommand current) {
-  uint count = sizeof(_all) / sizeof(TrackerCommand);
-  for (uint i = 2; i < count; i++) {
-    if (_all[i] == current) {
+TrackerCommand CommandList::GetPrev(TrackerCommand current,
+                                    CommandContext context) {
+  const size_t currentIndex = FindCommandIndex(current);
+  for (size_t i = currentIndex; i > 1; i--) {
+    if (IsCommandAllowed(_all[i - 1], context)) {
       return _all[i - 1];
-    };
-  };
+    }
+  }
   return current;
 };
 
-TrackerCommand CommandList::GetNextAlpha(TrackerCommand current) {
-  char letter = GetCommandGroupLetter(current);
-  bool found = false;
-  for (uint i = 0; i < sizeof(_all) / sizeof(TrackerCommand); i++) {
-    char tLetter = GetCommandGroupLetter(_all[i]);
-    if (!found) {
-      if (tLetter == letter) {
-        found = true;
+TrackerCommand CommandList::GetNextAlpha(TrackerCommand current,
+                                         CommandContext context) {
+  const size_t currentIndex = FindCommandIndex(current);
+  if (currentIndex == kCommandCount) {
+    return current;
+  }
+
+  const char currentLetter = GetCommandGroupLetter(current);
+  size_t groupStart = currentIndex + 1;
+  while (groupStart < kCommandCount &&
+         GetCommandGroupLetter(_all[groupStart]) == currentLetter) {
+    groupStart++;
+  }
+
+  while (groupStart < kCommandCount) {
+    const char groupLetter = GetCommandGroupLetter(_all[groupStart]);
+    size_t groupEnd = groupStart;
+    while (groupEnd < kCommandCount &&
+           GetCommandGroupLetter(_all[groupEnd]) == groupLetter) {
+      if (IsCommandAllowed(_all[groupEnd], context)) {
+        return _all[groupEnd];
       }
-    } else {
-      if (tLetter != letter) {
+      groupEnd++;
+    }
+    groupStart = groupEnd;
+  }
+  return current;
+};
+
+TrackerCommand CommandList::GetPrevAlpha(TrackerCommand current,
+                                         CommandContext context) {
+  size_t groupStart = FindCommandIndex(current);
+  if (groupStart == kCommandCount) {
+    return current;
+  }
+
+  const char currentLetter = GetCommandGroupLetter(current);
+  while (groupStart > 0 &&
+         GetCommandGroupLetter(_all[groupStart - 1]) == currentLetter) {
+    groupStart--;
+  }
+
+  // Index zero is the empty command. Preserve the existing behavior where
+  // backwards navigation stops at the first actual command instead of moving
+  // back to the empty entry.
+  while (groupStart > 1) {
+    const size_t groupEnd = groupStart;
+    groupStart--;
+    const char groupLetter = GetCommandGroupLetter(_all[groupStart]);
+    while (groupStart > 1 &&
+           GetCommandGroupLetter(_all[groupStart - 1]) == groupLetter) {
+      groupStart--;
+    }
+    for (size_t i = groupStart; i < groupEnd; i++) {
+      if (IsCommandAllowed(_all[i], context)) {
         return _all[i];
       }
-    };
-  };
-  return current;
-};
-
-TrackerCommand CommandList::GetPrevAlpha(TrackerCommand current) {
-
-  char letter = GetCommandGroupLetter(current);
-  bool found = false;
-  TrackerCommand tReturn = TrackerCommand::Invalid;
-  uint count = sizeof(_all) / sizeof(TrackerCommand);
-
-  for (uint i = count - 1; i > 0; i--) {
-    char tLetter = GetCommandGroupLetter(_all[i]);
-    if (!found) {
-      if (tLetter == letter) {
-        found = true;
-      }
-    } else {
-      if (tLetter != letter) {
-        if (tReturn == 0xFF) {
-          tReturn = _all[i];
-        } else {
-          if (tLetter != GetCommandGroupLetter(tReturn)) {
-            return tReturn;
-          } else {
-            tReturn = _all[i];
-          }
-        }
-      }
-    };
-  };
-  if (tReturn != 0xFF) {
-    return tReturn;
+    }
   }
   return current;
 };

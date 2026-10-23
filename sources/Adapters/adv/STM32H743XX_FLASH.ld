@@ -154,7 +154,7 @@ SECTIONS
     *(.RamFunc*)
     . = ALIGN(4);
     _edata = .;
-  } >DTCMRAM AT> FLASH
+  } >RAM AT> FLASH
 
   .DTCMRAM (NOLOAD) :
   {

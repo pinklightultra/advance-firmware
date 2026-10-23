@@ -30,7 +30,7 @@
 #define BRAIDS_EXCITATION_H_
 
 // #include "stmlib/stmlib.h"
-#include "pico/stdlib.h"
+#include <cstdint>
 
 namespace braids {
 

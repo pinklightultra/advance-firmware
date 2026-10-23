@@ -82,7 +82,7 @@ AudioSample expectedOverdriveSample(AudioSample sample, int amount) {
   shaped = std::min(shaped, kAudioSampleMax);
 
   for (int i = 0; i < kStageCount; ++i) {
-    shaped = (2.0f * shaped) - (shaped * shaped);
+    shaped *= 2.0f - shaped;
   }
 
   shaped = std::min(shaped, kAudioSampleMax);
@@ -344,6 +344,33 @@ TEST_CASE(
   CHECK(buffer[0] == doctest::Approx(expectedOverdriveSample(0.5f, 0x20)));
   CHECK(buffer[1] > buffer[0]);
   CHECK(buffer[1] < expectedOverdriveSample(0.5f, 0xFF));
+}
+
+TEST_CASE(
+    "OverdriveInsertEffect advances stereo smoothing once per audio frame") {
+  constexpr int kFrameCount = 40;
+  OverdriveInsertEffect monoEffect;
+  OverdriveInsertEffect stereoEffect;
+  AudioSample monoWarmup[1] = {0.5f};
+  AudioSample stereoWarmup[2] = {0.5f, 0.5f};
+  monoEffect.Render(monoWarmup, 1, 0x20, AudioBufferLayout::MonoPacked);
+  stereoEffect.Render(stereoWarmup, 1, 0x20,
+                      AudioBufferLayout::StereoInterleaved);
+
+  std::array<AudioSample, kFrameCount> monoBuffer{};
+  std::array<AudioSample, kFrameCount * 2> stereoBuffer{};
+  monoBuffer.fill(0.5f);
+  stereoBuffer.fill(0.5f);
+  monoEffect.Render(monoBuffer.data(), kFrameCount, 0xFF,
+                    AudioBufferLayout::MonoPacked);
+  stereoEffect.Render(stereoBuffer.data(), kFrameCount, 0xFF,
+                      AudioBufferLayout::StereoInterleaved);
+
+  for (int frame = 0; frame < kFrameCount; ++frame) {
+    const int index = frame * 2;
+    CHECK(stereoBuffer[index] == doctest::Approx(stereoBuffer[index + 1]));
+    CHECK(stereoBuffer[index] == doctest::Approx(monoBuffer[frame]));
+  }
 }
 
 TEST_CASE(

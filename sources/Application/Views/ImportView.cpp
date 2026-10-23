@@ -110,7 +110,7 @@ getCurrentEntry(const etl::ivector<FileSystemEntry> &entries,
 bool resolveEntryPath(const FileSystemPath::PathString &currentDir,
                       const FileSystemEntry &entry, const char *rootDir,
                       FileSystemPath::PathString &resolvedPath) {
-  if (entry.name == "..") {
+  if (entry.name == BrowserPathUtils::kParentDirectoryName) {
     return BrowserPathUtils::ResolveParentDirectory(currentDir.c_str(), rootDir,
                                                     resolvedPath);
   }
@@ -193,6 +193,8 @@ void ImportView::Reset() {
   enterKeyHeld_ = false;
   pendingDirEnterOnRelease_ = false;
   inProjectSampleDir_ = false;
+  dirIndexDepth_ = 0;
+  std::memset(dirIndexStack_, 0, sizeof(dirIndexStack_));
   currentDir_.clear();
   pendingRenamePath_[0] = '\0';
   fileEntries_.clear();
@@ -212,9 +214,16 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
         auto fs = FileSystem::GetInstance();
         const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
         FileSystemPath::PathString selectedPath;
-        if (entry != nullptr && entry->type == PFT_DIR &&
-            resolveEntryPath(currentDir_, *entry, "/", selectedPath)) {
-          setCurrentFolder(fs, selectedPath.c_str());
+        if (entry != nullptr && entry->type == PFT_DIR) {
+          if (entry->name == BrowserPathUtils::kParentDirectoryName) {
+            // The synthetic parent entry navigates via the ".." sentinel so
+            // the parent's saved selection position gets restored.
+            setCurrentFolder(fs, BrowserPathUtils::kParentDirectoryName,
+                             ImportView::FolderNav::Up);
+          } else if (resolveEntryPath(currentDir_, *entry, "/", selectedPath)) {
+            setCurrentFolder(fs, selectedPath.c_str(),
+                             ImportView::FolderNav::DrillDown);
+          }
           isDirty_ = true;
           topIndex_ = 0;
         }
@@ -249,11 +258,11 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
     auto fs = FileSystem::GetInstance();
     const bool hasFiles = !fileEntries_.empty();
 
-    // EDIT+LEFT: go to parent directory within the import file browser.
-    // NAV+LEFT remains reserved for leaving the ImportView entirely.
-    if ((mask & EPBM_EDIT) && (mask & EPBM_LEFT) && !(mask & EPBM_NAV) &&
-        !inProjectSampleDir_) {
-      setCurrentFolder(fs, "..");
+    // NAV+UP: go to parent directory within the import file browser.
+    // Handle this before ordinary UP navigation so the selection does not move.
+    if ((mask & EPBM_NAV) && (mask & EPBM_UP) && !inProjectSampleDir_) {
+      setCurrentFolder(fs, BrowserPathUtils::kParentDirectoryName,
+                       ImportView::FolderNav::Up);
       isDirty_ = true;
       topIndex_ = 0;
       return;
@@ -290,7 +299,7 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
       // toggle from sdcard "import sample" & project pool listing
       if (inProjectSampleDir_) {
         inProjectSampleDir_ = false;
-        setCurrentFolder(fs, SAMPLES_LIB_DIR);
+        setCurrentFolder(fs, SAMPLES_LIB_DIR, ImportView::FolderNav::Jump);
       } else {
         FileSystemPath::PathString projectSamplesDir;
         char projectName[MAX_PROJECT_NAME_LENGTH + 1] = {};
@@ -301,7 +310,8 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
           return;
         }
         inProjectSampleDir_ = true;
-        setCurrentFolder(fs, projectSamplesDir.c_str());
+        setCurrentFolder(fs, projectSamplesDir.c_str(),
+                         ImportView::FolderNav::Jump);
       }
       selectedButton_ = 0;
     }
@@ -522,8 +532,12 @@ void ImportView::DrawView() {
     } else {
       SetColor(CD_ACCENT);
       // Handle directories
-      displayName = "/";
-      displayName += entry.name.c_str();
+      if (entry.name == BrowserPathUtils::kParentDirectoryName) {
+        displayName = BrowserPathUtils::kParentDirectoryDisplayName;
+      } else {
+        displayName = "/";
+        displayName += entry.name.c_str();
+      }
     }
 
     // Truncate to fit display width
@@ -708,12 +722,13 @@ void ImportView::OnFocus() {
       Trace::Error("PICOIMPORT: Failed to build project samples dir");
       return;
     }
-    setCurrentFolder(fs, projectSamplesDir.c_str());
+    setCurrentFolder(fs, projectSamplesDir.c_str(),
+                     ImportView::FolderNav::Jump);
   } else {
     const char *startDir = viewData_->importViewStartDir.empty()
                                ? SAMPLES_LIB_DIR
                                : viewData_->importViewStartDir.c_str();
-    setCurrentFolder(fs, startDir);
+    setCurrentFolder(fs, startDir, ImportView::FolderNav::Jump);
   }
 };
 
@@ -913,10 +928,7 @@ void ImportView::import() {
     return;
   }
 
-  const int targetChannelCount =
-      viewData_->project_->GetAudioMode() == kProjectAudioModeMono ? 1 : 2;
-  int sampleID =
-      pool->ImportSample(samplePath.c_str(), projName, targetChannelCount);
+  int sampleID = pool->ImportSample(samplePath.c_str(), projName);
 
   if (sampleID >= 0) {
     etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> importedFilename;
@@ -951,6 +963,17 @@ void ImportView::import() {
                                           importedFilename.c_str(), MBBF_OK);
       DoModal(mb);
     }
+  } else if (sampleID == SamplePool::ImportDuplicateNameError) {
+    // The pool refused the import because it would have overwritten the file
+    // backing the sample already in the pool under that name.
+    etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> projectSampleFilename;
+    if (!SamplePool::GetProjectSampleFilename(samplePath.c_str(),
+                                              projectSampleFilename)) {
+      projectSampleFilename = sampleFilename;
+    }
+    MessageBox *mb = MessageBox::Create(*this, "Sample name already in pool",
+                                        projectSampleFilename.c_str(), MBBF_OK);
+    DoModal(mb);
   } else {
     Trace::Error("failed to import sample");
     // Show a generic error message if import failed for other reasons
@@ -986,14 +1009,15 @@ void ImportView::adjustPreviewVolume(int offset) {
   isDirty_ = true;
 }
 
-void ImportView::setCurrentFolder(FileSystem *fs, const char *name) {
+void ImportView::setCurrentFolder(FileSystem *fs, const char *name,
+                                  FolderNav nav) {
   if (fs == nullptr || name == nullptr) {
     Trace::Error("FAILED to set current folder: invalid args");
     return;
   }
 
   FileSystemPath::PathString nextDir;
-  if (strcmp(name, "..") == 0) {
+  if (nav == FolderNav::Up) {
     const char *rootDir = inProjectSampleDir_ ? currentDir_.c_str() : "/";
     if (!BrowserPathUtils::ResolveParentDirectory(currentDir_.c_str(), rootDir,
                                                   nextDir)) {
@@ -1010,6 +1034,14 @@ void ImportView::setCurrentFolder(FileSystem *fs, const char *name) {
     return;
   }
 
+  if (nextDir == currentDir_) {
+    // No actual move (e.g. re-focusing the browser in the same directory):
+    // keep the position stack and selection, just refresh the listing in
+    // case the tree changed while we were away.
+    refreshFileIndexList(fs);
+    return;
+  }
+
   if (!inProjectSampleDir_) {
     char projName[MAX_PROJECT_NAME_LENGTH + 1] = {};
     viewData_->project_->GetProjectName(projName);
@@ -1021,11 +1053,42 @@ void ImportView::setCurrentFolder(FileSystem *fs, const char *name) {
     }
   }
 
+  if (inProjectSampleDir_) {
+    // The project pool listing has no subdirectory navigation, so there is
+    // nothing to remember or restore.
+    currentIndex_ = 0;
+  } else if (nav == FolderNav::Up) {
+    // Going up: restore the selection position we had in the parent dir.
+    if (dirIndexDepth_ > 0) {
+      --dirIndexDepth_;
+      currentIndex_ = dirIndexStack_[dirIndexDepth_];
+    } else {
+      currentIndex_ = 0;
+    }
+  } else if (nav == FolderNav::DrillDown) {
+    // Going down: remember where we are in this dir before leaving it.
+    // Navigation is never blocked by history capacity: when the stack is
+    // full the oldest (shallowest) record is dropped, so only the most
+    // recent maxDirIndexStackDepth levels keep their position.
+    if (dirIndexDepth_ >= maxDirIndexStackDepth) {
+      std::memmove(&dirIndexStack_[0], &dirIndexStack_[1],
+                   (maxDirIndexStackDepth - 1) * sizeof(uint16_t));
+      --dirIndexDepth_;
+    }
+    dirIndexStack_[dirIndexDepth_] = static_cast<uint16_t>(currentIndex_);
+    ++dirIndexDepth_;
+    currentIndex_ = 0;
+  } else {
+    // Jump: the move does not follow the directory tree we have been
+    // tracking, so the saved position stack is discarded.
+    dirIndexDepth_ = 0;
+    currentIndex_ = 0;
+  }
+
   currentDir_ = nextDir;
   if (!inProjectSampleDir_) {
     viewData_->importViewStartDir = currentDir_.c_str();
   }
-  currentIndex_ = 0;
   refreshFileIndexList(fs);
 }
 

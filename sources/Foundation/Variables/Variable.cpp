@@ -14,6 +14,7 @@
 #include "Variable.h"
 #include "System/Console/Trace.h"
 #include "System/Console/n_assert.h"
+#include "config/MemorySections.h"
 #include <System/Console/nanoprintf.h>
 #include <ctype.h>
 #include <inttypes.h>
@@ -52,6 +53,7 @@ Variable::~Variable(){};
 
 Variable::Type Variable::GetType() { return type_; };
 
+PICOTRACKER_FAST_CODE("variable_get_id")
 FourCC Variable::GetID() { return id_; };
 
 const char *Variable::GetName() { return FourCC(id_).c_str(); };
@@ -106,6 +108,27 @@ void Variable::SetInt(int value, bool notify) {
   }
 };
 
+void Variable::SetIntAsDefault(int32_t value) {
+  SetInt(value, false);
+  switch (type_) {
+  case FLOAT:
+    defaultValue_.float_ = float(value);
+    break;
+  case INT:
+    defaultValue_.int_ = value;
+    break;
+  case BOOL:
+    defaultValue_.bool_ = bool(value != 0);
+    break;
+  case CHAR_LIST:
+    defaultValue_.index_ = value;
+    break;
+  case STRING:
+    // String defaults are managed by the StringVariable subclasses.
+    break;
+  };
+};
+
 void Variable::SetBool(bool value, bool notify) {
   switch (type_) {
   case FLOAT:
@@ -145,6 +168,7 @@ float Variable::GetFloat() {
   return 0.0f;
 };
 
+PICOTRACKER_FAST_CODE("variable_get_int")
 int Variable::GetInt() {
   switch (type_) {
   case FLOAT:

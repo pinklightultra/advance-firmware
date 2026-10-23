@@ -16,8 +16,8 @@
 
 #include "Foundation/Observable.h"
 #include "MidiEvent.h"
+#include "MidiInputSource.h"
 #include "MidiMessage.h"
-#include "MidiNoteTracker.h"
 
 enum MidiSyncMessage { MSM_START, MSM_STOP, MSM_TEMPOTICK, MSM_CONTINUE };
 
@@ -38,10 +38,9 @@ public:
   virtual bool IsRunning();
   virtual void Trigger();
 
-  // New methods for direct instrument mapping
-  static void AssignInstrumentToChannel(int midiChannel, int instrumentIndex);
-  static int GetInstrumentForChannel(int midiChannel);
-  static void ClearChannelAssignment(int midiChannel);
+  // Each MIDI channel keeps its currently selected program.
+  void SetProgramForChannel(int midiChannel, uint8_t program);
+  int GetProgramForChannel(int midiChannel) const;
 
   virtual void poll() = 0;
 
@@ -51,6 +50,8 @@ protected:
   virtual void closeDriver() = 0;
   virtual bool startDriver() = 0;
   virtual void stopDriver() = 0;
+  // The concrete device type defines which physical input owns its notes.
+  virtual MidiInputSource getInputSource() const = 0;
 
   void treatChannelEvent(MidiMessage &event);
   bool isRunning_;
@@ -68,20 +69,20 @@ protected:
   void processMidiData(uint8_t data);
 
 private:
+  void resetParserState();
+  void releaseActiveNotes();
+
   etl::vector<I_Observer *, 4> observers_;
   static bool dumpEvents_;
 
-  // New direct mapping from MIDI channels to instrument indices
-  static int8_t channelToInstrument_[16];
+  // Programs map directly to instrument numbers when notes are played.
+  uint8_t channelPrograms_[16];
 
   // MIDI message parsing state
   uint8_t midiStatus = 0;
   uint8_t midiData1 = 0;
   uint8_t midiDataCount = 0;
   uint8_t midiDataBytes = 0;
-
-  // Note tracker for polyphonic note handling
-  MidiNoteTracker noteTracker_;
 };
 
 #endif

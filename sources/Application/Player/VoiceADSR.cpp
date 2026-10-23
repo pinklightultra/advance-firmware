@@ -7,6 +7,7 @@
  */
 
 #include "VoiceADSR.h"
+#include "config/MemorySections.h"
 #include <algorithm>
 #include <cmath>
 
@@ -97,6 +98,7 @@ void VoiceADSR::Reset() {
   resetSegment();
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_set_parameters")
 void VoiceADSR::SetParameters(int attack, int decay, int sustain, int release) {
   attack_ = std::clamp(attack, 0, 0xFF);
   decay_ = std::clamp(decay, 0, 0xFF);
@@ -118,6 +120,7 @@ void VoiceADSR::NoteOn() {
 
 void VoiceADSR::NoteOff() { enterRelease(); }
 
+PICOTRACKER_FAST_CODE("voice_adsr_kill")
 void VoiceADSR::Kill() {
   value_ = 0.0f;
   state_ = State::Idle;
@@ -129,6 +132,7 @@ float VoiceADSR::Advance() {
   return segment.samples > 0 ? segment.firstValue : value_;
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_advance_block")
 VoiceADSR::LinearSegment VoiceADSR::AdvanceBlock(int samples) {
   if (samples <= 0) {
     return {0, value_, 0.0f};
@@ -193,6 +197,7 @@ void VoiceADSR::AdvanceSilent(int samples) {
   }
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_table_index")
 int VoiceADSR::tableIndex(int value) {
   value = std::clamp(value, 0, 0xFF);
   if (value <= 0) {
@@ -205,19 +210,23 @@ int VoiceADSR::tableIndex(int value) {
   return 1 + ((value - 1) * (kEnvelopeTableSize - 2)) / 0xFE;
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_attack_step")
 float VoiceADSR::attackStep(int value) {
   return kAttackStep[tableIndex(value)];
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_decay_release_pull")
 float VoiceADSR::decayReleasePull(int value) {
   return kDecayReleasePull[tableIndex(value)];
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_reset_segment")
 void VoiceADSR::resetSegment() {
   segmentStep_ = 0.0f;
   segmentSamplesRemaining_ = 0;
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_advance_segment")
 VoiceADSR::LinearSegment
 VoiceADSR::advanceSegmentBlock(int samples, float target, float pull) {
   if (segmentSamplesRemaining_ <= 0) {
@@ -234,6 +243,7 @@ VoiceADSR::advanceSegmentBlock(int samples, float target, float pull) {
   return {blockSamples, firstValue, segmentStep_};
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_update_stage_slope")
 void VoiceADSR::updateStageSlope() {
   switch (state_) {
   case State::Idle:
@@ -266,6 +276,7 @@ void VoiceADSR::updateStageSlope() {
   }
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_enter_decay")
 void VoiceADSR::enterDecay() {
   const float delta = sustainLevel_ - value_;
   if (std::abs(delta) <= kEnvelopeEpsilon || decay_ <= 0) {
@@ -277,12 +288,14 @@ void VoiceADSR::enterDecay() {
   state_ = State::Decay;
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_enter_sustain")
 void VoiceADSR::enterSustain() {
   value_ = sustainLevel_;
   state_ = State::Sustain;
   resetSegment();
 }
 
+PICOTRACKER_FAST_CODE("voice_adsr_enter_release")
 void VoiceADSR::enterRelease() {
   if (state_ == State::Idle) {
     return;

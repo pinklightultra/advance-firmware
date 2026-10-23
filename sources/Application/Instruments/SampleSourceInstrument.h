@@ -22,9 +22,11 @@
 #include "Foundation/Types/Types.h"
 #include "Foundation/Variables/WatchedVariable.h"
 #include "I_Instrument.h"
+#include "SampleRetrigger.h"
 #include "SampleVariable.h"
 #include "SoundSource.h"
 #include "VoiceParameters.h"
+#include "config/MemorySections.h"
 
 enum SampleSourceInstrumentLoopMode {
   SSLM_ONESHOT = 0,
@@ -41,7 +43,6 @@ struct sampleSourceRenderParams {
   void *sampleBuffer_;
   int channelCount_;
 
-  int krateCount_;
   float position_;
   int rendFirst_;
   int rendLoopStart_;
@@ -52,34 +53,10 @@ struct sampleSourceRenderParams {
   float speed_;
   bool reverse_;
 
-  bool retrig_;
-  int retrigLoop_;
-  int retrigCount_;
-  int retrigOffset_;
+  SampleRetriggerState retrigger_;
 
   bool finished_;
   bool sourceEnded_;
-
-  bool speedRampActive_;
-  float speedRampCurrent_;
-  float speedRampTarget_;
-  float speedRampStep_;
-
-  bool legatoActive_;
-  float legatoCurrent_;
-  float legatoTarget_;
-  float legatoMultiplier_;
-
-  bool pfinActive_;
-  float pfinCurrent_;
-  float pfinTarget_;
-  float pfinMultiplier_;
-
-  bool arpActive_;
-  uint8_t arp_[5];
-  uint8_t arpPosition_;
-  uint8_t arpLength_;
-  float arpCurrent_;
 
   int tailSamplesRemaining_;
   AudioSample tailOriginLeft_;
@@ -105,13 +82,15 @@ public:
   virtual void Stop(int channel);
   virtual bool Render(int channel, AudioSample *buffer, int size,
                       bool updateTick) override;
+  void SetPitchMultiplier(int channel, float multiplier) override;
   virtual AudioBufferLayout GetAudioBufferLayout(int channel) const override;
   bool GetPlaybackPosition(int channel, uint32_t &position) const override;
   virtual bool IsInitialized();
   virtual bool IsEmpty();
 
+  PICOTRACKER_FAST_CODE("sample_source_get_type")
   virtual InstrumentType GetType() { return IT_SAMPLE_SOURCE; };
-  virtual bool SupportsAudioVoiceScreen() const override { return true; };
+  bool ShouldAuditionParameterChange(FourCC parameter) const override;
   unsigned char GetPreviewNote();
   virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
   virtual int GetTable();
@@ -156,9 +135,6 @@ public:
 
 protected:
   void updateInstrumentData(bool search);
-  void doTickUpdate(int channel);
-  void doKRateUpdate(int channel);
-  void updateSpeedFromUpdaters(int channel);
 
 private:
   static constexpr size_t BaseVariableCount = 9;
@@ -180,7 +156,6 @@ private:
   bool preserveEditsOnReload_ = false;
   TableSaveState tableState_;
 
-  static signed char lastMidiNote_[SONG_CHANNEL_COUNT];
   SampleVariable sample_;
   Variable level_;
   Variable rootNote_;

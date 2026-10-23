@@ -28,6 +28,7 @@ public:
   int GetValue(const char *key);
   void ProcessArguments(int argc, char **argv);
   bool Save();
+  bool IsInstrumentAuditionEnabled();
 
   // Methods for handling color variables and themes
   void WriteColorVariables(tinyxml2::XMLPrinter *printer);
@@ -41,7 +42,7 @@ public:
   void ResetTheme();
 
 private:
-  etl::vector<Variable *, 26> variables_;
+  etl::vector<Variable *, 27> variables_;
   // Config variables (kept as members to avoid heap allocation)
   WatchedVariable background_;
   WatchedVariable foreground_;
@@ -61,6 +62,7 @@ private:
   WatchedVariable midiControlSurface_;
   WatchedVariable midiSync_;
   WatchedVariable remoteUI_;
+  WatchedVariable instrumentAudition_;
   WatchedVariable importResampler_;
   WatchedVariable uiFont_;
   StringVariable<MAX_VARIABLE_STRING_LENGTH> themeName_;

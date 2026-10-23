@@ -40,3 +40,5 @@ usermanual/web
 
 optbuild/**
 AGENTS.md
+sources/.cache/**
+tests/.cache/**

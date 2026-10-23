@@ -12,6 +12,7 @@
  */
 
 #include "MidiInDevice.h"
+#include "Application/Model/Song.h"
 #include "Application/Player/Player.h"
 #include "System/Console/Trace.h"
 #include "System/System/System.h"
@@ -22,19 +23,12 @@
 // Set this to true to log MIDI events to stdout for debugging
 bool MidiInDevice::dumpEvents_ = false;
 
-// Initialize the static channel-to-instrument mapping array
-int8_t MidiInDevice::channelToInstrument_[16] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-
 MidiInDevice::MidiInDevice(const char *name)
     : Observable(&observers_), isRunning_(false) {
   for (int channel = 0; channel < 16; channel++) {
-    // Initialize the new channel-to-instrument mapping
-    channelToInstrument_[channel] = -1; // -1 means no instrument assigned
+    // MIDI program data is zero-based, so program 00 is user-facing program 01.
+    channelPrograms_[channel] = 0;
   }
-
-  // Initialize the note tracker
-  noteTracker_.clear();
 };
 
 MidiInDevice::~MidiInDevice(){};
@@ -45,13 +39,7 @@ void MidiInDevice::Close() { closeDriver(); };
 
 bool MidiInDevice::Start() {
   isRunning_ = true;
-
-  // Reset the MIDI parser state
-  midiStatus = 0;
-  midiDataCount = 0;
-
-  // Clear the note tracker when starting
-  noteTracker_.clear();
+  resetParserState();
 
   return startDriver();
 };
@@ -59,9 +47,23 @@ bool MidiInDevice::Start() {
 void MidiInDevice::Stop() {
   isRunning_ = false;
   stopDriver();
+  resetParserState();
+  releaseActiveNotes();
 };
 
 bool MidiInDevice::IsRunning() { return isRunning_; };
+
+void MidiInDevice::resetParserState() {
+  midiStatus = 0;
+  midiDataCount = 0;
+}
+
+void MidiInDevice::releaseActiveNotes() {
+  Player *player = Player::GetExistingInstance();
+  if (player != nullptr) {
+    player->ReleaseMidiInputSource(getInputSource());
+  }
+}
 
 void MidiInDevice::onMidiStart() {
   MidiSyncData data(MSM_START);
@@ -163,26 +165,12 @@ void MidiInDevice::treatChannelEvent(MidiMessage &event) {
   // Process channel messages using GetType()
   switch (event.GetType()) {
   case MidiMessage::MIDI_NOTE_OFF: {
-    int note = event.data1_ & MIDI_DATA_MASK;
-
-    // Map MIDI channel directly to instrument index
-    short instrumentIndex = midiChannel;
+    const uint8_t note = event.data1_ & MIDI_DATA_MASK;
 
     Player *player = Player::GetInstance();
     if (player) {
-      // Check if this specific note is active on this MIDI channel
-      if (noteTracker_.isNoteActiveOnChannel(note, midiChannel)) {
-        // Get the audio channel this note is playing on
-        int audioChannel = noteTracker_.unregisterNote(note, midiChannel);
-        if (audioChannel >= 0) {
-          Trace::Debug("Stopping note %d on MIDI channel %d, audio channel %d",
-                       note, midiChannel, audioChannel);
-          player->StopNote(instrumentIndex, audioChannel);
-        }
-      } else {
-        Trace::Debug("Note %d not active on MIDI channel %d, not stopping",
-                     note, midiChannel);
-      }
+      player->StopMidiNote(getInputSource(), static_cast<uint8_t>(midiChannel),
+                           note);
     }
   } break;
 
@@ -190,45 +178,25 @@ void MidiInDevice::treatChannelEvent(MidiMessage &event) {
     int note = event.data1_ & MIDI_DATA_MASK;
     int value = event.data2_ & MIDI_DATA_MASK;
 
-    // Map MIDI channel directly to instrument index
-    short instrumentIndex = midiChannel;
+    const int instrumentIndex = GetProgramForChannel(midiChannel);
 
     Player *player = Player::GetInstance();
     if (player) {
       // If velocity is 0, it's actually a note off in MIDI
       if (value == 0) {
         // Handle as note off - only stop if this note is active on this channel
-        if (noteTracker_.isNoteActiveOnChannel(note, midiChannel)) {
-          int audioChannel = noteTracker_.unregisterNote(note, midiChannel);
-          if (audioChannel >= 0) {
-            Trace::Debug("Note off (vel=0): Stopping note %d on MIDI channel "
-                         "%d, audio channel %d",
-                         note, midiChannel, audioChannel);
-            player->StopNote(instrumentIndex, audioChannel);
-          }
-        } else {
-          Trace::Debug("Note off (vel=0): Note %d not active on MIDI channel "
-                       "%d, not stopping",
-                       note, midiChannel);
-        }
-      } else {
-        // Get the next available audio channel for this note
-        int audioChannel = noteTracker_.getNextAvailableChannel();
-
-        if (audioChannel >= 0) {
-          // Register the note with the tracker
-          if (noteTracker_.registerNote(note, midiChannel, audioChannel,
-                                        value)) {
-            Trace::Debug("Playing note %d on MIDI channel %d (instrument %d), "
-                         "audio channel %d",
-                         note, midiChannel, instrumentIndex, audioChannel);
-            player->PlayNote(instrumentIndex, audioChannel, note, value);
-          } else {
-            Trace::Debug("Failed to register note %d", note);
-          }
-        } else {
-          Trace::Debug("No available audio channels for note %d", note);
-        }
+        player->StopMidiNote(getInputSource(),
+                             static_cast<uint8_t>(midiChannel),
+                             static_cast<uint8_t>(note));
+      } else if (instrumentIndex >= 0 &&
+                 instrumentIndex < MAX_INSTRUMENT_COUNT) {
+        // Get the next available reserved song channel for this note
+        Trace::Debug("Playing note %d on MIDI channel %d (instrument %d)", note,
+                     midiChannel, instrumentIndex);
+        player->PlayMidiNote(
+            getInputSource(), static_cast<uint8_t>(midiChannel),
+            static_cast<uint8_t>(instrumentIndex), static_cast<uint8_t>(note),
+            static_cast<uint8_t>(value));
       }
     }
   } break;
@@ -251,9 +219,9 @@ void MidiInDevice::treatChannelEvent(MidiMessage &event) {
   } break;
 
   case MidiMessage::MIDI_PROGRAM_CHANGE: {
-    int data = event.data1_ & MIDI_DATA_MASK;
+    const uint8_t data = event.data1_ & MIDI_DATA_MASK;
 
-    // TODO: handle program change
+    SetProgramForChannel(midiChannel, data);
   } break;
 
   case MidiMessage::MIDI_CHANNEL_AFTERTOUCH: {
@@ -278,27 +246,20 @@ void MidiInDevice::treatChannelEvent(MidiMessage &event) {
   };
 };
 
-// New methods for direct instrument mapping
-void MidiInDevice::AssignInstrumentToChannel(int midiChannel,
-                                             int instrumentIndex) {
+// MIDI program selection uses the fixed program-to-instrument identity mapping.
+void MidiInDevice::SetProgramForChannel(int midiChannel, uint8_t program) {
   if (midiChannel >= 0 && midiChannel < 16) {
-    channelToInstrument_[midiChannel] = instrumentIndex;
-    // Trace::Log("MIDI", "Assigned instrument %d to MIDI channel %d",
-    //            instrumentIndex, midiChannel);
+    channelPrograms_[midiChannel] = program;
+    // Trace::Log("MIDI", "Selected program %d on MIDI channel %d", program,
+    //            midiChannel);
   }
 }
 
-int MidiInDevice::GetInstrumentForChannel(int midiChannel) {
+int MidiInDevice::GetProgramForChannel(int midiChannel) const {
   if (midiChannel >= 0 && midiChannel < 16) {
-    return channelToInstrument_[midiChannel];
+    return channelPrograms_[midiChannel];
   }
-  return -1; // No instrument assigned
-}
-
-void MidiInDevice::ClearChannelAssignment(int midiChannel) {
-  if (midiChannel >= 0 && midiChannel < 16) {
-    channelToInstrument_[midiChannel] = -1;
-  }
+  return -1; // No program assigned
 }
 
 void MidiInDevice::processMidiData(uint8_t data) {

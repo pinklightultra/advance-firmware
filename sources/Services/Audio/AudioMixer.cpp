@@ -15,13 +15,18 @@
 #include "System/Console/Trace.h"
 #include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
+#include "config/MemorySections.h"
 #include <algorithm>
 
 namespace {
 
-constexpr int kEngineSampleRate = 44100;
+constexpr uint16_t kProfileOrderMixerTotal = 64;
 
-DWTProfileStats gAudioMixerRenderProfile = {"mixer total", true};
+DWTProfileStats gAudioMixerRenderProfile = {
+    .name_ = "mixer total",
+    .printLast_ = true,
+    .displayOrder_ = kProfileOrderMixerTotal,
+};
 
 void registerAudioMixerProfiles() {
   static bool registered = false;
@@ -68,13 +73,11 @@ void AudioMixer::EnableRendering(bool enable) {
   }
 };
 
+PICOTRACKER_FAST_CODE("audio_mixer_render")
 bool AudioMixer::Render(AudioSample *buffer, int samplecount) {
-  ScopedDWTProfile instanceProfile(profileStats_, samplecount,
-                                   kEngineSampleRate,
-                                   static_cast<int>(profileSlotCount_));
-  AccumulatingDWTProfile mixProfile(
-      profileMixMath_ ? &gAudioMixerRenderProfile : nullptr, samplecount,
-      kEngineSampleRate, static_cast<int>(profileSlotCount_));
+  ScopedDWTProfile instanceProfile(profileStats_);
+  AccumulatingDWTProfile mixProfile(profileMixMath_ ? &gAudioMixerRenderProfile
+                                                    : nullptr);
   bool gotData = false;
   AudioSample peakL = 0;
   AudioSample peakR = 0;

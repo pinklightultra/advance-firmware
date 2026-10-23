@@ -13,6 +13,7 @@
 
 #include "TablePlayback.h"
 #include "Application/Instruments/I_Instrument.h"
+#include "Application/Player/Player.h"
 #include "Application/Player/PlayerMixer.h"
 
 TablePlayback TablePlayback::playback_[SONG_CHANNEL_COUNT];
@@ -39,6 +40,7 @@ void TablePlayback::Reset() {
   }
 };
 
+PICOTRACKER_FAST_CODE("table_playback_get_channel")
 TablePlayback &TablePlayback::GetTablePlayback(int channel) {
   NAssert((channel >= 0) && (channel < SONG_CHANNEL_COUNT));
   return playback_[channel];
@@ -123,6 +125,7 @@ int TablePlayback::GetPlaybackPosition(int i) { return previous_[i]; }
 
 Table *TablePlayback::GetTable() { return table_; };
 
+PICOTRACKER_FAST_CODE("table_playback_get_automation")
 bool TablePlayback::GetAutomation() { return automated_; };
 
 bool TablePlayback::ProcessPositionCommand(uint8_t row, TrackerCommand command,
@@ -260,7 +263,13 @@ void TablePlayback::ProcessStep(TablePlayerChange &tpc, uchar currentNote,
 
           const bool handledLocally =
               ProcessLocalCommand(fx.cmd[column], fx.param[column], tpc);
-          if (!handledLocally &&
+          // Table-local handling wins, but player level commands (eg. TPO)
+          // still need to reach the player, exactly as they do from phrases.
+          const bool handledByPlayer =
+              !handledLocally &&
+              Player::GetInstance()->ProcessChannelCommand(
+                  channel_, fx.cmd[column], fx.param[column]);
+          if (!handledLocally && !handledByPlayer &&
               !PlayerMixer::GetInstance()->ProcessVoiceCommand(
                   channel_, fx.cmd[column], fx.param[column])) {
             instrument_->ProcessCommand(channel_, fx.cmd[column],

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SYSTEM_H_
@@ -36,6 +40,7 @@ public:                                 // Override in implementation
   virtual void SystemBootloader() = 0;
   virtual void SystemReboot() = 0;
   virtual uint32_t GetRandomNumber() = 0;
+  virtual uint32_t GetDeviceIdentitySeed() = 0;
   virtual uint32_t Micros() = 0;
   virtual uint32_t Millis() = 0;
 };

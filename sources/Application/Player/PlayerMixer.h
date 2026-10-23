@@ -36,6 +36,7 @@ public:
   bool Start();
   void Stop();
   bool IsPlaying();
+  bool HasTail();
   bool Init(Project *project);
   void BindProject(Project *project);
   void Close();

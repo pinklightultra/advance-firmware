@@ -226,7 +226,7 @@ int RenderProgressModal::getCurrentRenderedSongRow(bool *hasActive) const {
 
   int currentRow = 0;
   bool foundActive = false;
-  const int channelCount = viewData_->song_->GetChannelCount();
+  const int channelCount = SONG_CHANNEL_COUNT;
   for (int channel = 0; channel < channelCount; channel++) {
     if (viewData_->currentPlayPhrase_[channel] == EMPTY_SONG_VALUE) {
       continue;

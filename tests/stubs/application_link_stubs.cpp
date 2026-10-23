@@ -33,6 +33,11 @@ int gPlayerSongStartButtonCallCount = 0;
 int gPlayerStopCallCount = 0;
 int gPlayerPlayNoteCallCount = 0;
 int gPlayerStopNoteCallCount = 0;
+int gPlayerReleaseMidiInputSourceCallCount = 0;
+int gPlayerLastMidiChannel = -1;
+int gPlayerLastMidiInstrument = -1;
+int gPlayerLastMidiNote = -1;
+int gPlayerLastMidiInputSource = -1;
 bool gPlayerRunning = false;
 } // namespace
 
@@ -49,6 +54,11 @@ void ResetPlayerMidiInputTestState() {
   gPlayerStopCallCount = 0;
   gPlayerPlayNoteCallCount = 0;
   gPlayerStopNoteCallCount = 0;
+  gPlayerReleaseMidiInputSourceCallCount = 0;
+  gPlayerLastMidiChannel = -1;
+  gPlayerLastMidiInstrument = -1;
+  gPlayerLastMidiNote = -1;
+  gPlayerLastMidiInputSource = -1;
   gPlayerRunning = false;
 }
 
@@ -61,6 +71,18 @@ int GetPlayerStopCallCount() { return gPlayerStopCallCount; }
 int GetPlayerPlayNoteCallCount() { return gPlayerPlayNoteCallCount; }
 
 int GetPlayerStopNoteCallCount() { return gPlayerStopNoteCallCount; }
+
+int GetPlayerReleaseMidiInputSourceCallCount() {
+  return gPlayerReleaseMidiInputSourceCallCount;
+}
+
+int GetPlayerLastMidiChannel() { return gPlayerLastMidiChannel; }
+
+int GetPlayerLastMidiInstrument() { return gPlayerLastMidiInstrument; }
+
+int GetPlayerLastMidiNote() { return gPlayerLastMidiNote; }
+
+int GetPlayerLastMidiInputSource() { return gPlayerLastMidiInputSource; }
 
 MidiService::MidiService() {}
 
@@ -120,6 +142,13 @@ void PlayerMixer::Unlock() {}
 
 Player::Player() {}
 
+Player *Player::GetExistingInstance() {
+  if (!etl::singleton<Player>::is_valid()) {
+    return nullptr;
+  }
+  return &etl::singleton<Player>::instance();
+}
+
 void Player::Update(Observable &o, I_ObservableData *d) {
   (void)o;
   (void)d;
@@ -161,6 +190,34 @@ void Player::StopNote(unsigned short instrumentIndex, unsigned short channel) {
   (void)instrumentIndex;
   (void)channel;
   gPlayerStopNoteCallCount++;
+}
+
+void Player::PlayMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
+                          uint8_t instrumentIndex, uint8_t note,
+                          uint8_t velocity) {
+  (void)velocity;
+  gPlayerPlayNoteCallCount++;
+  gPlayerLastMidiChannel = midiChannel;
+  gPlayerLastMidiInstrument = instrumentIndex;
+  gPlayerLastMidiNote = note;
+  gPlayerLastMidiInputSource = static_cast<int>(inputSource);
+}
+
+void Player::StopMidiNote(MidiInputSource inputSource, uint8_t midiChannel,
+                          uint8_t note) {
+  gPlayerStopNoteCallCount++;
+  gPlayerLastMidiChannel = midiChannel;
+  gPlayerLastMidiNote = note;
+  gPlayerLastMidiInputSource = static_cast<int>(inputSource);
+}
+
+void Player::ReleaseMidiInputSource(MidiInputSource inputSource) {
+  gPlayerReleaseMidiInputSourceCallCount++;
+  gPlayerLastMidiInputSource = static_cast<int>(inputSource);
+}
+
+void Player::OnMidiInputAssignmentChanged(uint8_t songChannel) {
+  (void)songChannel;
 }
 bool Player::IsStreamingActive() { return false; }
 

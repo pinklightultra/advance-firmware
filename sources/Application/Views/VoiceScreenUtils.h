@@ -12,12 +12,21 @@
 #include "Application/Instruments/I_Instrument.h"
 #include "BaseClasses/View.h"
 
-inline bool SupportsAudioVoiceScreen(const I_Instrument *instrument) {
-  return instrument != nullptr && instrument->SupportsAudioVoiceScreen();
+inline bool SupportsAudioVoiceScreen(I_Instrument *instrument) {
+  return instrument != nullptr &&
+         InstrumentTypeUsesModernAudioVoice(instrument->GetType());
+}
+
+inline bool SupportsInstrumentPreview(I_Instrument *instrument) {
+  if (instrument == nullptr) {
+    return false;
+  }
+  const InstrumentType type = instrument->GetType();
+  return type != IT_NONE && type != IT_MIDI && type != IT_LAST;
 }
 
 inline bool ShouldShowAudioVoiceScreenOnMap(ViewType viewType,
-                                            const I_Instrument *instrument) {
+                                            I_Instrument *instrument) {
   if (!SupportsAudioVoiceScreen(instrument)) {
     return false;
   }

@@ -37,8 +37,17 @@ public:
   // Track which view opened the ImportView (default to project view)
   static ViewType sourceViewType_;
 
+  // Navigation intent for setCurrentFolder(). Callers declare it explicitly
+  // instead of the view guessing from the path:
+  //  - DrillDown: enter a subdirectory of the current one; the selection
+  //    position of the directory being left is saved on the position stack.
+  //  - Up: move to the parent directory; the saved position is restored.
+  //  - Jump: move to an unrelated directory (opening the browser, toggling
+  //    to/from the project pool); the whole position stack is discarded.
+  enum class FolderNav : uint8_t { DrillDown = 0, Up, Jump };
+
 protected:
-  void setCurrentFolder(FileSystem *fs, const char *name);
+  void setCurrentFolder(FileSystem *fs, const char *name, FolderNav nav);
   void warpToNextSample(bool goUp);
   void import();
   void preview();
@@ -50,6 +59,16 @@ protected:
   void refreshFileIndexList(FileSystem *fs);
 
 private:
+  // Max number of drilled-down levels whose selection position is
+  // remembered. As the user drills down through subdirectories the cursor
+  // position of each parent directory is stacked, and going back up
+  // restores it, so navigating deep sample pack hierarchies does not reset
+  // the position every level. Trees deeper than the stack simply drop the
+  // oldest (shallowest) records; navigation itself is unbounded. The stack
+  // is discarded on Jump navigations (browser open, project pool toggle)
+  // and in Reset() (power cycle, project load / new project).
+  static constexpr size_t maxDirIndexStackDepth = 32;
+
   void onConfirmRenameSample(View &view, ModalView &dialog);
   void onConfirmRemoveProjectSample(View &view, ModalView &dialog);
 
@@ -66,6 +85,8 @@ private:
   bool pendingDirEnterOnRelease_ = false; // Open dir on ENTER release
   bool inProjectSampleDir_ =
       false; // Flag to track if we're in the project's sample directory
+  size_t dirIndexDepth_ = 0;
+  uint16_t dirIndexStack_[maxDirIndexStackDepth] = {};
   FileSystemPath::PathString currentDir_;
   char pendingRenamePath_[PFILENAME_SIZE] = {};
   char pendingDeletePath_[PFILENAME_SIZE] = {};

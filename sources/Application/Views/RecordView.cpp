@@ -310,6 +310,12 @@ void RecordView::AnimationUpdate() {
     uiSavingActive_ = backendSavingActive;
   }
 
+  // ScreenView::AnimationUpdate() above draws the power off countdown over the
+  // middle of the screen, so while its showing we must not redraw the record
+  // screen on top of it. isDirty_ stays set so the full view is redrawn on
+  // release, before the overlay gets drawn again.
+  const bool powerOffCountdownShowing = powerButtonPressed_;
+
   if (uiRecordingActive_) {
     // Update recording duration
     uint32_t currentTime = System::GetInstance()->Millis();
@@ -319,11 +325,15 @@ void RecordView::AnimationUpdate() {
       return;
     }
     isDirty_ = true;
-    DrawView();
+    if (!powerOffCountdownShowing) {
+      DrawView();
+    }
   }
   if (uiSavingActive_) {
     isDirty_ = true;
-    DrawView();
+    if (!powerOffCountdownShowing) {
+      DrawView();
+    }
   }
 
   // Get player instance safely

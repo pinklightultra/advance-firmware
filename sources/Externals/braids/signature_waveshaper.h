@@ -32,9 +32,9 @@
 
 // #include "stmlib/stmlib.h"
 #include "dsp.h"
-#include "pico/stdlib.h"
 
 #include "Externals/braids/resources.h"
+#include <cstdlib>
 
 namespace braids {
 
@@ -88,7 +88,7 @@ public:
   }
 
 private:
-  int32_t transfer_[257];
+  int16_t transfer_[257];
 };
 
 } // namespace braids

@@ -112,12 +112,12 @@ struct FourCC {
     SampleInstrumentTable,
     SampleInstrumentTableAutomation,
 
-    MacroInstrumentShape,
-    MacroInstrmentTimbre,
-    MacroInstrumentColor,
-    MacroInstrumentAttack,
-    MacroInstrumentDecay,
-    MacroInstrumentSignature,
+    StarLoomInstrumentShape,
+    StarLoomInstrumentTimbre,
+    StarLoomInstrumentColor,
+    StarLoomInstrumentAttack,
+    StarLoomInstrumentDecay,
+    StarLoomInstrumentSignature,
 
     MidiInstrumentChannel,
     MidiInstrumentNoteLength,
@@ -189,7 +189,6 @@ struct FourCC {
     VarScale,
     VarScaleRoot,
     VarProjectName,
-    VarProjectAudioMode,
     VarMidiDevice,
     VarMidiControlSurface,
     VarLineOut,
@@ -280,6 +279,7 @@ struct FourCC {
     ActionRenderMixdown,
     ActionRenderStems,
     ActionShowTheme,
+    ActionShowCredits,
     ActionThemeName,
     ActionResetTheme,
     SampleInstrumentSlices,
@@ -331,6 +331,61 @@ struct FourCC {
     SampleSourceInstrumentTable,
     SampleSourceInstrumentTableAutomation,
     SampleSourceInstrumentLevel,
+
+    // Keep new persisted IDs at the end so existing numeric IDs do not move.
+    SIDInstrument2Waveform,
+    SIDInstrument3Waveform,
+    SIDInstrument2PulseWidth,
+    SIDInstrument3PulseWidth,
+    SIDInstrument2VSync,
+    SIDInstrument3VSync,
+    SIDInstrument2RingModulator,
+    SIDInstrument3RingModulator,
+    SIDInstrument2ADSR,
+    SIDInstrument3ADSR,
+    SIDInstrument2FilterOn,
+    SIDInstrument3FilterOn,
+    SIDInstrumentPitchOffset,
+    SIDInstrument2PitchOffset,
+    SIDInstrument3PitchOffset,
+    SIDInstrumentChipModel,
+    FM6InstrumentProgram,
+    // Retains the removed FM6 instrument transpose ID's persisted ordinal.
+    FM6InstrumentReserved,
+    FM6InstrumentTable,
+    FM6InstrumentTableAutomation,
+    ActionShowFM6Presets,
+    // FM6 patch storage: one hex-encoded slice of the packed DX7 voice
+    // record per operator plus one for the global block. The operator IDs
+    // are contiguous so they can be computed as FM6InstrumentOp1Params +
+    // opIndex. The slices follow the record's physical order: DX7 packed
+    // records store operator 6 first, so op1params holds DX7 operator 6 and
+    // op6params holds DX7 operator 1.
+    FM6InstrumentOp1Params,
+    FM6InstrumentOp2Params,
+    FM6InstrumentOp3Params,
+    FM6InstrumentOp4Params,
+    FM6InstrumentOp5Params,
+    FM6InstrumentOp6Params,
+    FM6InstrumentGlobalParams,
+    // Keep new persisted IDs at the end so existing numeric IDs do not move.
+    StarLoomInstrumentOscillator1Level,
+    StarLoomInstrumentOscillator2Shape,
+    StarLoomInstrumentOscillator2Timbre,
+    StarLoomInstrumentOscillator2Color,
+    StarLoomInstrumentOscillator2Level,
+    StarLoomInstrumentOscillator2PitchOffset,
+    StarLoomInstrumentInteractionMode,
+    StarLoomInstrumentMix,
+    StarLoomInstrumentOscillator1PitchOffset,
+    StarLoomInstrumentTable,
+    StarLoomInstrumentTableAutomation,
+    picoSwarmInstrumentDetune,
+    picoSwarmInstrumentMix,
+    picoSwarmInstrumentTable,
+    picoSwarmInstrumentTableAutomation,
+    // Keep new persisted IDs at the end so existing numeric IDs do not move.
+    VarInstrumentAudition,
   };
   ETL_DECLARE_ENUM_TYPE(FourCC, uint16_t)
   // Not all enums need reflection. Only cases where we need reflection is the
@@ -343,15 +398,27 @@ struct FourCC {
   ETL_ENUM_TYPE(VarMidiInputDevice, "MIDIINPUTDEV")
   ETL_ENUM_TYPE(VarMidiClockSync, "MIDICLOCKSYNC")
   ETL_ENUM_TYPE(VarRemoteUI, "REMOTEUI")
+  ETL_ENUM_TYPE(VarInstrumentAudition, "INSTAUDITION")
   ETL_ENUM_TYPE(VarUIFont, "UIFONT")
   ETL_ENUM_TYPE(VarThemeName, "THEMENAME")
   ETL_ENUM_TYPE(VarScaleRoot, "scaleroot")
-  ETL_ENUM_TYPE(MacroInstrumentShape, "shape")
-  ETL_ENUM_TYPE(MacroInstrmentTimbre, "timbre")
-  ETL_ENUM_TYPE(MacroInstrumentColor, "color")
-  ETL_ENUM_TYPE(MacroInstrumentAttack, "Attack")
-  ETL_ENUM_TYPE(MacroInstrumentDecay, "Decay")
-  ETL_ENUM_TYPE(MacroInstrumentSignature, "Signature")
+  ETL_ENUM_TYPE(StarLoomInstrumentShape, "shape")
+  ETL_ENUM_TYPE(StarLoomInstrumentTimbre, "timbre")
+  ETL_ENUM_TYPE(StarLoomInstrumentColor, "color")
+  ETL_ENUM_TYPE(StarLoomInstrumentAttack, "Attack")
+  ETL_ENUM_TYPE(StarLoomInstrumentDecay, "Decay")
+  ETL_ENUM_TYPE(StarLoomInstrumentSignature, "Signature")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator1Level, "osc1level")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator2Shape, "osc2shape")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator2Timbre, "osc2timbre")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator2Color, "osc2color")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator2Level, "osc2level")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator2PitchOffset, "osc2pitch")
+  ETL_ENUM_TYPE(StarLoomInstrumentInteractionMode, "oscinteract")
+  ETL_ENUM_TYPE(StarLoomInstrumentMix, "mix")
+  ETL_ENUM_TYPE(StarLoomInstrumentOscillator1PitchOffset, "osc1pitch")
+  ETL_ENUM_TYPE(StarLoomInstrumentTable, "table")
+  ETL_ENUM_TYPE(StarLoomInstrumentTableAutomation, "table automation")
   ETL_ENUM_TYPE(SampleInstrumentSample, "sample")
   ETL_ENUM_TYPE(SampleInstrumentVolume, "volume")
   ETL_ENUM_TYPE(SampleInstrumentInterpolation, "interpol")
@@ -435,7 +502,6 @@ struct FourCC {
   ETL_ENUM_TYPE(VarTranspose, "transpose")
   ETL_ENUM_TYPE(VarScale, "scale")
   ETL_ENUM_TYPE(VarProjectName, "projectname")
-  ETL_ENUM_TYPE(VarProjectAudioMode, "projectaudiomode")
   ETL_ENUM_TYPE(VarInstrumentType, "INSTRUMENTTYPE")
   ETL_ENUM_TYPE(VarChannel1Volume, "channel1vol")
   ETL_ENUM_TYPE(VarChannel2Volume, "channel2vol")
@@ -526,6 +592,36 @@ struct FourCC {
   ETL_ENUM_TYPE(SampleSourceInstrumentTable, "table")
   ETL_ENUM_TYPE(SampleSourceInstrumentTableAutomation, "table automation")
   ETL_ENUM_TYPE(SampleSourceInstrumentLevel, "level")
+  ETL_ENUM_TYPE(SIDInstrument2Waveform, "VWF2")
+  ETL_ENUM_TYPE(SIDInstrument3Waveform, "VWF3")
+  ETL_ENUM_TYPE(SIDInstrument2PulseWidth, "VPW2")
+  ETL_ENUM_TYPE(SIDInstrument3PulseWidth, "VPW3")
+  ETL_ENUM_TYPE(SIDInstrument2VSync, "VSYNC2")
+  ETL_ENUM_TYPE(SIDInstrument3VSync, "VSYNC3")
+  ETL_ENUM_TYPE(SIDInstrument2RingModulator, "VRING2")
+  ETL_ENUM_TYPE(SIDInstrument3RingModulator, "VRING3")
+  ETL_ENUM_TYPE(SIDInstrument2ADSR, "VADSR2")
+  ETL_ENUM_TYPE(SIDInstrument3ADSR, "VADSR3")
+  ETL_ENUM_TYPE(SIDInstrument2FilterOn, "VFON2")
+  ETL_ENUM_TYPE(SIDInstrument3FilterOn, "VFON3")
+  ETL_ENUM_TYPE(SIDInstrumentPitchOffset, "VPITCH")
+  ETL_ENUM_TYPE(SIDInstrument2PitchOffset, "VPITCH2")
+  ETL_ENUM_TYPE(SIDInstrument3PitchOffset, "VPITCH3")
+  ETL_ENUM_TYPE(SIDInstrumentChipModel, "SIDCHIP")
+  ETL_ENUM_TYPE(FM6InstrumentProgram, "program")
+  ETL_ENUM_TYPE(FM6InstrumentTable, "table")
+  ETL_ENUM_TYPE(FM6InstrumentTableAutomation, "table automation")
+  ETL_ENUM_TYPE(FM6InstrumentOp1Params, "op1params")
+  ETL_ENUM_TYPE(FM6InstrumentOp2Params, "op2params")
+  ETL_ENUM_TYPE(FM6InstrumentOp3Params, "op3params")
+  ETL_ENUM_TYPE(FM6InstrumentOp4Params, "op4params")
+  ETL_ENUM_TYPE(FM6InstrumentOp5Params, "op5params")
+  ETL_ENUM_TYPE(FM6InstrumentOp6Params, "op6params")
+  ETL_ENUM_TYPE(FM6InstrumentGlobalParams, "patchglobals")
+  ETL_ENUM_TYPE(picoSwarmInstrumentDetune, "detune")
+  ETL_ENUM_TYPE(picoSwarmInstrumentMix, "mix")
+  ETL_ENUM_TYPE(picoSwarmInstrumentTable, "table")
+  ETL_ENUM_TYPE(picoSwarmInstrumentTableAutomation, "table automation")
 
   ETL_ENUM_TYPE(Default, "   ")
   ETL_END_ENUM_TYPE

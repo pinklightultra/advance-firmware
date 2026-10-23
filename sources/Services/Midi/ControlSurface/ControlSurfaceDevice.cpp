@@ -147,6 +147,9 @@ void ControlSurfaceDevice::OnPlayerEvent(PlayerEvent &event) {
     }
     break;
   }
+  case PET_NOTE_UPDATE:
+    // Direct note activity changes the screen visualizer, not surface LEDs.
+    break;
   }
 }
 
@@ -264,11 +267,11 @@ unsigned char ControlSurfaceDevice::GetSongCellValue(int channel,
 
   const Song &song = player_->GetProject()->song_;
   const int songRow = SongRowForMatrixRow(row);
-  if ((channel < 0) || (channel >= song.GetChannelCount()) || (songRow < 0)) {
+  if ((channel < 0) || (channel >= SONG_CHANNEL_COUNT) || (songRow < 0)) {
     return EMPTY_SONG_VALUE;
   }
 
-  return song.data_[song.GetChannelCount() * songRow + channel];
+  return song.data_[SONG_CHANNEL_COUNT * songRow + channel];
 }
 
 bool ControlSurfaceDevice::IsSongCellPlayable(int channel, int row) const {

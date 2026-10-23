@@ -12,10 +12,14 @@
  */
 
 #include "InstrumentBank.h"
+#include "Application/Instruments/FM6Instrument.h"
 #include "Application/Instruments/MidiInstrument.h"
+#include "Application/Instruments/SIDInstrument.h"
 #include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Instruments/SampleSourceInstrument.h"
+#include "Application/Instruments/StarLoomInstrument.h"
+#include "Application/Instruments/picoSwarmInstrument.h"
 #include "Application/Model/Config.h"
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Utils/char.h"
@@ -24,6 +28,15 @@
 #include "System/io/Status.h"
 
 #define XML_DEBUG_LOGGING 0
+
+// The shared VoiceParameters default an infinite amp release to 0x00. SID and
+// FM6 instruments instead want their internal/DX7 envelopes to control the
+// full audible release, so they start with an "infinite" amp release. This is
+// their clean default state (not a user edit), so it is applied as the
+// variable's default too and restored to the shared canonical value when the
+// instrument is released back to the pool.
+static constexpr uint8_t canonicalVoiceAmpRelease = 0x00;
+static constexpr uint8_t infiniteVoiceAmpRelease = 0xFF;
 
 // Contain all instrument definition
 InstrumentBank::InstrumentBank()
@@ -45,7 +58,7 @@ void InstrumentBank::Reset() {
       voiceParameters_[i].Reset();
     }
   }
-  sidOscCount = 0;
+  legacySampleInstrumentSelectionEnabled_ = false;
 };
 
 I_Instrument *InstrumentBank::GetInstrument(int i) { return instruments_[i]; };
@@ -55,6 +68,42 @@ VoiceParameters *InstrumentBank::GetVoiceParameters(int i) {
     return nullptr;
   }
   return &voiceParameters_[i];
+}
+
+InstrumentBank::SampleAssignmentList
+InstrumentBank::CaptureSampleAssignments(int32_t sampleIndex) const {
+  SampleAssignmentList assignments;
+  for (I_Instrument *instrument : instruments_) {
+    if (instrument && instrument->GetType() == IT_SAMPLE &&
+        static_cast<SampleInstrument *>(instrument)->GetSampleIndex() ==
+            sampleIndex) {
+      assignments.push_back(instrument);
+    } else if (instrument && instrument->GetType() == IT_SAMPLE_SOURCE &&
+               static_cast<SampleSourceInstrument *>(instrument)
+                       ->GetSampleIndex() == sampleIndex) {
+      assignments.push_back(instrument);
+    }
+  }
+  return assignments;
+}
+
+void InstrumentBank::RestoreSampleAssignments(
+    const SampleAssignmentList &assignments, int32_t sampleIndex) const {
+  for (I_Instrument *instrument : assignments) {
+    if (instrument->GetType() == IT_SAMPLE) {
+      static_cast<SampleInstrument *>(instrument)->AssignSample(sampleIndex);
+    } else if (instrument->GetType() == IT_SAMPLE_SOURCE) {
+      static_cast<SampleSourceInstrument *>(instrument)
+          ->AssignSample(sampleIndex);
+    }
+  }
+}
+
+void InstrumentBank::assignInstrument(int id, I_Instrument *instrument) {
+  if (InstrumentTypeUsesModernAudioVoice(instrument->GetType())) {
+    attachVoiceParameters(id, instrument);
+  }
+  instruments_[id] = instrument;
 }
 
 void InstrumentBank::attachVoiceParameters(int id, I_Instrument *instrument) {
@@ -163,7 +212,8 @@ unsigned short InstrumentBank::GetNextAndAssignID(InstrumentType type,
     Variable *sample = si->FindVariable(FourCC::SampleInstrumentSample);
     if (sample) {
       if (sample->GetInt() == -1) {
-        instruments_[id] = si;
+        assignInstrument(id, si);
+        legacySampleInstrumentSelectionEnabled_ = true;
       } else {
         Trace::Log("INSTRUMENTBANK",
                    "unexpected sample value for new instrument: %d",
@@ -184,8 +234,7 @@ unsigned short InstrumentBank::GetNextAndAssignID(InstrumentType type,
     Variable *sample = ssi->FindVariable(FourCC::SampleSourceInstrumentSample);
     if (sample) {
       if (sample->GetInt() == -1) {
-        attachVoiceParameters(id, ssi);
-        instruments_[id] = ssi;
+        assignInstrument(id, ssi);
       } else {
         Trace::Log("INSTRUMENTBANK",
                    "unexpected sample source value for new instrument: %d",
@@ -201,11 +250,68 @@ unsigned short InstrumentBank::GetNextAndAssignID(InstrumentType type,
       return NO_MORE_INSTRUMENT;
     }
     mi->Init();
-    instruments_[id] = mi;
+    assignInstrument(id, mi);
+    return id;
+  } break;
+  case IT_SID: {
+    SIDInstrument *si = instrumentPool_.create<SIDInstrument>();
+    if (si == nullptr) {
+      Trace::Error("SID INSTRUMENT EXHAUSTED!");
+      return NO_MORE_INSTRUMENT;
+    }
+    si->Init();
+    assignInstrument(id, si);
+    // Start new SID instruments with an infinite Amp release so their internal
+    // ADSRs can control the complete audible release. See the note on
+    // infiniteVoiceAmpRelease: this is the instrument's default state, so it
+    // is adopted as the variable's default too.
+    Variable *ampRelease = si->FindVariable(FourCC::VoiceAmpRelease);
+    if (ampRelease) {
+      ampRelease->SetIntAsDefault(infiniteVoiceAmpRelease);
+    }
+    return id;
+  } break;
+  case IT_FM6: {
+    FM6Instrument *fm6 = instrumentPool_.create<FM6Instrument>();
+    if (fm6 == nullptr) {
+      Trace::Error("FM6 INSTRUMENT EXHAUSTED!");
+      return NO_MORE_INSTRUMENT;
+    }
+    fm6->Init();
+    assignInstrument(id, fm6);
+    // Start new FM6 instruments with an infinite Amp release so the DX7 patch
+    // envelopes can control the complete audible release. See the note on
+    // infiniteVoiceAmpRelease: this is the instrument's default state, so it
+    // is adopted as the variable's default too.
+    Variable *ampRelease = fm6->FindVariable(FourCC::VoiceAmpRelease);
+    if (ampRelease) {
+      ampRelease->SetIntAsDefault(infiniteVoiceAmpRelease);
+    }
+    return id;
+  } break;
+  case IT_STARLOOM: {
+    StarLoomInstrument *starLoom = instrumentPool_.create<StarLoomInstrument>();
+    if (starLoom == nullptr) {
+      Trace::Error("STARLOOM INSTRUMENT EXHAUSTED!");
+      return NO_MORE_INSTRUMENT;
+    }
+    starLoom->Init();
+    assignInstrument(id, starLoom);
+    return id;
+  } break;
+  case IT_PICO_SWARM: {
+    picoSwarmInstrument *picoSwarm =
+        instrumentPool_.create<picoSwarmInstrument>();
+    if (picoSwarm == nullptr) {
+      Trace::Error("PICOSWARM INSTRUMENT EXHAUSTED!");
+      return NO_MORE_INSTRUMENT;
+    }
+    picoSwarm->Init();
+    assignInstrument(id, picoSwarm);
     return id;
   } break;
   case IT_NONE:
-    instruments_[id] = &none_;
+    assignInstrument(id, &none_);
     return id;
   default:
     break;
@@ -227,6 +333,18 @@ void InstrumentBank::releaseInstrument(unsigned short id) {
   case IT_MIDI:
     instrumentPool_.destroy(static_cast<MidiInstrument *>(instrument));
     break;
+  case IT_SID:
+    instrumentPool_.destroy(static_cast<SIDInstrument *>(instrument));
+    break;
+  case IT_FM6:
+    instrumentPool_.destroy(static_cast<FM6Instrument *>(instrument));
+    break;
+  case IT_STARLOOM:
+    instrumentPool_.destroy(static_cast<StarLoomInstrument *>(instrument));
+    break;
+  case IT_PICO_SWARM:
+    instrumentPool_.destroy(static_cast<picoSwarmInstrument *>(instrument));
+    break;
   case IT_NONE:
     // NA: None is a "singleton" so no need to release from pool
     // BUT it can be assigned to any number of slots
@@ -234,6 +352,15 @@ void InstrumentBank::releaseInstrument(unsigned short id) {
     break;
   }
   instruments_[id] = &none_;
+  // SID/FM6 instruments override the amp release default (see
+  // infiniteVoiceAmpRelease). Restore the shared canonical default before
+  // resetting, otherwise the override would leak to the next instrument
+  // assigned to this slot (and make a fresh instrument look pre-modified).
+  Variable *ampRelease =
+      voiceParameters_[id].FindVariable(FourCC::VoiceAmpRelease);
+  if (ampRelease) {
+    ampRelease->SetIntAsDefault(canonicalVoiceAmpRelease);
+  }
   voiceParameters_[id].Reset();
 }
 

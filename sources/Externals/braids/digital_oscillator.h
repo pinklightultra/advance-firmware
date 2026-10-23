@@ -236,6 +236,20 @@ union DigitalOscillatorState {
   uint32_t modulator_phase;
 };
 
+union DigitalOscillatorDelayLines {
+  int16_t comb[kCombDelayLength];
+  int16_t ks[1025 * 4];
+  struct {
+    int8_t bridge[kWGBridgeLength];
+    int8_t neck[kWGNeckLength];
+  } bowed;
+  int16_t bore[kWGBoreLength];
+  struct {
+    int8_t jet[kWGJetLength];
+    int8_t bore[kWGFBoreLength];
+  } fluted;
+};
+
 class DigitalOscillator {
 public:
   typedef void (DigitalOscillator::*RenderFn)(const uint8_t *, int16_t *,
@@ -249,6 +263,9 @@ public:
 
   inline void Init() {
     memset(&state_, 0, sizeof(state_));
+    if (delay_lines_ != nullptr) {
+      memset(delay_lines_, 0, sizeof(*delay_lines_));
+    }
     pulse_[0].Init();
     pulse_[1].Init();
     pulse_[2].Init();
@@ -259,6 +276,10 @@ public:
     phase_ = 0;
     strike_ = true;
     init_ = true;
+  }
+
+  inline void AttachDelayLines(DigitalOscillatorDelayLines *delay_lines) {
+    delay_lines_ = delay_lines;
   }
 
   inline void set_shape(DigitalOscillatorShape shape) { shape_ = shape; }
@@ -353,21 +374,9 @@ private:
   Excitation pulse_[4];
   Svf svf_[3];
 
-  union {
-    int16_t comb[kCombDelayLength];
-    int16_t ks[1025 * 4];
-    struct {
-      int8_t bridge[kWGBridgeLength];
-      int8_t neck[kWGNeckLength];
-    } bowed;
-    int16_t bore[kWGBoreLength];
-    struct {
-      int8_t jet[kWGJetLength];
-      int8_t bore[kWGFBoreLength];
-    } fluted;
-  } delay_lines_;
+  DigitalOscillatorDelayLines *delay_lines_ = nullptr;
 
-  static RenderFn fn_table_[];
+  static const RenderFn fn_table_[];
 };
 
 } // namespace braids

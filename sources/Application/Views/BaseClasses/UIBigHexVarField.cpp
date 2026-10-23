@@ -19,12 +19,14 @@
 
 UIBigHexVarField::UIBigHexVarField(const GUIPoint &position, Variable &v,
                                    int precision, const char *format, int min,
-                                   int max, int power, bool wrap)
+                                   int max, int power, bool wrap,
+                                   UIBigHexEditMode editMode)
     : UIIntVarField(position, v, format, min, max, 0, 0) {
   precision_ = precision - 1;
   power_ = power;
   position_ = 0;
   wrap_ = wrap;
+  editMode_ = editMode;
 };
 
 void UIBigHexVarField::Draw(GUIWindow &w, int offset) {
@@ -69,15 +71,19 @@ void UIBigHexVarField::ResetDigitPosition() { position_ = 0; }
 // position navigation (changing which hex digit UP/DOWN modifies) rather
 // than value change, and when position_ is 0 UP/DOWN only changes by 1.
 void UIBigHexVarField::ApplyOffset(int offset) {
-  int value = src_.GetInt() + offset;
+  const int previous = src_.GetInt();
+  int value = previous + offset;
   if (value > max_) {
     value = (wrap_) ? value - max_ + min_ - 1 : max_;
   };
   if (value < min_) {
     value = (wrap_) ? max_ + (value - min_) + 1 : min_;
   };
-  src_.SetInt(value);
+  if (value == previous) {
+    return;
+  }
 
+  src_.SetInt(value);
   SetChanged();
   NotifyObservers(reinterpret_cast<I_ObservableData *>(
       static_cast<uintptr_t>(src_.GetID())));
@@ -85,7 +91,8 @@ void UIBigHexVarField::ApplyOffset(int offset) {
 
 void UIBigHexVarField::ProcessArrow(unsigned short mask) {
 
-  int value = src_.GetInt();
+  const int previous = src_.GetInt();
+  int value = previous;
   int offset = 1;
   for (unsigned int i = 0; i < position_; i++) {
     offset *= power_;
@@ -103,11 +110,17 @@ void UIBigHexVarField::ProcessArrow(unsigned short mask) {
     };
     break;
   case EPBM_UP:
-    value += offset;
+    value = editMode_ == UIBigHexEditMode::IndependentDigits
+                ? UIBigHexVarFieldDetail::AdjustIndependentHexDigit(
+                      value, position_, 1)
+                : value + offset;
     break;
 
   case EPBM_DOWN:
-    value -= offset;
+    value = editMode_ == UIBigHexEditMode::IndependentDigits
+                ? UIBigHexVarFieldDetail::AdjustIndependentHexDigit(
+                      value, position_, -1)
+                : value - offset;
     break;
   };
   if (value > max_) {
@@ -116,8 +129,11 @@ void UIBigHexVarField::ProcessArrow(unsigned short mask) {
   if (value < min_) {
     value = (wrap_) ? max_ + (value - min_) + 1 : min_;
   };
-  src_.SetInt(value);
+  if (value == previous) {
+    return;
+  }
 
+  src_.SetInt(value);
   SetChanged();
   NotifyObservers(reinterpret_cast<I_ObservableData *>(
       static_cast<uintptr_t>(src_.GetID())));

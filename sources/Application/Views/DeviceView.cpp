@@ -101,6 +101,13 @@ DeviceView::DeviceView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 
+  position._y += 1;
+  v = config->FindVariable(FourCC::VarInstrumentAudition);
+  intVarField_.emplace_back(position, *v, "Instrument Audition: %s", 0, 1, 1,
+                            1);
+  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
+  (*intVarField_.rbegin()).AddObserver(*this);
+
   position._y += 2;
   actionField_.emplace_back("Theme settings", FourCC::ActionShowTheme,
                             position);
@@ -110,6 +117,12 @@ DeviceView::DeviceView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
   position._y += 2;
   actionField_.emplace_back("Update firmware", FourCC::ActionBootSelect,
                             position);
+  fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
+  (*actionField_.rbegin()).AddObserver(*this);
+
+  // y=17 -> y=20, just above Battery health (y=21)
+  position._y += 3;
+  actionField_.emplace_back("Credits", FourCC::ActionShowCredits, position);
   fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
   (*actionField_.rbegin()).AddObserver(*this);
 }
@@ -223,6 +236,13 @@ void DeviceView::Update(Observable &, I_ObservableData *data) {
     NotifyObservers(&ve);
     return;
   }
+  case FourCC::ActionShowCredits: {
+    ViewType vt = VT_CREDITS;
+    ViewEvent ve(VET_SWITCH_VIEW, &vt);
+    SetChanged();
+    NotifyObservers(&ve);
+    return;
+  }
   case FourCC::VarLineOut: {
     MessageBox *mb =
         MessageBox::Create(*this, "Reboot for new Audio Level!", MBBF_OK);
@@ -243,6 +263,7 @@ void DeviceView::Update(Observable &, I_ObservableData *data) {
   case FourCC::VarMidiControlSurface:
   case FourCC::VarMidiSync:
   case FourCC::VarRemoteUI:
+  case FourCC::VarInstrumentAudition:
   case FourCC::VarImportResampler: {
     configDirty_ = true;
     break;

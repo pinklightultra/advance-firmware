@@ -51,6 +51,7 @@ public:
   void InvalidateTextCache();
 
   void SetDirty();
+  void PowerDown();
   void UpdateColorsFromConfig();
   void SetSdCardPresent(bool present);
   bool GetSongSelectionRect(GUIRect &selectionRect) const;
@@ -88,6 +89,7 @@ protected: // GUIWindow implementation
 
 private:
   bool AutoSave();
+  void AutoSaveBeforePowerDown();
 
   Project project_;
   ViewData viewData_;

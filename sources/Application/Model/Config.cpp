@@ -104,6 +104,7 @@ static const char *midiInputDeviceList[4] = {"Off", "TRS", "USB",
 static const char *midiSendSync[2] = {"Off", "Send"};
 static const char *midiClockSyncOptions[2] = {"Internal", "External"};
 static const char *remoteUIOnOff[2] = {"Off", "On"};
+static const char *instrumentAuditionOnOff[2] = {"Off", "On"};
 static const char *midiControlSurfaceOptions[2] = {"Off", "Auto"};
 static const char *importResamplerOptions[] = {"None", "Linear", "Sinc",
                                                "Sinc HQ"};
@@ -125,6 +126,7 @@ constexpr int DEFAULT_MIDI_INPUT_DEVICE = 0x0;
 constexpr int DEFAULT_MIDI_CONTROL_SURFACE = 0x0;
 constexpr int DEFAULT_MIDISYNC = 0x0;
 constexpr int DEFAULT_REMOTEUI = 0x1;
+constexpr int DEFAULT_INSTRUMENT_AUDITION = 0x1;
 constexpr int DEFAULT_BACKLIGHT_LEVEL = 0xFF; // Default to max brightness (255)
 constexpr int DEFAULT_REC_SOURCE = 0x0;
 constexpr int DEFAULT_RECORD_LINE_GAIN_DB = 0;
@@ -272,6 +274,12 @@ static const ConfigParam configParams[] = {
      remoteUIOnOff,
      2,
      false},
+    {"INSTAUDITION",
+     {.intValue = DEFAULT_INSTRUMENT_AUDITION},
+     FourCC::VarInstrumentAudition,
+     instrumentAuditionOnOff,
+     2,
+     false},
     {"UIFONT",
      {.intValue = ThemeConstants::DEFAULT_UIFONT},
      FourCC::VarUIFont,
@@ -363,13 +371,16 @@ Config::Config()
                      static_cast<int>(ThemeConstants::DEFAULT_EMPHASIS)),
       lineOut_(FourCC::VarLineOut, lineOutOptions, 3, DEFAULT_LINEOUT),
       midiDevice_(FourCC::VarMidiDevice, midiDeviceList, 4, DEFAULT_MIDIDEVICE),
-      midiInputDevice_(FourCC::VarMidiInputDevice, midiInputDeviceList,
-                       4, DEFAULT_MIDI_INPUT_DEVICE),
+      midiInputDevice_(FourCC::VarMidiInputDevice, midiInputDeviceList, 4,
+                       DEFAULT_MIDI_INPUT_DEVICE),
       midiControlSurface_(FourCC::VarMidiControlSurface,
                           midiControlSurfaceOptions, 2,
                           DEFAULT_MIDI_CONTROL_SURFACE),
       midiSync_(FourCC::VarMidiSync, midiSendSync, 2, DEFAULT_MIDISYNC),
       remoteUI_(FourCC::VarRemoteUI, remoteUIOnOff, 2, DEFAULT_REMOTEUI),
+      instrumentAudition_(FourCC::VarInstrumentAudition,
+                          instrumentAuditionOnOff, 2,
+                          DEFAULT_INSTRUMENT_AUDITION),
       importResampler_(FourCC::VarImportResampler, importResamplerOptions,
                        kImportResamplerOptionCount, DEFAULT_IMPORT_RESAMPLER),
       uiFont_(FourCC::VarUIFont, ThemeConstants::FONT_NAMES,
@@ -399,6 +410,7 @@ Config::Config()
   variables_.push_back(&midiControlSurface_);
   variables_.push_back(&midiSync_);
   variables_.push_back(&remoteUI_);
+  variables_.push_back(&instrumentAudition_);
   variables_.push_back(&importResampler_);
   variables_.push_back(&uiFont_);
   variables_.push_back(&themeName_);
@@ -485,6 +497,10 @@ Config::Config()
 }
 
 Config::~Config() {}
+
+bool Config::IsInstrumentAuditionEnabled() {
+  return instrumentAudition_.GetBool();
+}
 
 bool Config::Save() {
   auto fs = FileSystem::GetInstance();

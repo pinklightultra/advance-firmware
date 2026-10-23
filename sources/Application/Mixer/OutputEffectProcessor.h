@@ -15,6 +15,7 @@ class OutputEffectProcessor {
 public:
   virtual ~OutputEffectProcessor(){};
   virtual void Reset() {}
+  virtual bool IsTailActive() const { return false; }
   virtual void Render(const AudioSample *input, AudioSample *output,
                       int samplecount) = 0;
   virtual const char *GetShortName() const = 0;

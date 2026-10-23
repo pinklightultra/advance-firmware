@@ -10,6 +10,7 @@
 #define _VOICE_PARAMETERS_H_
 
 #include "Application/Player/InsertEffectDefinitions.h"
+#include "Externals/etl/include/etl/array.h"
 #include "Externals/etl/include/etl/vector.h"
 #include "Foundation/Variables/Variable.h"
 #include "Foundation/Variables/VariableContainer.h"
@@ -23,6 +24,7 @@ class VoiceParameters : public VariableContainer {
 public:
   static constexpr size_t PersistedVariableCount =
       kVoiceParameterVariableCount + LFOSettings::VariableCount;
+  using ValueSnapshot = etl::array<int32_t, PersistedVariableCount>;
 
   class InsertTypeVariable : public Variable {
   public:
@@ -48,6 +50,8 @@ public:
 
   void AppendTo(etl::ivector<Variable *> &variables);
   etl::ivector<Variable *> *Variables() { return &variables_; }
+  void CaptureValues(ValueSnapshot &snapshot);
+  bool ValuesDifferFrom(const ValueSnapshot &snapshot);
   void CopyFrom(const VoiceParameters &other);
   void Reset();
   LFOSettings *GetLFOSettings() { return &lfoSettings_; }

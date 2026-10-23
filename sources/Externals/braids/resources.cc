@@ -35,7 +35,7 @@ namespace braids {
 
 static const char str_dummy[] = "dummy";
 
-const char *string_table[] = {
+const char *const string_table[] = {
     str_dummy,
 };
 
@@ -387,7 +387,7 @@ const uint16_t lut_env_expo[] = {
     65236, 65259, 65282, 65305, 65328, 65350, 65372, 65393, 65414, 65435, 65456,
     65476, 65496, 65515, 65535};
 
-const uint16_t *lookup_table_table[] = {
+const uint16_t *const lookup_table_table[] = {
     lut_resonator_coefficient,
     lut_resonator_scale,
     lut_svf_cutoff,
@@ -436,7 +436,7 @@ const int16_t lut_blowing_jet[] = {
     32767,  32767,  32767,  32767,  32767,  32767,  32767,  32767,  32767,
     32767,  32767,  32767,  32767,  32767};
 
-const int16_t *lookup_table_signed_table[] = {
+const int16_t *const lookup_table_signed_table[] = {
     lut_blowing_jet,
 };
 
@@ -497,7 +497,7 @@ const uint32_t lut_env_portamento_increments[] = {
     251161,     242034,     233295,     224923,    216903,    209216,
     201848,     194783};
 
-const uint32_t *lookup_table_hr_table[] = {
+const uint32_t *const lookup_table_hr_table[] = {
     lut_oscillator_increments,
     lut_oscillator_delays,
     lut_env_portamento_increments,
@@ -958,7 +958,7 @@ const int16_t wav_bandlimited_comb_14[] = {
     -10278, -9512,  -8739,  -7961,  -7179,  -6393,  -5601,  -4808,  -4012,
     -3210,  -2411,  -1608,  -804,   0};
 
-const int16_t *waveform_table[] = {
+const int16_t *const waveform_table[] = {
     wav_formant_sine,        wav_formant_square,      wav_sine,
     wav_bandlimited_comb_0,  wav_bandlimited_comb_1,  wav_bandlimited_comb_2,
     wav_bandlimited_comb_3,  wav_bandlimited_comb_4,  wav_bandlimited_comb_5,
@@ -1092,7 +1092,7 @@ const int16_t ws_tri_fold[] = {
     17389,  30325,  31480,  19915,  19915,
 };
 
-const int16_t *waveshaper_table[] = {
+const int16_t *const waveshaper_table[] = {
     ws_moderate_overdrive,
     ws_violent_overdrive,
     ws_sine_fold,
@@ -3397,7 +3397,7 @@ const uint8_t wt_code[] = {
     65,  1,   5,   0,   4,   5,   80,  0,   68,  65,  16,  16,  80,  255,
 };
 
-const uint8_t *wt_table[] = {
+const uint8_t *const wt_table[] = {
     wt_waves,
     wt_map,
     wt_code,
@@ -3430,7 +3430,7 @@ const uint16_t chr_characters[] = {
     0,     0,     65532,
 };
 
-const uint16_t *char_table[] = {
+const uint16_t *const char_table[] = {
     chr_characters,
 };
 

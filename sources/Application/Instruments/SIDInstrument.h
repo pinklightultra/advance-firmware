@@ -11,14 +11,16 @@
  * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
-#ifndef _CRSID_INSTRUMENT_H_
-#define _CRSID_INSTRUMENT_H_
+#ifndef _SID_INSTRUMENT_H_
+#define _SID_INSTRUMENT_H_
 
+#include "Application/Model/Song.h"
 #include "Application/Persistency/PersistenceConstants.h"
-#include "Externals/cRSID/SID.h"
 #include "I_Instrument.h"
-
-enum SIDInstrumentInstance { SID1 = 1, SID2 };
+#include "PitchOffset.h"
+#include "SIDRenderingParams.h"
+#include "VoiceParameters.h"
+#include "config/MemorySections.h"
 
 enum SIDInstrumentWaveform {
   DWF_NONE = 0,
@@ -42,15 +44,17 @@ enum SIDInstrumentFilterMode {
   DFM_LAST
 };
 
+enum SIDInstrumentChipModel { SID_CHIP_6581 = 0, SID_CHIP_8580, SID_CHIP_LAST };
+
 static const unsigned short sid_notes[96] = {
-    0x0112, 0x0123, 0x0134, 0x0146, 0x015A, 0x016E, 0x0184, 0x018B, 0x01B3,
+    0x0112, 0x0123, 0x0134, 0x0146, 0x015A, 0x016E, 0x0184, 0x019B, 0x01B3,
     0x01CD, 0x01E9, 0x0206, 0x0225, 0x0245, 0x0268, 0x028C, 0x02B3, 0x02DC,
     0x0308, 0x0336, 0x0367, 0x039B, 0x03D2, 0x040C, 0x0449, 0x048B, 0x04D0,
     0x0519, 0x0567, 0x05B9, 0x0610, 0x066C, 0x06CE, 0x0735, 0x07A3, 0x0817,
     0x0893, 0x0915, 0x099F, 0x0A32, 0x0ACD, 0x0B72, 0x0C20, 0x0CD8, 0x0D9C,
     0x0E6B, 0x0F46, 0x102F, 0x1125, 0x122A, 0x133F, 0x1464, 0x159A, 0x16E3,
     0x183F, 0x1981, 0x1B38, 0x1CD6, 0x1E80, 0x205E, 0x224B, 0x2455, 0x267E,
-    0x28C8, 0x2B34, 0x2DC6, 0x2DC6, 0x3361, 0x366F, 0x39AC, 0x3D1A, 0x40BC,
+    0x28C8, 0x2B34, 0x2DC6, 0x307F, 0x3361, 0x366F, 0x39AC, 0x3D1A, 0x40BC,
     0x4495, 0x48A9, 0x4CFC, 0x518F, 0x5669, 0x5B8C, 0x60FE, 0x6602, 0x6CDF,
     0x7358, 0x7A34, 0x8178, 0x892B, 0x9153, 0x99F7, 0xA31F, 0xACD2, 0xB719,
     0xC1FC, 0xCD85, 0xD9BD, 0xE6B0, 0xF467, 0xFFFF}; // last one is 0x1F2F0
@@ -58,7 +62,9 @@ static const unsigned short sid_notes[96] = {
 class SIDInstrument : public I_Instrument {
 
 public:
-  SIDInstrument(SIDInstrumentInstance chip);
+  static constexpr int VoiceCount = 3;
+
+  SIDInstrument();
   virtual ~SIDInstrument();
 
   virtual bool Init();
@@ -69,15 +75,22 @@ public:
   virtual void Stop(int channel);
 
   // size refers to the number of samples
-  // should always fill interleaved stereo / 16bit
-  virtual bool Render(int channel, fixed *buffer, int size, bool updateTick);
+  // should always fill packed mono AudioSample values
+  virtual bool Render(int channel, AudioSample *buffer, int size,
+                      bool updateTick);
+  void SetPitchMultiplier(int channel, float multiplier) override;
+  virtual AudioBufferLayout GetAudioBufferLayout(int channel) const override;
   virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
 
   virtual bool IsInitialized();
 
   virtual bool IsEmpty() { return false; };
 
+  PICOTRACKER_FAST_CODE("sid_instrument_get_type")
   virtual InstrumentType GetType() { return IT_SID; };
+  bool ShouldAuditionParameterChange(FourCC parameter) const override;
+
+  virtual void RestoreContent(PersistencyDocument *doc) override;
 
   virtual etl::string<MAX_INSTRUMENT_NAME_LENGTH> GetName();
 
@@ -89,59 +102,62 @@ public:
   virtual void SetTableState(TableSaveState &state);
   etl::ivector<Variable *> *Variables() { return &variables_; };
 
-  SIDInstrumentInstance GetChip() { return chip_; };
-  unsigned short GetOsc() { return osc_.GetInt(); };
-  void SetRender(bool render) { render_ = render; };
-
-  // returns just the chip name, eg "SID #1"
-  const char *GetChipName() { return (chip_ == SID1) ? "SID #1" : "SID #2"; };
-
 private:
-  void HardStopOscillator();
+  struct VoiceVariables {
+    VoiceVariables(FourCC pulseWidthID, FourCC waveformID, FourCC syncID,
+                   FourCC ringID, FourCC adsrID, FourCC filterOnID,
+                   FourCC pitchOffsetID);
 
-  etl::vector<Variable *, 36> variables_;
+    void AppendTo(etl::ivector<Variable *> &variables);
 
-  SIDInstrumentInstance chip_; // SID1 or SID2
-  bool render_ = false;
+    Variable pulseWidth_;
+    Variable waveform_;
+    Variable sync_;
+    Variable ring_;
+    Variable adsr_;
+    Variable filterOn_;
+    Variable pitchOffset_;
+  };
 
-  bool playing_;
-  bool gate_;
+  VoiceVariables &GetVoiceVariables(int voice);
+  static uint16_t GetNoteFrequency(int note);
+  static uint16_t GetPitchFrequency(int32_t pitchCents);
+  AdvanceSID::Model GetChipModel();
+  void NormalizeWaveforms();
+  void HardStopOscillators(SIDRenderParams &renderParams);
+
+  static constexpr size_t BaseVariableCount = 28;
+  static constexpr size_t VariableCount =
+      BaseVariableCount + VoiceParameters::PersistedVariableCount;
+
+  etl::vector<Variable *, VariableCount> variables_;
+
   //  bool retrig_;
   // int retrigLoop_;
   TableSaveState tableState_;
+  // Playback state is shared by channel rather than instrument definition,
+  // matching the sample instrument render-parameter ownership model.
+#if !defined(HOST_TEST)
+  __attribute__((section(".DTCMRAM")))
+#endif
+  static SIDRenderParams renderParams_[SONG_CHANNEL_COUNT];
   //  bool first_[SONG_CHANNEL_COUNT];
   //  reSID::SID sid_;
   //  reSID::cycle_count delta_t_;
-  static cRSID sid1_;
-  static cRSID sid2_;
-  cRSID *sid_;
-  static SIDInstrument *SID1RenderMaster;
-  static SIDInstrument *SID2RenderMaster;
   //  static bool rendered1_;
 
-  Variable vpw_;
-  Variable vwf_;
-  Variable vsync_;
-  Variable vring_;
-  Variable vadsr_;
-  Variable vfon_;
+  VoiceVariables voice1_;
+  VoiceVariables voice2_;
+  VoiceVariables voice3_;
   Variable table_;
   Variable tableAuto_;
-  Variable osc_; // 0, 1 or 2
 
-  // all these settings are shared by all oscillators on a single SID Chip
-  static Variable fltcut1_;
-  static Variable fltcut2_;
-  Variable *fltcut_;
-  static Variable fltres1_;
-  static Variable fltres2_;
-  Variable *fltres_;
-  static Variable fltmode1_;
-  static Variable fltmode2_;
-  Variable *fltmode_;
-  static Variable vol1_;
-  static Variable vol2_;
-  Variable *vol_;
+  // These chip settings are shared by all three voices.
+  Variable chip_;
+  Variable fltcut_;
+  Variable fltres_;
+  Variable fltmode_;
+  Variable vol_;
 };
 
 #endif

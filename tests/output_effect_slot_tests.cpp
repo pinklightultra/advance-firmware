@@ -55,6 +55,23 @@ public:
   int resetCount_ = 0;
 };
 
+class TailTrackingEffect : public OutputEffectProcessor {
+public:
+  bool IsTailActive() const override { return tailActive_; }
+
+  virtual void Render(const AudioSample *input, AudioSample *output,
+                      int samplecount) override {
+    const int count = samplecount * 2;
+    for (int i = 0; i < count; ++i) {
+      output[i] = input[i];
+    }
+  }
+
+  virtual const char *GetShortName() const override { return "TAIL"; }
+
+  bool tailActive_ = false;
+};
+
 } // namespace
 
 TEST_CASE("OutputEffectSlot returns false when untouched") {
@@ -166,6 +183,17 @@ TEST_CASE("OutputEffectSlot reset clears tails and processor state") {
   CHECK(effect.resetCount_ == 1);
   CHECK(wet[0] == 0);
   CHECK(wet[1] == 0);
+}
+
+TEST_CASE("OutputEffectSlot reports its processor tail state") {
+  OutputEffectSlot slot(GetTestWetBuffer(), &GetDefaultEffect());
+  TailTrackingEffect effect;
+
+  slot.SetEffect(&effect);
+  CHECK_FALSE(slot.IsTailActive());
+
+  effect.tailActive_ = true;
+  CHECK(slot.IsTailActive());
 }
 
 TEST_CASE("PassthroughOutputEffect copies wet input unchanged") {

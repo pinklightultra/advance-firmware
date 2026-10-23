@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "WavFile.h"
@@ -14,6 +18,7 @@
 #include "System/Console/Trace.h"
 #include "System/FileSystem/I_File.h"
 #include "WavHeader.h"
+#include "config/MemorySections.h"
 #include <stdlib.h>
 
 unsigned char WavFile::readBuffer_[BUFFER_SIZE];
@@ -173,6 +178,7 @@ void *WavFile::GetSampleBuffer(int note) { return samples_; };
 
 void WavFile::SetSampleBuffer(short *ptr) { samples_ = ptr; }
 
+PICOTRACKER_FAST_CODE("wav_file_get_size")
 int WavFile::GetSize(int note) { return size_; };
 
 int WavFile::GetChannelCount(int note) { return channelCount_; };

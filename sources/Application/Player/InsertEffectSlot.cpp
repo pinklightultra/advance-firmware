@@ -8,6 +8,7 @@
 
 #include "InsertEffectSlot.h"
 #include "System/Console/n_assert.h"
+#include "config/MemorySections.h"
 
 InsertEffectSlot::InsertEffectSlot() = default;
 
@@ -23,6 +24,7 @@ void InsertEffectSlot::SetEffect(InsertEffectProcessor *effect) {
 
 InsertEffectProcessor *InsertEffectSlot::GetEffect() const { return effect_; }
 
+PICOTRACKER_FAST_CODE("insert_effect_slot_render")
 void InsertEffectSlot::Render(AudioSample *buffer, int samplecount, int amount,
                               AudioBufferLayout layout) {
   NAssert(effect_);

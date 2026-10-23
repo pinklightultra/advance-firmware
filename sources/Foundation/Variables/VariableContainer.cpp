@@ -12,6 +12,7 @@
  */
 
 #include "VariableContainer.h"
+#include "config/MemorySections.h"
 #include <string.h>
 
 VariableContainer::VariableContainer(etl::ivector<Variable *> *list)
@@ -19,6 +20,7 @@ VariableContainer::VariableContainer(etl::ivector<Variable *> *list)
 
 VariableContainer::~VariableContainer(){};
 
+PICOTRACKER_FAST_CODE("variable_container_find_id")
 Variable *VariableContainer::FindVariable(FourCC id) {
   auto it = list_->begin();
   for (size_t i = 0; i < list_->size(); i++) {
