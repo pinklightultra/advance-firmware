@@ -13,6 +13,7 @@
 
 #include "ChainView.h"
 #include "Application/Utils/char.h"
+#include "Application/Views/BaseClasses/SelectionButtonBehavior.h"
 #include "Application/Views/SampleEditorView.h"
 #include "Application/Views/SelectionResampleSupport.h"
 #include "Externals/etl/include/etl/to_string.h"
@@ -248,6 +249,7 @@ bool ChainView::buildSelectionResampleRequest(
 }
 
 void ChainView::clearSelection() {
+  selectionCopyPending_ = false;
   clipboard_.active_ = false;
   viewMode_ = VM_NORMAL;
   viewData_->chainRow_ = saveRow_;
@@ -332,6 +334,7 @@ void ChainView::copySelection() {
 
   fillClipboardData();
 
+  selectionCopyPending_ = false;
   clipboard_.active_ = false;
   viewMode_ = VM_NORMAL;
 
@@ -355,6 +358,7 @@ void ChainView::cutSelection() {
   //	saveClipboardPosition() ;
 
   fillClipboardData();
+  selectionCopyPending_ = false;
 
   // Loop over selection col, row & clear data inside it
 
@@ -457,6 +461,12 @@ void ChainView::ProcessButtonMask(unsigned short mask, bool pressed) {
         switchSoloMode();
       }
     };
+    if (viewMode_ == VM_SELECTION &&
+        GetSelectionEditAction(mask, false, EPBM_EDIT, EPBM_ENTER,
+                               selectionCopyPending_) ==
+            SelectionEditAction::Copy) {
+      copySelection();
+    }
     return;
   };
 
@@ -626,12 +636,16 @@ void ChainView::processNormalButtonMask(unsigned short mask) {
 void ChainView::processSelectionButtonMask(unsigned short mask) {
 
   Player *player = Player::GetInstance();
+  const SelectionEditAction editAction = GetSelectionEditAction(
+      mask, true, EPBM_EDIT, EPBM_ENTER, selectionCopyPending_);
+  if (editAction == SelectionEditAction::Cut) {
+    cutSelection();
+    return;
+  }
 
   // B Modifier
 
   if (mask & EPBM_EDIT) {
-    if (mask == EPBM_EDIT)
-      copySelection();
     if (mask & EPBM_NAV)
       toggleMute();
     if (mask & EPBM_ALT)

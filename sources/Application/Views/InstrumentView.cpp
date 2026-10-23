@@ -99,8 +99,7 @@ InstrumentView::InstrumentView(GUIWindow &w, ViewData *data)
                       IT_LAST, 0),
       lastSampleIndex_(-1), pendingSampleSourceLoopModeDirection_(0),
       previewMode_(PreviewMode::None), previewChannel_(0),
-      previewInstrument_(0), suppressSampleChangeWarning_(false),
-      fm6Selection_(1),
+      previewInstrument_(0), fm6Selection_(1),
       embeddedSlicer_(
           {GUIPoint(EmbeddedSlicerGraphXOffset, EmbeddedSlicerGraphYOffset),
            GUIPoint(1, 12), false, false, false, true}) {
@@ -147,7 +146,6 @@ InstrumentView::~InstrumentView() {}
 void InstrumentView::Reset() {
   embeddedSlicer_.Reset();
   lastSampleIndex_ = -1;
-  suppressSampleChangeWarning_ = false;
   exportInstrument_ = nullptr;
   exportName_.clear();
   lastFocusID_ = FourCC::VarInstrumentType;
@@ -345,6 +343,9 @@ void InstrumentView::onInstrumentChange() {
 };
 
 void InstrumentView::refreshInstrumentFields() {
+  for (auto &f : sampleIndexField_) {
+    f.RemoveObserver(*this);
+  }
   for (auto &f : intVarField_) {
     f.RemoveObserver(*this);
   }
@@ -387,6 +388,7 @@ void InstrumentView::refreshInstrumentFields() {
   bitmaskVarField_.clear();
   nameTextField_.clear();
   nameVariables_.clear();
+  sampleIndexField_.clear();
   lastSampleIndex_ = -1;
   InstrumentType currentType =
       getInstrument() ? getInstrument()->GetType() : IT_NONE;
@@ -470,6 +472,9 @@ void InstrumentView::refreshInstrumentFields() {
 
   // observer all var fields so we can mark the instrument as modified
   // to be able to show confirmation dialog when switching instrument type
+  for (auto &f : sampleIndexField_) {
+    f.AddObserver(*this);
+  }
   for (auto &f : intVarField_) {
     f.AddObserver(*this);
   }
@@ -654,9 +659,11 @@ void InstrumentView::fillSampleParameters() {
 
   Variable *v = instrument->FindVariable(FourCC::SampleInstrumentSample);
   SamplePool *sp = SamplePool::GetInstance();
-  intVarField_.emplace_back(position, *v, "Sample: %.17s", 0,
-                            sp->GetNameListSize() - 1, 1, 0x10);
-  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
+  sampleIndexField_.emplace_back(
+      position, *v, sp->GetNameListSize() - 1,
+      SampleIndexField::ChangeRequest::create<
+          InstrumentView, &InstrumentView::requestSampleChange>(*this));
+  fieldList_.insert(fieldList_.end(), &sampleIndexField_.back());
 
   position._y += 1;
   updateSliceCountLabel(sliceCountLabel_, instrument);
@@ -787,9 +794,11 @@ void InstrumentView::fillSampleSourceParameters() {
   Variable *v = sampleSourceInstrument->FindVariable(
       FourCC::SampleSourceInstrumentSample);
   SamplePool *sp = SamplePool::GetInstance();
-  intVarField_.emplace_back(position, *v, "Sample: %.17s", 0,
-                            sp->GetNameListSize() - 1, 1, 0x10);
-  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
+  sampleIndexField_.emplace_back(
+      position, *v, sp->GetNameListSize() - 1,
+      SampleIndexField::ChangeRequest::create<
+          InstrumentView, &InstrumentView::requestSampleChange>(*this));
+  fieldList_.insert(fieldList_.end(), &sampleIndexField_.back());
 
   setupEmbeddedSlicer();
   embeddedSlicer_.MarkModalRecovery(2);
@@ -1062,6 +1071,96 @@ void InstrumentView::updateEmbeddedSlicerPreviewRange() {
       SampleSourceInstrument::PlaybackModeUsesLoopPoint(loopModeVar->GetInt()));
   embeddedSlicer_.SetPreviewRangeHint(true, start, loopStart, end,
                                       loopStartVisible);
+}
+
+bool InstrumentView::requestSampleChange(int32_t newSampleIndex) {
+  I_Instrument *instrument = getInstrument();
+  if (!instrument) {
+    return true;
+  }
+
+  const bool isLegacySampler = instrument->GetType() == IT_SAMPLE;
+  NAssert(isLegacySampler || instrument->GetType() == IT_SAMPLE_SOURCE);
+  Variable *start = instrument->FindVariable(
+      isLegacySampler ? FourCC::SampleInstrumentStart
+                      : FourCC::SampleSourceInstrumentStart);
+  Variable *loopStart = instrument->FindVariable(
+      isLegacySampler ? FourCC::SampleInstrumentLoopStart
+                      : FourCC::SampleSourceInstrumentLoopStart);
+  Variable *end = instrument->FindVariable(
+      isLegacySampler ? FourCC::SampleInstrumentEnd
+                      : FourCC::SampleSourceInstrumentEnd);
+  NAssert(start && loopStart && end);
+
+  bool hasSlices = false;
+  int32_t sampleSize = 0;
+  if (isLegacySampler) {
+    SampleInstrument *sampleInstrument =
+        static_cast<SampleInstrument *>(instrument);
+    hasSlices = sampleInstrument->HasSlicesForWarning();
+    sampleSize = sampleInstrument->GetSampleSize();
+  } else {
+    SampleSourceInstrument *sampleSourceInstrument =
+        static_cast<SampleSourceInstrument *>(instrument);
+    hasSlices = sampleSourceInstrument->HasSlicesForWarning();
+    sampleSize = sampleSourceInstrument->GetSampleSize();
+  }
+
+  const bool hasEdits = hasSlices || start->GetInt() != 0 ||
+                        loopStart->GetInt() != 0 || end->GetInt() != sampleSize;
+  if (!hasEdits) {
+    return true;
+  }
+
+  pendingSampleChangeInstrument_ = instrument;
+  pendingSampleChangeNewIndex_ = newSampleIndex;
+  if (instrument->GetType() == IT_SAMPLE_SOURCE) {
+    embeddedSlicer_.MarkModalRecovery(0);
+    embeddedSlicer_.ClearWaveformRegion(*this);
+  }
+
+  MessageBox *message = MessageBox::Create(*this, "Change sample &",
+                                           "reset edits?", MBBF_YES | MBBF_NO);
+  DoModal(
+      message,
+      ModalViewCallback::create<InstrumentView,
+                                &InstrumentView::onConfirmSampleChange>(*this));
+  return false;
+}
+
+void InstrumentView::updateSamplePositionFieldLimits(I_Instrument *instrument,
+                                                     int32_t sampleIndex) {
+  if (!instrument) {
+    return;
+  }
+
+  int32_t sampleSize = 0;
+  SamplePool *pool = SamplePool::GetInstance();
+  if (sampleIndex >= 0 && sampleIndex < pool->GetNameListSize()) {
+    SoundSource *source = pool->GetSource(static_cast<uint32_t>(sampleIndex));
+    if (source && !source->IsMulti()) {
+      sampleSize = source->GetSize(-1);
+    }
+  }
+  const int32_t maximum = sampleSize > 0 ? sampleSize - 1 : 0;
+
+  // These fields outlive a sample selection change, so refresh the limits
+  // captured when fillSampleParameters() built them.
+  for (auto &field : bigHexVarField_) {
+    const FourCC id = field.GetVariableID();
+    const bool isSamplePosition =
+        instrument->GetType() == IT_SAMPLE
+            ? id == FourCC::SampleInstrumentStart ||
+                  id == FourCC::SampleInstrumentLoopStart ||
+                  id == FourCC::SampleInstrumentEnd
+            : instrument->GetType() == IT_SAMPLE_SOURCE &&
+                  (id == FourCC::SampleSourceInstrumentStart ||
+                   id == FourCC::SampleSourceInstrumentLoopStart ||
+                   id == FourCC::SampleSourceInstrumentEnd);
+    if (isSamplePosition) {
+      field.SetMaximum(maximum);
+    }
+  }
 }
 
 void InstrumentView::fillMidiParameters() {
@@ -1920,54 +2019,18 @@ void InstrumentView::Update(Observable &o, I_ObservableData *data) {
       newIndex = sampleSourceInstr->GetSampleIndex();
     }
 
-    if (suppressSampleChangeWarning_) {
-      suppressSampleChangeWarning_ = false;
-      lastSampleIndex_ = newIndex;
-      break;
-    }
-
     if (newIndex == lastSampleIndex_) {
       break;
     }
 
-    bool hasSlicesForWarning = false;
-    if (instr->GetType() == IT_SAMPLE) {
-      SampleInstrument *sampleInstr = static_cast<SampleInstrument *>(instr);
-      hasSlicesForWarning = sampleInstr->HasSlicesForWarning();
-      if (!hasSlicesForWarning) {
-        sampleInstr->ClearSlices();
-      }
-    } else if (instr->GetType() == IT_SAMPLE_SOURCE) {
-      SampleSourceInstrument *sampleSourceInstr =
-          static_cast<SampleSourceInstrument *>(instr);
-      hasSlicesForWarning = sampleSourceInstr->HasSlicesForWarning();
-      if (!hasSlicesForWarning) {
-        sampleSourceInstr->ClearSlices();
-      }
-    }
-    if (!hasSlicesForWarning) {
-      resetSampleSourceOscillatorIfSampleTooLarge(instr);
-      lastSampleIndex_ = newIndex;
-      updateSliceCountLabel(sliceCountLabel_, instr);
-      if (instr->GetType() == IT_SAMPLE_SOURCE) {
-        setupEmbeddedSlicer();
-      }
-      isDirty_ = true;
-      break;
-    }
-
-    MessageBox *mb = MessageBox::Create(*this, "Change sample &",
-                                        "clear slices?", MBBF_YES | MBBF_NO);
-    pendingSampleChangeInstrument_ = instr;
-    pendingSampleChangeNewIndex_ = newIndex;
+    updateSamplePositionFieldLimits(instr, newIndex);
+    resetSampleSourceOscillatorIfSampleTooLarge(instr);
+    lastSampleIndex_ = newIndex;
+    updateSliceCountLabel(sliceCountLabel_, instr);
     if (instr->GetType() == IT_SAMPLE_SOURCE) {
-      embeddedSlicer_.MarkModalRecovery(0);
-      embeddedSlicer_.ClearWaveformRegion(*this);
+      setupEmbeddedSlicer();
     }
-    DoModal(mb,
-            ModalViewCallback::create<InstrumentView,
-                                      &InstrumentView::onConfirmSampleChange>(
-                *this));
+    isDirty_ = true;
   } break;
   case FourCC::ActionShowSampleSlices: {
     I_Instrument *instr = getInstrument();
@@ -2150,29 +2213,37 @@ void InstrumentView::onConfirmResetInstrument(View &, ModalView &dialog) {
 }
 
 void InstrumentView::onConfirmSampleChange(View &, ModalView &dialog) {
-  I_Instrument *sampleInstr = pendingSampleChangeInstrument_;
+  I_Instrument *instrument = pendingSampleChangeInstrument_;
   int newIndex = pendingSampleChangeNewIndex_;
   pendingSampleChangeInstrument_ = nullptr;
   pendingSampleChangeNewIndex_ = -1;
 
-  if (!sampleInstr) {
+  if (!instrument) {
     return;
   }
 
   if (dialog.GetReturnCode() == MBL_YES) {
-    if (sampleInstr->GetType() == IT_SAMPLE) {
-      SampleInstrument *sampleInstrument =
-          static_cast<SampleInstrument *>(sampleInstr);
-      sampleInstrument->ClearSlices();
-    } else if (sampleInstr->GetType() == IT_SAMPLE_SOURCE) {
-      SampleSourceInstrument *sampleSourceInstrument =
-          static_cast<SampleSourceInstrument *>(sampleInstr);
-      sampleSourceInstrument->ClearSlices();
+    Variable *sample = nullptr;
+    if (instrument->GetType() == IT_SAMPLE) {
+      sample = instrument->FindVariable(FourCC::SampleInstrumentSample);
+    } else {
+      sample = instrument->FindVariable(FourCC::SampleSourceInstrumentSample);
     }
+    NAssert(sample);
+
+    sample->SetInt(newIndex);
+    const bool isLegacySampler = instrument->GetType() == IT_SAMPLE;
+    if (isLegacySampler) {
+      static_cast<SampleInstrument *>(instrument)->ClearSlices();
+    } else {
+      static_cast<SampleSourceInstrument *>(instrument)->ClearSlices();
+    }
+
     lastSampleIndex_ = newIndex;
-    resetSampleSourceOscillatorIfSampleTooLarge(sampleInstr);
-    updateSliceCountLabel(sliceCountLabel_, sampleInstr);
-    if (sampleInstr->GetType() == IT_SAMPLE_SOURCE) {
+    updateSamplePositionFieldLimits(instrument, newIndex);
+    resetSampleSourceOscillatorIfSampleTooLarge(instrument);
+    updateSliceCountLabel(sliceCountLabel_, instrument);
+    if (instrument->GetType() == IT_SAMPLE_SOURCE) {
       setupEmbeddedSlicer();
       embeddedSlicer_.MarkModalRecovery(2);
     }
@@ -2180,23 +2251,7 @@ void InstrumentView::onConfirmSampleChange(View &, ModalView &dialog) {
     return;
   }
 
-  suppressSampleChangeWarning_ = true;
-  Variable *sampleVar = nullptr;
-  if (sampleInstr->GetType() == IT_SAMPLE) {
-    SampleInstrument *sampleInstrument =
-        static_cast<SampleInstrument *>(sampleInstr);
-    sampleVar = sampleInstrument->FindVariable(FourCC::SampleInstrumentSample);
-  } else if (sampleInstr->GetType() == IT_SAMPLE_SOURCE) {
-    SampleSourceInstrument *sampleSourceInstrument =
-        static_cast<SampleSourceInstrument *>(sampleInstr);
-    sampleVar = sampleSourceInstrument->FindVariable(
-        FourCC::SampleSourceInstrumentSample);
-  }
-  if (sampleVar) {
-    sampleVar->SetInt(lastSampleIndex_);
-  }
-  if (sampleInstr->GetType() == IT_SAMPLE_SOURCE) {
-    setupEmbeddedSlicer();
+  if (instrument->GetType() == IT_SAMPLE_SOURCE) {
     embeddedSlicer_.MarkModalRecovery(2);
   }
   isDirty_ = true;

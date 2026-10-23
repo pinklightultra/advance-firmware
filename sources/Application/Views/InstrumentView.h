@@ -33,6 +33,7 @@
 #include "Foundation/Observable.h"
 #include "Foundation/Variables/Variable.h"
 #include "Foundation/Variables/WatchedVariable.h"
+#include "SampleIndexField.h"
 #include "SampleSlicer.h"
 #include "ViewData.h"
 #include <cstddef>
@@ -85,6 +86,8 @@ protected:
   bool focusedEmbeddedSlicerPreviewField();
   void updateEmbeddedSlicerPreviewRange();
   bool isEmbeddedSlicerActive() const;
+  void updateSamplePositionFieldLimits(I_Instrument *instrument,
+                                       int32_t sampleIndex);
   uint8_t instrumentPreviewNote(I_Instrument *instrument);
   bool startInstrumentPreview(unsigned short mask);
   void auditionParameterChange(FourCC parameter);
@@ -95,6 +98,7 @@ protected:
 private:
   void onConfirmInstrumentTypeChange(View &view, ModalView &dialog);
   void onConfirmResetInstrument(View &view, ModalView &dialog);
+  bool requestSampleChange(int32_t newSampleIndex);
   void onConfirmSampleChange(View &view, ModalView &dialog);
   void onConfirmExportOverwrite(View &view, ModalView &dialog);
   static void AutoSliceConfirmCallback(View &view, ModalView &dialog);
@@ -112,7 +116,6 @@ private:
   PreviewMode previewMode_;
   unsigned short previewChannel_;
   unsigned short previewInstrument_;
-  bool suppressSampleChangeWarning_;
   // Which FM6 patch block the algorithm field's cursor points at: 1-6 for a
   // DX7 operator, FM6SelectionGlobal for the global block. Held here so it
   // survives the field rebuild an operator/global switch triggers.
@@ -131,6 +134,7 @@ private:
   SampleSlicer embeddedSlicer_;
 
   etl::vector<UIIntVarField, 1> typeIntVarField_;
+  etl::vector<SampleIndexField, 1> sampleIndexField_;
   etl::vector<UIActionField, 2> persistentActionField_;
   etl::vector<UIIntVarField, 40> intVarField_;
   etl::vector<UIActionField, 1> fm6ActionField_;

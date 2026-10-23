@@ -102,6 +102,7 @@ private:
 
   int saveCol_;
   int saveRow_;
+  bool selectionCopyPending_ = false;
 
   static short offsets_[2][4];
 

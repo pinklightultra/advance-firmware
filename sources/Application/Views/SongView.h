@@ -109,6 +109,8 @@ private:
     int saveOffset_;
   } selection_;
 
+  bool selectionCopyPending_ = false;
+
   bool invertBatt_;
   bool needClear_;
 

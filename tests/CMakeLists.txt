@@ -64,6 +64,7 @@ add_executable(picoTracker_tests
   sample_slicer_tests.cpp
   row_fx_tests.cpp
   sample_pool_path_tests.cpp
+  selection_button_behavior_tests.cpp
   import_while_playing_tests.cpp
   test_main.cpp
   wavheader_tests.cpp

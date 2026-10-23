@@ -15,6 +15,7 @@
 #include "Adapters/adv/usb/usb_utils.h"
 #include "Application/Player/Player.h"
 #include "Application/Utils/char.h"
+#include "Application/Views/BaseClasses/SelectionButtonBehavior.h"
 #include "Application/Views/SampleEditorView.h"
 #include "Application/Views/SelectionResampleSupport.h"
 #include "Services/Midi/MidiService.h"
@@ -311,6 +312,7 @@ bool SongView::BuildSelectionRenderRequest(
 }
 
 void SongView::clearSelection() {
+  selectionCopyPending_ = false;
   selection_.active_ = false;
   viewMode_ = VM_NORMAL;
   viewData_->songX_ = selection_.saveX_;
@@ -360,6 +362,7 @@ void SongView::fillClipboardData() {
 void SongView::copySelection() {
 
   fillClipboardData();
+  selectionCopyPending_ = false;
   selection_.active_ = false;
   viewMode_ = VM_NORMAL;
   viewData_->songX_ = selection_.saveX_;
@@ -378,6 +381,7 @@ void SongView::cutSelection() {
   // first copy the data to clipboard
 
   fillClipboardData();
+  selectionCopyPending_ = false;
   GUIRect selRect = getSelectionRect();
   const int channelCount = SONG_CHANNEL_COUNT;
 
@@ -612,6 +616,12 @@ void SongView::ProcessButtonMask(unsigned short mask, bool pressed) {
         switchSoloMode();
       }
     };
+    if (viewMode_ == VM_SELECTION &&
+        GetSelectionEditAction(mask, false, EPBM_EDIT, EPBM_ENTER,
+                               selectionCopyPending_) ==
+            SelectionEditAction::Copy) {
+      copySelection();
+    }
     return;
   };
 
@@ -845,6 +855,13 @@ void SongView::processNormalButtonMask(unsigned int mask) {
  ******************************************************/
 
 void SongView::processSelectionButtonMask(unsigned int mask) {
+  const SelectionEditAction editAction =
+      GetSelectionEditAction(static_cast<uint16_t>(mask), true, EPBM_EDIT,
+                             EPBM_ENTER, selectionCopyPending_);
+  if (editAction == SelectionEditAction::Cut) {
+    cutSelection();
+    return;
+  }
 
   if (mask & EPBM_EDIT) {
     // EDIT Modifier
@@ -854,10 +871,6 @@ void SongView::processSelectionButtonMask(unsigned int mask) {
     if (mask & EPBM_ALT) {
       extendSelection();
     };
-    if (mask == EPBM_EDIT) {
-      copySelection();
-    }
-
   } else if (mask & EPBM_ENTER) {
     // ENTER modifier
     if (mask & EPBM_ALT) {

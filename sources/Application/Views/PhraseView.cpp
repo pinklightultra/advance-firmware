@@ -19,6 +19,7 @@
 #include "Application/Model/Table.h"
 #include "Application/Utils/HelpLegend.h"
 #include "Application/Utils/char.h"
+#include "Application/Views/BaseClasses/SelectionButtonBehavior.h"
 #include "Application/Views/ModalDialogs/MessageBox.h"
 #include "Application/Views/SampleEditorView.h"
 #include "Application/Views/SelectionResampleSupport.h"
@@ -653,6 +654,7 @@ bool PhraseView::buildSelectionResampleRequest(
 }
 
 void PhraseView::clearSelection() {
+  selectionCopyPending_ = false;
   clipboard_.active_ = false;
   viewMode_ = VM_NORMAL;
   row_ = saveRow_;
@@ -793,6 +795,7 @@ void PhraseView::copySelection() {
 
   fillClipboardData();
 
+  selectionCopyPending_ = false;
   clipboard_.active_ = false;
   viewMode_ = VM_NORMAL;
   row_ = saveRow_;
@@ -813,6 +816,7 @@ void PhraseView::cutSelection() {
   // fillClipboardData will trash it
 
   fillClipboardData();
+  selectionCopyPending_ = false;
 
   // Loop over selection col, row & clear data inside it
 
@@ -1050,6 +1054,12 @@ void PhraseView::ProcessButtonMask(unsigned short mask, bool pressed) {
         switchSoloMode();
       }
     };
+    if (viewMode_ == VM_SELECTION &&
+        GetSelectionEditAction(mask, false, EPBM_EDIT, EPBM_ENTER,
+                               selectionCopyPending_) ==
+            SelectionEditAction::Copy) {
+      copySelection();
+    }
     return;
   };
 
@@ -1341,13 +1351,19 @@ void PhraseView::processNormalButtonMask(unsigned short mask) {
 void PhraseView::processSelectionButtonMask(unsigned short mask) {
 
   Player *player = Player::GetInstance();
+  const SelectionEditAction editAction = GetSelectionEditAction(
+      mask, true, EPBM_EDIT, EPBM_ENTER, selectionCopyPending_);
+  if (editAction == SelectionEditAction::Cut) {
+    cutSelection();
+    return;
+  }
 
   // B modifier
 
   if (mask & EPBM_EDIT) {
     if (mask & EPBM_ALT) {
       extendSelection();
-    } else {
+    } else if (mask != EPBM_EDIT) {
       copySelection();
     }
   } else {

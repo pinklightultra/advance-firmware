@@ -87,6 +87,7 @@ private:
 
   int saveCol_;
   int saveRow_;
+  bool selectionCopyPending_ = false;
 
   // Flags to track which UI elements need updating
   // These prevent core1 from directly updating the UI

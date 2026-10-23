@@ -1736,7 +1736,7 @@ void Player::StartLoopingStreaming(const char *name) {
 
 void Player::StopStreaming() {
   mixer_.StopStreaming();
-  if (!isRunning_) {
+  if (!isRunning_ && !mixer_.IsPlaying()) {
     SetAudioActive(false);
   }
 }
@@ -1746,9 +1746,17 @@ bool Player::IsStreamingActive() { return mixer_.IsStreamingActive(); }
 void Player::StartRecordStreaming(uint16_t *srcBuffer, uint32_t size,
                                   bool stereo) {
   mixer_.StartRecordStreaming(srcBuffer, size, stereo);
+  if (!isRunning_) {
+    SetAudioActive(true);
+  }
 }
 
-void Player::StopRecordStreaming() { mixer_.StopRecordStreaming(); }
+void Player::StopRecordStreaming() {
+  mixer_.StopRecordStreaming();
+  if (!isRunning_ && !mixer_.IsPlaying()) {
+    SetAudioActive(false);
+  }
+}
 
 void Player::SetAudioActive(bool active) {
   MixerService *ms = MixerService::GetInstance();
