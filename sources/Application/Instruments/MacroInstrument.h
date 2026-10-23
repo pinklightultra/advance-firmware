@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _MACRO_INSTRUMENT_H_
@@ -37,12 +41,12 @@ public:
 
   // TODO: set a real instrument type before shipping macro instruments
   virtual InstrumentType GetType() { return IT_NONE; };
-  virtual void ProcessCommand(int channel, FourCC cc, ushort value);
+  virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
   virtual int GetTable();
   virtual bool GetTableAutomation();
   virtual void GetTableState(TableSaveState &state);
   virtual void SetTableState(TableSaveState &state);
-  etl::ilist<Variable *> *Variables() { return &variables_; };
+  etl::ivector<Variable *> *Variables() { return &variables_; };
 
   // Engine playback  start callback
   virtual void OnStart();
@@ -52,7 +56,7 @@ public:
 
 protected:
 private:
-  etl::list<Variable *, 7> variables_;
+  etl::vector<Variable *, 25> variables_;
 
   bool running_;
 

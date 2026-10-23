@@ -1,3 +1,13 @@
+<!--
+SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+
+Copyright (c) 2026 xiphonics, inc.
+
+Inherited BSD-licensed material remains BSD-3-Clause.
+New original contributions by xiphonics, inc. are GPL-3.0-only.
+Previously granted BSD permissions are preserved. See LICENSING.md.
+-->
+
 <button class="mobile-menu-toggle" type="button" aria-label="Open menu" aria-controls="manual-sidebar" aria-expanded="false" onclick="toggleMobileMenu()">
     <span></span>
     <span></span>
@@ -82,6 +92,9 @@
         </a>
         <a href="midi.html">
             <li>MIDI Implementation</li>
+        </a>
+        <a href="midi-control-surfaces.html">
+            <li>MIDI Control Surfaces</li>
         </a>
         <a href="appendix-remoteui.html">
             <li>Remote Protocol</li>

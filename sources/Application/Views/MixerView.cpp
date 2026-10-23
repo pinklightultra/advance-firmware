@@ -1,107 +1,226 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "MixerView.h"
-#include "Application/Model/Mixer.h"
-#include "Application/Utils/char.h"
+#include "Application/Mixer/MixerService.h"
 #include "Application/Utils/mathutils.h"
 #include "Application/Views/SampleEditorView.h"
 #include "UIController.h"
 #include <Application/AppWindow.h>
-#include <string>
 
-#define CHANNELS_X_OFFSET_ 3 // stride between each channel
+namespace {
+
+constexpr int MixerStripX = 5;
+constexpr int MixerStripStride = 3;
+constexpr int MixerVuMeterHeight = 9;
+constexpr int MixerStripLabelY = 12;
+constexpr int MixerFieldBaseY = 13;
+constexpr int MixerRowLabelX = 1;
+constexpr int MixerMasterStripIndex = SONG_CHANNEL_COUNT_STEREO;
+constexpr int MixerVolumeRow = 0;
+constexpr int MixerFirstEffectRow = 1;
+constexpr int MixerEffectRowEnd = MixerFirstEffectRow + OUTPUT_EFFECT_COUNT;
+
+int GetMixerStripX(int strip) { return MixerStripX + strip * MixerStripStride; }
+
+int32_t ScaleVuBarsForHeight(int32_t bars, int meterHeight) {
+  const int32_t localMeterMax = meterHeight * 10 - 1;
+  return std::min<int32_t>((bars * localMeterMax) / VU_METER_MAX,
+                           localMeterMax);
+}
+
+constexpr int MixerMasterVuXOffset = MixerMasterStripIndex * MixerStripStride;
+
+FourCC GetChannelVolumeFourCC(int channel) {
+  static const FourCC ids[] = {
+      FourCC::VarChannel1Volume, FourCC::VarChannel2Volume,
+      FourCC::VarChannel3Volume, FourCC::VarChannel4Volume,
+      FourCC::VarChannel5Volume, FourCC::VarChannel6Volume,
+      FourCC::VarChannel7Volume, FourCC::VarChannel8Volume};
+  return ids[channel];
+}
+
+#if SHOW_FX_SCREEN
+FourCC GetChannelSendFourCC(int channel, int fx) {
+  switch (fx) {
+  case kReverbEffectIndex: {
+    static const FourCC ids[] = {
+        FourCC::VarChannel1FX1Send, FourCC::VarChannel2FX1Send,
+        FourCC::VarChannel3FX1Send, FourCC::VarChannel4FX1Send,
+        FourCC::VarChannel5FX1Send, FourCC::VarChannel6FX1Send,
+        FourCC::VarChannel7FX1Send, FourCC::VarChannel8FX1Send};
+    return ids[channel];
+  }
+  case kDelayEffectIndex: {
+    static const FourCC ids[] = {
+        FourCC::VarChannel1FX2Send, FourCC::VarChannel2FX2Send,
+        FourCC::VarChannel3FX2Send, FourCC::VarChannel4FX2Send,
+        FourCC::VarChannel5FX2Send, FourCC::VarChannel6FX2Send,
+        FourCC::VarChannel7FX2Send, FourCC::VarChannel8FX2Send};
+    return ids[channel];
+  }
+  case kReservedEffectIndex: {
+    static const FourCC ids[] = {
+        FourCC::VarChannel1FX3Send, FourCC::VarChannel2FX3Send,
+        FourCC::VarChannel3FX3Send, FourCC::VarChannel4FX3Send,
+        FourCC::VarChannel5FX3Send, FourCC::VarChannel6FX3Send,
+        FourCC::VarChannel7FX3Send, FourCC::VarChannel8FX3Send};
+    return ids[channel];
+  }
+  default:
+    NAssert(false);
+    return FourCC::VarChannel1FX1Send;
+  }
+}
+
+FourCC GetFXReturnFourCC(int fx) {
+  switch (fx) {
+  case kReverbEffectIndex:
+    return FourCC::VarFX1Volume;
+  case kDelayEffectIndex:
+    return FourCC::VarFX2Volume;
+  case kReservedEffectIndex:
+    return FourCC::VarFX3Volume;
+  default:
+    NAssert(false);
+    return FourCC::VarFX1Volume;
+  }
+}
+
+int GetEffectIndexForMixerRow(int row) {
+  if (row >= MixerFirstEffectRow && row < MixerEffectRowEnd) {
+    return row - MixerFirstEffectRow;
+  }
+
+  NAssert(false);
+  return kReverbEffectIndex;
+}
+#endif
+
+void CopyShortName(const char *source, char *destination) {
+  NAssert(destination != nullptr);
+
+  for (int i = 0; i < 3; ++i) {
+    destination[i] = (source != nullptr && source[i] != '\0') ? source[i] : ' ';
+  }
+  destination[3] = '\0';
+}
+
+} // namespace
 
 MixerView::MixerView(GUIWindow &w, ViewData *viewData)
-    : FieldView(w, viewData) {
-
-  // Initialize the channel volume fields
-  initChannelVolumeFields();
+    : FieldView(w, viewData), selectedStrip_(0), selectedRow_(0) {
+  for (int strip = 0; strip < MixerStripCount; ++strip) {
+    for (int row = 0; row < MixerRowCount; ++row) {
+      fieldGrid_[strip][row] = nullptr;
+    }
+  }
+  initMixerFields();
 }
 
 MixerView::~MixerView() {}
 
 void MixerView::Reset() {
-  needsPlayTimeUpdate_ = false;
-  needsNotesUpdate_ = false;
   ClearFocus();
   fieldList_.clear();
   channelVolumeFields_.clear();
+  channelSendFields_.clear();
+  fxReturnFields_.clear();
   masterVolumeField_.clear();
-  initChannelVolumeFields();
+
+  for (int strip = 0; strip < MixerStripCount; ++strip) {
+    for (int row = 0; row < MixerRowCount; ++row) {
+      fieldGrid_[strip][row] = nullptr;
+    }
+  }
+
+  selectedStrip_ = 0;
+  selectedRow_ = 0;
+  initMixerFields();
 }
 
 void MixerView::OnFocus() {
-  // update selected field to match current cursor position
-  if (viewData_->songX_ <= SONG_CHANNEL_COUNT) {
-    if (viewData_->songX_ < SONG_CHANNEL_COUNT) {
-      // Channel 0-7
-      SetFocus((UIField *)&channelVolumeFields_.at(viewData_->songX_));
-    } else {
-      // Master channel
-      SetFocus((UIField *)&masterVolumeField_.at(0));
-    }
-  }
-};
+  setTitle(etl::string<23>("Mixer"));
+  syncFocusToSelection();
+}
 
 void MixerView::SetFocus(UIField *field) {
-  // Call parent implementation first
   FieldView::SetFocus(field);
 
-  // Now update songX_ based on which field has focus
-  if (!field)
+  if (!field) {
     return;
-
-  // Check if it's one of the channel volume fields
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-    if (field == (UIField *)&channelVolumeFields_.at(i)) {
-      viewData_->songX_ = i;
-      return;
-    }
   }
 
-  // Check if it's the master volume field
-  if (field == (UIField *)&masterVolumeField_.at(0)) {
-    viewData_->songX_ = SONG_CHANNEL_COUNT;
+  for (int strip = 0; strip < MixerStripCount; ++strip) {
+    for (int row = 0; row < MixerRowCount; ++row) {
+      if (fieldGrid_[strip][row] == field) {
+        selectedStrip_ = strip;
+        selectedRow_ = row;
+        if (strip < SONG_CHANNEL_COUNT_STEREO) {
+          viewData_->songX_ = strip;
+        }
+        return;
+      }
+    }
   }
 }
 
-// keep track of currently selected channel
+UIField *MixerView::GetSelectedField() {
+  UIField *field = fieldGrid_[selectedStrip_][selectedRow_];
+  if (!field) {
+    field = fieldGrid_[selectedStrip_][0];
+  }
+  if (!field && !fieldList_.empty()) {
+    field = *fieldList_.begin();
+  }
+  return field;
+}
+
+void MixerView::syncFocusToSelection() {
+  UIField *field = GetSelectedField();
+  if (field) {
+    SetFocus(field);
+  }
+}
+
 void MixerView::updateCursor(int dx, int dy) {
-  int x = viewData_->songX_;
-  x += dx;
-
-  // Prevent wrapping by clamping values
-  if (x < 0) {
-    x = 0;
+  selectedStrip_ += dx;
+  if (selectedStrip_ < 0) {
+    selectedStrip_ = 0;
   }
-  if (x > SONG_CHANNEL_COUNT) {
-    x = SONG_CHANNEL_COUNT;
-  }
-  viewData_->songX_ = x;
-
-  // Update field focus to match the selected channel
-  if (x < SONG_CHANNEL_COUNT) {
-    // Channel 0-7
-    SetFocus(&channelVolumeFields_[x]);
-  } else {
-    // Master channel
-    SetFocus(&masterVolumeField_[0]);
+  if (selectedStrip_ >= MixerStripCount) {
+    selectedStrip_ = MixerStripCount - 1;
   }
 
+  selectedRow_ += dy;
+  if (selectedRow_ < 0) {
+    selectedRow_ = 0;
+  }
+  if (selectedRow_ >= MixerRowCount) {
+    selectedRow_ = MixerRowCount - 1;
+  }
+
+  syncFocusToSelection();
   isDirty_ = true;
 }
 
 void MixerView::switchSoloMode() {
+  if (selectedStrip_ >= SONG_CHANNEL_COUNT_STEREO) {
+    return;
+  }
+
   UIController *controller = UIController::GetInstance();
-  int currentChannel = viewData_->songX_;
-  controller->SwitchSoloMode(currentChannel, currentChannel,
+  controller->SwitchSoloMode(selectedStrip_, selectedStrip_,
                              (viewMode_ == VM_NORMAL));
   viewMode_ = (viewMode_ != VM_SOLOON) ? VM_SOLOON : VM_NORMAL;
   isDirty_ = true;
@@ -114,61 +233,33 @@ void MixerView::unMuteAll() {
 };
 
 void MixerView::toggleMute() {
+  if (selectedStrip_ >= SONG_CHANNEL_COUNT_STEREO) {
+    return;
+  }
 
   UIController *controller = UIController::GetInstance();
-  int currentChannel = viewData_->songX_;
-  controller->ToggleMute(currentChannel, currentChannel);
+  controller->ToggleMute(selectedStrip_, selectedStrip_);
   viewMode_ = (viewMode_ != VM_MUTEON) ? VM_MUTEON : VM_NORMAL;
   isDirty_ = true;
 };
 
 void MixerView::ProcessButtonMask(unsigned short mask, bool pressed) {
   if (!pressed) {
-    if (viewMode_ == VM_MUTEON) {
-      if (mask & EPBM_NAV) {
-        toggleMute();
-      }
-    };
-    if (viewMode_ == VM_SOLOON) {
-      if (mask & EPBM_NAV) {
-        switchSoloMode();
-      }
-    };
-    // Force a full redraw of the mixer view
+    if (viewMode_ == VM_MUTEON && (mask & EPBM_NAV)) {
+      toggleMute();
+    }
+    if (viewMode_ == VM_SOLOON && (mask & EPBM_NAV)) {
+      switchSoloMode();
+    }
     SetDirty(true);
-    return;
-  };
-
-  // First check if we need to handle special mixer-specific actions
-  if (!pressed) {
-    if (viewMode_ == VM_MUTEON) {
-      if (mask & EPBM_NAV) {
-        toggleMute();
-      }
-    };
-    if (viewMode_ == VM_SOLOON) {
-      if (mask & EPBM_NAV) {
-        switchSoloMode();
-      }
-    };
-    return;
-  };
-
-  // Ignore up/down arrow keys when pressed by themselves in MixerView
-  // We only want left/right to navigate between channels
-  if (mask == EPBM_UP || mask == EPBM_DOWN) {
     return;
   }
 
-  // Fieldview gets first go at the button event
-  FieldView::ProcessButtonMask(mask, pressed);
-
-  // Handle playback specific actions
   if (mask == EPBM_PLAY) {
     togglePlay();
     return;
   }
-  // NAV back to Song view
+
   if ((mask & EPBM_NAV) && (mask & EPBM_UP)) {
     ViewType vt = VT_SONG;
     ViewEvent ve(VET_SWITCH_VIEW, &vt);
@@ -176,344 +267,292 @@ void MixerView::ProcessButtonMask(unsigned short mask, bool pressed) {
     NotifyObservers(&ve);
     return;
   }
+
+  if ((mask & EPBM_NAV) && (mask & EPBM_DOWN)) {
+#if SHOW_FX_SCREEN
+    ViewType vt = VT_MASTER_EFFECTS;
+    ViewEvent ve(VET_SWITCH_VIEW, &vt);
+    SetChanged();
+    NotifyObservers(&ve);
+#endif
+    return;
+  }
+
   if ((mask & EPBM_NAV) && (mask & EPBM_ALT)) {
     unMuteAll();
     return;
   }
 
-  // Handle mixer-specific actions for normal mode, but only if we don't have
-  // field focus or if they're specific mixer actions that should override field
-  // editing
-
-  // EDIT+NAV is always for toggling mute
   if ((mask & EPBM_EDIT) && (mask & EPBM_NAV)) {
     toggleMute();
     return;
   }
 
-  // ENTER+NAV is always for solo mode
   if ((mask & EPBM_ENTER) && (mask & EPBM_NAV)) {
     switchSoloMode();
     return;
   }
 
+  if ((mask & EPBM_EDIT) && (mask & EPBM_PLAY)) {
+    if (!Player::GetInstance()->IsRunning()) {
+      switchToRecordView();
+    }
+    return;
+  }
+
+  if (mask & (EPBM_ENTER | EPBM_EDIT)) {
+    FieldView::ProcessButtonMask(mask, pressed);
+    SetDirty(true);
+    return;
+  }
+
   viewMode_ = VM_NORMAL;
-  // Force a full redraw of the mixer view when any button is pressed
   SetDirty(true);
   processNormalButtonMask(mask);
-};
+}
 
-/******************************************************
- processNormalButtonMask:
-        process button mask in the case there is no
-        selection active
- ******************************************************/
-
-// This method is no longer needed as we're using FieldView's field navigation
 void MixerView::processNormalButtonMask(unsigned int mask) {
-  // Handle mixer-specific actions
-  if (mask & EPBM_EDIT) {
-    if (mask & EPBM_NAV) {
-      toggleMute();
-    }
-    if (mask & EPBM_PLAY) {
-      // recording screen
-      if (!Player::GetInstance()->IsRunning()) {
-        switchToRecordView();
-      }
-    }
-  } else if (mask & EPBM_ENTER) {
-    if (mask & EPBM_NAV) {
-      switchSoloMode();
-    }
-  } else if (mask & EPBM_NAV) {
-    if (mask & EPBM_UP) {
-      ViewType vt = VT_SONG;
-      ViewEvent ve(VET_SWITCH_VIEW, &vt);
-      SetChanged();
-      NotifyObservers(&ve);
-    }
-    if (mask & EPBM_ALT) {
-      unMuteAll();
-    }
-  } else {
-    if (mask & EPBM_LEFT) {
-      updateCursor(-1, 0);
-    }
-    if (mask & EPBM_RIGHT) {
-      updateCursor(1, 0);
-    }
+  if (mask & EPBM_LEFT) {
+    updateCursor(-1, 0);
   }
-};
-
-/******************************************************
- processSelectionButtonMask:
-        process button mask in the case there is a
-        selection active
- ******************************************************/
-void MixerView::processSelectionButtonMask(unsigned int mask) {
-
-  if (mask & EPBM_EDIT) {
-
-  } else {
-    if (mask & EPBM_ENTER) {
-      if (mask & EPBM_NAV) {
-        switchSoloMode();
-      }
-    } else {
-      if (mask & EPBM_NAV) {
-        if (mask & EPBM_PLAY) {
-          onStop();
-        }
-        if (mask & EPBM_ALT) {
-          unMuteAll();
-        }
-      } else {
-        // No modifier
-        if (mask & EPBM_PLAY) {
-          onStart();
-        }
-      }
-    }
+  if (mask & EPBM_RIGHT) {
+    updateCursor(1, 0);
+  }
+  if (mask & EPBM_UP) {
+    updateCursor(0, -1);
+  }
+  if (mask & EPBM_DOWN) {
+    updateCursor(0, 1);
   }
 }
 
-void MixerView::initChannelVolumeFields() {
+void MixerView::processSelectionButtonMask(unsigned int mask) { (void)mask; }
+
+void MixerView::initMixerFields() {
   Project *project = viewData_ ? viewData_->project_ : nullptr;
-
-  if (!project)
+  if (!project) {
     return;
+  }
 
-  // Position for volume fields - below VU meters
-  GUIPoint position = GetAnchor();
-  position._y += VU_METER_HEIGHT + 1; // Position below VU meters
-
-  // Get FourCC codes for channel volumes
-  FourCC channelVolumeFourCCs[SONG_CHANNEL_COUNT] = {
-      FourCC::VarChannel1Volume, FourCC::VarChannel2Volume,
-      FourCC::VarChannel3Volume, FourCC::VarChannel4Volume,
-      FourCC::VarChannel5Volume, FourCC::VarChannel6Volume,
-      FourCC::VarChannel7Volume, FourCC::VarChannel8Volume};
-
-  // Clear any existing fields
   channelVolumeFields_.clear();
+  channelSendFields_.clear();
+  fxReturnFields_.clear();
+  masterVolumeField_.clear();
 
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-    // Create position for this channel's volume field
-    GUIPoint fieldPos = position;
-    fieldPos._x = position._x + (i * CHANNELS_X_OFFSET_);
+  for (int channel = 0; channel < SONG_CHANNEL_COUNT_STEREO; ++channel) {
+    GUIPoint volumePos(GetMixerStripX(channel), MixerFieldBaseY);
+    Variable *volume = project->FindVariable(GetChannelVolumeFourCC(channel));
+    if (volume) {
+      channelVolumeFields_.emplace_back(volumePos, *volume, "%2.2d", 0, 99, 1,
+                                        5);
+      UIField *field = &(*channelVolumeFields_.rbegin());
+      fieldGrid_[channel][0] = field;
+      fieldList_.insert(fieldList_.end(), field);
+    }
 
-    // Find the variable for this channel's volume
-    Variable *v = project->FindVariable(channelVolumeFourCCs[i]);
-    if (v) {
-      // Create a 2-digit field (00-99) for the channel volume
-      // NOTE: 99 is considered "unity" gain
-      // Format: %2.2d = 2-digit decimal number with leading zeros
-      // Use xOffset=1 and yOffset=5 for small/large increments
-      channelVolumeFields_.emplace_back(fieldPos, *v, "%2.2d", 0, 99, 1, 5);
+#if SHOW_FX_SCREEN
+    // the columns for the fx to master send levels
+    for (int row = MixerFirstEffectRow; row < MixerEffectRowEnd; ++row) {
+      int effectIndex = GetEffectIndexForMixerRow(row);
+      GUIPoint sendPos(GetMixerStripX(channel), MixerFieldBaseY + row);
+      Variable *send =
+          project->FindVariable(GetChannelSendFourCC(channel, effectIndex));
+      if (send) {
+        channelSendFields_.emplace_back(sendPos, *send, "%2.2d", 0, 99, 1, 5);
+        UIField *field = &(*channelSendFields_.rbegin());
+        fieldGrid_[channel][row] = field;
+        fieldList_.insert(fieldList_.end(), field);
+      }
+    }
+#endif
+  }
 
-      // Add the field to the fieldList_ for proper field navigation
-      fieldList_.insert(fieldList_.end(), &(*channelVolumeFields_.rbegin()));
+#if SHOW_FX_SCREEN
+  // the column for the fx to master return level
+  for (int row = MixerFirstEffectRow; row < MixerEffectRowEnd; ++row) {
+    int effectIndex = GetEffectIndexForMixerRow(row);
+    GUIPoint returnPos(GetMixerStripX(MixerMasterStripIndex),
+                       MixerFieldBaseY + row);
+    Variable *returnVolume =
+        project->FindVariable(GetFXReturnFourCC(effectIndex));
+    if (returnVolume) {
+      fxReturnFields_.emplace_back(returnPos, *returnVolume, "%2.2d", 0, 99, 1,
+                                   5);
+      UIField *field = &(*fxReturnFields_.rbegin());
+      fieldGrid_[MixerMasterStripIndex][row] = field;
+      fieldList_.insert(fieldList_.end(), field);
     }
   }
+#endif
 
-  // Add master volume field to the right of channel volumes
-  GUIPoint masterPos = position;
-  // Position to the right of channel volumes
-  masterPos._x += (SONG_CHANNEL_COUNT * CHANNELS_X_OFFSET_);
-
-  Variable *v = project->FindVariable(FourCC::VarMasterVolume);
-  if (v) {
-    masterVolumeField_.emplace_back(masterPos, *v, "%2.2d", 0, 100, 1, 5);
-    fieldList_.insert(fieldList_.end(), &(*masterVolumeField_.begin()));
+  GUIPoint masterPos(GetMixerStripX(MixerMasterStripIndex),
+                     MixerFieldBaseY + MixerVolumeRow);
+  Variable *masterVolume = project->FindVariable(FourCC::VarMasterVolume);
+  if (masterVolume) {
+    masterVolumeField_.emplace_back(masterPos, *masterVolume, "%2.2d", 0, 100,
+                                    1, 5);
+    UIField *field = &(*masterVolumeField_.begin());
+    fieldGrid_[MixerMasterStripIndex][MixerVolumeRow] = field;
+    fieldList_.insert(fieldList_.end(), field);
   }
 
-  // Set focus to the first field if we have any fields
-  if (!fieldList_.empty()) {
-    SetFocus(*fieldList_.begin());
+  syncFocusToSelection();
+}
+
+void MixerView::drawMixerLabels(Player *player, GUITextProperties props) {
+  for (int row = 0; row < MixerRowCount; ++row) {
+    char rowLabel[4];
+    if (row == MixerVolumeRow) {
+      CopyShortName("VOL", rowLabel);
+#if SHOW_FX_SCREEN
+    } else {
+      OutputEffectProcessor *effect =
+          MixerService::GetInstance()->GetOutputEffect(
+              GetEffectIndexForMixerRow(row));
+      CopyShortName(effect ? effect->GetShortName() : "---", rowLabel);
+#endif
+    }
+
+    if (row == selectedRow_) {
+      SetColor(CD_HILITE2);
+      props.invert_ = true;
+    } else {
+      SetColor(CD_NORMAL);
+      props.invert_ = false;
+    }
+    DrawString(MixerRowLabelX, MixerFieldBaseY + row, rowLabel, props);
   }
+
+  for (int strip = 0; strip < MixerStripCount; ++strip) {
+    char label[3] = {' ', ' ', '\0'};
+    if (strip < SONG_CHANNEL_COUNT_STEREO) {
+      if (player->IsChannelMuted(strip)) {
+        label[0] = 'M';
+        label[1] = static_cast<char>('1' + strip);
+      } else {
+        label[0] = '0';
+        label[1] = static_cast<char>('1' + strip);
+      }
+    } else {
+      label[0] = 'M';
+      label[1] = 'B';
+    }
+
+    if (strip == selectedStrip_) {
+      SetColor(CD_HILITE2);
+      props.invert_ = true;
+    } else {
+      SetColor(CD_NORMAL);
+      props.invert_ = false;
+    }
+
+    DrawString(GetMixerStripX(strip), MixerStripLabelY, label, props);
+  }
+
+  SetColor(CD_NORMAL);
+  props.invert_ = false;
 }
 
 void MixerView::DrawView() {
   Clear();
 
   GUITextProperties props;
-  GUIPoint pos = GetTitlePosition();
-  GUIPoint anchor = GetAnchor();
-
-  // Draw title
-  SetColor(CD_NORMAL);
 
   Player *player = Player::GetInstance();
-  Project *project = player->GetProject(); // Use Player's GetProject method
 
-  props.invert_ = true;
-  const char *buffer =
-      ((player->GetSequencerMode() == SM_SONG) ? "Song" : "Live");
-  DrawString(pos._x, pos._y, buffer, props);
   props.invert_ = false;
-
-  // Now draw busses
-  // we start at the bottom of the VU meter and draw it growing upwards
-  pos = anchor;
-  pos._y += VU_METER_HEIGHT - 1; // -1 to align with song grid
-  props.invert_ = true;
-
-  SetColor(CD_NORMAL);
-  props.invert_ = false;
-
-  // Draw all fields (channel volume fields)
+  drawMixerLabels(player, props);
   FieldView::Redraw();
-
-  // Draw mute indicators below the volume values
-  pos._y = anchor._y + VU_METER_HEIGHT + 2; // Position below volume fields
-  pos._x = GetTitlePosition()._x;
-
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-    if (i == viewData_->songX_) {
-      props.invert_ = true;
-      SetColor(CD_HILITE2);
-    }
-
-    char state[2];
-    state[0] = player->IsChannelMuted(i) ? 'M' : '-';
-    state[1] = '\0';
-
-    DrawString(pos._x, pos._y, state, props);
-    pos._x += CHANNELS_X_OFFSET_;
-
-    if (i == viewData_->songX_) {
-      props.invert_ = false;
-      SetColor(CD_NORMAL);
-    }
-  }
-
+  drawMasterVuMeter(player, props, false, MixerMasterVuXOffset,
+                    MixerVuMeterHeight);
   drawMap();
   drawNotes();
-  drawMasterVuMeter(player, props);
-
-  // Draw master volume label
-  GUIPoint labelPos = GetAnchor();
-  // Align with master volume control
-  labelPos._x += (SONG_CHANNEL_COUNT * CHANNELS_X_OFFSET_);
-  labelPos._y = SCREEN_HEIGHT - 3; // Position below the volume control
-  SetColor(CD_HILITE2);
-  DrawString(labelPos._x, labelPos._y, "MB", props);
-  SetColor(CD_NORMAL);
 
   if (player->IsRunning()) {
     OnPlayerUpdate(PET_UPDATE);
-  };
-};
+  }
+}
 
 void MixerView::OnPlayerUpdate(PlayerEventType eventType, unsigned int tick) {
-  // Since this can be called from core1 via the Observer pattern,
-  // we need to ensure we don't try directly calling draw functions here!
-
-  // Instead of drawing directly, we'll just update our state and let
-  // AnimationUpdate handle the actual drawing
-  Player *player = Player::GetInstance();
-
-  if (eventType != PET_STOP) {
-    // Flag that play time needs to be updated
-    needsPlayTimeUpdate_ = true;
-  }
-
-  needsNotesUpdate_ = true;
-};
+  ScreenView::OnPlayerUpdate(eventType, tick);
+}
 
 void MixerView::AnimationUpdate() {
-  // First call the parent class implementation to draw the battery gauge
   ScreenView::AnimationUpdate();
   GUITextProperties props;
 
-  // Get the player safely
   Player *player = Player::GetInstance();
-
-  // Only process updates below if we're fully initialized
   if (!viewData_ || !player) {
-    // Just flush the battery gauge and return
     w_.Flush();
     return;
   }
 
-  // Always update VU meters, whether the sequencer is running or not
-  // This ensures we see VU meter updates from MIDI input even when not playing
   etl::array<stereosample, SONG_CHANNEL_COUNT> *levels =
       player->GetMixerLevels();
   if (levels) {
     drawChannelVUMeters(levels, player, props);
-    drawMasterVuMeter(player, props);
+    drawMasterVuMeter(player, props, false, MixerMasterVuXOffset,
+                      MixerVuMeterHeight);
   }
 
-  // Handle any pending updates from OnPlayerUpdate
-  // This ensures all UI drawing happens in the same thread (core0)
-  if (needsPlayTimeUpdate_) {
-    GUIPoint pos = GetAnchor();
-    // explicitly position timer directly below the battery gauge
-    pos._x = 27;
-    pos._y = 1;
-    drawPlayTime(player, pos, props);
-    needsPlayTimeUpdate_ = false;
-  }
+  drawNotes();
 
-  if (needsNotesUpdate_) {
-    drawNotes();
-    needsNotesUpdate_ = false;
-  }
-
-  // Flush the window to ensure changes are displayed
   w_.Flush();
-};
+}
 
 void MixerView::drawChannelVUMeters(
     etl::array<stereosample, SONG_CHANNEL_COUNT> *levels, Player *player,
     GUITextProperties props, bool forceRedraw) {
-
-  // Quick optimization: If not forcing redraw, check if any levels have changed
-  // This saves CPU cycles by avoiding unnecessary drawing operations
+  const int displayChannelCount =
+      std::min(viewData_->song_->GetChannelCount(), SONG_CHANNEL_COUNT_STEREO);
   if (!forceRedraw) {
     bool anyChanges = false;
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-      // Convert amplitude to bar levels
-      int32_t leftBars, rightBars;
-      amplitudeToBars(levels->at(i), &leftBars, &rightBars);
-
-      // Check if this channel's levels have changed
+    for (int i = 0; i < displayChannelCount; i++) {
+      int32_t leftBars = 0;
+      int32_t rightBars = 0;
+      if (!player->IsChannelMuted(i)) {
+        amplitudeToBars(levels->at(i), &leftBars, &rightBars);
+        leftBars = ScaleVuBarsForHeight(leftBars, MixerVuMeterHeight);
+        rightBars = ScaleVuBarsForHeight(rightBars, MixerVuMeterHeight);
+      }
       if (leftBars != prevLeftVU_[i + 1] || rightBars != prevRightVU_[i + 1]) {
         anyChanges = true;
         break;
       }
     }
-
-    // If no changes, return early
     if (!anyChanges) {
       return;
     }
   }
 
-  // we start at the bottom of the VU meter and draw it growing upwards
-  GUIPoint pos = GetAnchor();
-  pos._y += VU_METER_HEIGHT - 1; // -1 to align with song grid
-
-  // draw vu meter for each bus
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+  GUIPoint pos(MixerStripX, GetAnchor()._y + MixerVuMeterHeight - 1);
+  for (int i = 0; i < displayChannelCount; i++) {
     int32_t leftBars = 0;
     int32_t rightBars = 0;
-    // if channel is muted just use default 0 values for bars
     if (!player->IsChannelMuted(i)) {
-      // Convert amplitude to bar levels
       amplitudeToBars(levels->at(i), &leftBars, &rightBars);
     }
 
-    // Use index i+1 for channel VU meters (index 0 is reserved for master)
-    drawVUMeter(leftBars, rightBars, pos, props, i + 1, forceRedraw);
-    pos._x += CHANNELS_X_OFFSET_;
+    drawVUMeter(leftBars, rightBars, pos, props, i + 1, forceRedraw,
+                MixerVuMeterHeight);
+    pos._x += MixerStripStride;
   }
 }
 
 void MixerView::togglePlay() {
+  if (!viewData_) {
+    return;
+  }
+
   Player *player = Player::GetInstance();
-  player->OnStartButton(PM_CHAIN, viewData_->songX_, true,
+  int startChannel = selectedStrip_;
+  if (startChannel >= SONG_CHANNEL_COUNT_STEREO) {
+    startChannel = viewData_->songX_;
+  }
+  if (startChannel < 0 || startChannel >= SONG_CHANNEL_COUNT_STEREO) {
+    startChannel = 0;
+  }
+
+  player->OnStartButton(PM_CHAIN, static_cast<unsigned int>(startChannel), true,
                         viewData_->chainRow_);
-};
+}

@@ -1,3 +1,11 @@
+# SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+#
+# Copyright (c) 2026 xiphonics, inc.
+#
+# Inherited BSD-licensed material remains BSD-3-Clause.
+# New original contributions by xiphonics, inc. are GPL-3.0-only.
+# Previously granted BSD permissions are preserved. See LICENSING.md.
+
 add_library(application_views_modaldialogs
   MessageBox.cpp
   FullScreenBox.cpp
@@ -7,6 +15,7 @@ add_library(application_views_modaldialogs
 
 target_link_libraries(application_views_modaldialogs PUBLIC
   application_views_baseclasses
+  application_player
   system_filesystem
 )
 

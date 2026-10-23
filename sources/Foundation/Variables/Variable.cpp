@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Variable.h"
@@ -12,6 +16,7 @@
 #include "System/Console/n_assert.h"
 #include <System/Console/nanoprintf.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -210,7 +215,8 @@ etl::string<MAX_VARIABLE_STRING_LENGTH> Variable::GetString() {
   // !!! NOTE !!! we don't want to enable nanoprintf's float support so we just
   // cast to int here because we don't really display floats anyway
   case FLOAT:
-    npf_snprintf(buf, sizeof(buf), "%f", (int)value_.float_);
+    npf_snprintf(buf, sizeof(buf), "%" PRId32,
+                 static_cast<int32_t>(value_.float_));
     break;
   case INT:
     npf_snprintf(buf, sizeof(buf), "%d", value_.int_);

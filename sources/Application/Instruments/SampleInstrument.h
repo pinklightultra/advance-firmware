@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SAMPLE_INSTRUMENT_H_
@@ -43,28 +47,26 @@ public:
   virtual bool Init();
   virtual bool Start(int channel, unsigned char note, bool trigger = true);
   virtual void Stop(int channel);
-  virtual bool Render(int channel, fixed *buffer, int size, bool updateTick);
+  virtual bool Render(int channel, AudioSample *buffer, int size,
+                      bool updateTick) override;
+  bool GetPlaybackPosition(int channel, uint32_t &position) const override;
   virtual bool IsInitialized();
   virtual bool IsEmpty();
 
   virtual InstrumentType GetType() { return IT_SAMPLE; };
-  virtual void ProcessCommand(int channel, FourCC cc, ushort value);
+  virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
   virtual int GetTable();
   virtual bool GetTableAutomation();
   virtual void GetTableState(TableSaveState &state);
   virtual void SetTableState(TableSaveState &state);
-  etl::ilist<Variable *> *Variables() { return &variables_; };
+  etl::ivector<Variable *> *Variables() { return &variables_; };
 
   bool IsMulti();
 
   // Engine playback  start callback
 
   virtual void OnStart();
-#ifdef ADV
   static constexpr size_t MaxSlices = 64;
-#else
-  static constexpr size_t MaxSlices = 16;
-#endif
   static constexpr unsigned char SliceNoteBase = 48;
 
   uint32_t GetSlicePoint(size_t index) const;
@@ -101,11 +103,13 @@ protected:
   void doKRateUpdate(int channel);
 
 private:
-  etl::list<Variable *, 21> variables_;
+  etl::vector<Variable *, 38> variables_;
 
   SoundSource *source_;
-  __attribute__((section(".DTCMRAM"))) static struct renderParams
-      renderParams_[SONG_CHANNEL_COUNT];
+#if !defined(HOST_TEST)
+  __attribute__((section(".DTCMRAM")))
+#endif
+  static struct renderParams renderParams_[SONG_CHANNEL_COUNT];
   bool running_;
   bool dirty_;
   TableSaveState tableState_;

@@ -1,22 +1,30 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "TablePlayback.h"
-#include "Application/Instruments/CommandList.h"
 #include "Application/Instruments/I_Instrument.h"
+#include "Application/Player/PlayerMixer.h"
 
 TablePlayback TablePlayback::playback_[SONG_CHANNEL_COUNT];
+TablePlayback TablePlayback::automationPlayback_[SONG_CHANNEL_COUNT];
 
 void TableSaveState::Reset() {
   position_[0] = 0;
   position_[1] = 0;
   position_[2] = 0;
+  groove_.groove_ = -1;
+  groove_.position_ = 0;
+  groove_.ticks_ = 0;
   for (int i = 0; i < TABLE_STEPS; i++) {
     hopCount_[i][0] = 0;
     hopCount_[i][1] = 0;
@@ -27,6 +35,7 @@ void TableSaveState::Reset() {
 void TablePlayback::Reset() {
   for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
     playback_[i].Init(i);
+    automationPlayback_[i].Init(i);
   }
 };
 
@@ -35,12 +44,20 @@ TablePlayback &TablePlayback::GetTablePlayback(int channel) {
   return playback_[channel];
 }
 
+TablePlayback &TablePlayback::GetAutomationPlayback(int channel) {
+  NAssert((channel >= 0) && (channel < SONG_CHANNEL_COUNT));
+  return automationPlayback_[channel];
+}
+
 void TablePlayback::Init(int channel) {
   channel_ = channel;
   table_ = 0;
   position_[0] = 0;
   position_[1] = 0;
   position_[2] = 0;
+  previous_[0] = -1;
+  previous_[1] = -1;
+  previous_[2] = -1;
 
   hopped_[0] = false;
   hopped_[1] = false;
@@ -66,6 +83,9 @@ void TablePlayback::Start(I_Instrument *i, Table &table, bool automated) {
     position_[0] = 0;
     position_[1] = 0;
     position_[2] = 0;
+    previous_[0] = -1;
+    previous_[1] = -1;
+    previous_[2] = -1;
 
     hopped_[0] = false;
     hopped_[1] = false;
@@ -90,6 +110,9 @@ void TablePlayback::Stop() {
   position_[0] = 0;
   position_[1] = 0;
   position_[2] = 0;
+  previous_[0] = -1;
+  previous_[1] = -1;
+  previous_[2] = -1;
 
   hopped_[0] = false;
   hopped_[1] = false;
@@ -102,19 +125,15 @@ Table *TablePlayback::GetTable() { return table_; };
 
 bool TablePlayback::GetAutomation() { return automated_; };
 
-bool TablePlayback::ProcessLocalCommand(int row, FourCC *commandList,
-                                        ushort *paramList,
-                                        TablePlayerChange &tpc) {
+bool TablePlayback::ProcessPositionCommand(uint8_t row, TrackerCommand command,
+                                           ushort param) {
 
   bool hopped = false;
-
-  FourCC command = commandList[position_[row]];
-  ushort param = paramList[position_[row]];
 
   // First process any positional command
 
   switch (command) {
-  case FourCC::InstrumentCommandHop: {
+  case TrackerCommand::InstrumentCommandHop: {
     int count = param >> 8;
     if (hopCount_[position_[row]][row] == 0) {
       hopCount_[position_[row]][row] = count;
@@ -132,36 +151,38 @@ bool TablePlayback::ProcessLocalCommand(int row, FourCC *commandList,
   }
   }
 
-  // Update values if needed
+  return hopped;
+}
 
-  if (hopped) {
-    command = commandList[position_[row]];
-    param = paramList[position_[row]];
-  }
-
-  // Now process local command on possibly hopped row
-
+bool TablePlayback::ProcessLocalCommand(TrackerCommand command, ushort param,
+                                        TablePlayerChange &tpc) {
   switch (command) {
-  case FourCC::InstrumentCommandKill:
+  case TrackerCommand::InstrumentCommandKill:
     tpc.timeToLive_ = (param & 0xFF) + 1;
-    break;
-  case FourCC::InstrumentCommandInstrumentRetrigger:
+    return true;
+  case TrackerCommand::InstrumentCommandOff:
+    tpc.timeToRelease_ = (param & 0xFF) + 1;
+    return true;
+  case TrackerCommand::InstrumentCommandInstrumentRetrigger:
     tpc.instrRetrigger_ = (param & 0xFF);
-    break;
-  case FourCC::InstrumentCommandGroove:
+    return true;
+  case TrackerCommand::InstrumentCommandGroove:
     param = param & 0x1F;
     groove_.groove_ = (unsigned char)param;
     groove_.position_ = 0;
     groove_.ticks_ = 0;
-    break;
-  case FourCC::InstrumentCommandStop:
+    return true;
+  case TrackerCommand::InstrumentCommandStop:
     Stop();
+    return true;
+  default:
     break;
   }
-  return hopped;
+  return false;
 }
 
-void TablePlayback::ProcessStep(TablePlayerChange &tpc) {
+void TablePlayback::ProcessStep(TablePlayerChange &tpc, uchar currentNote,
+                                PlayerLastActiveCommandState &lastActive) {
 
   Groove *gs = Groove::GetInstance();
 
@@ -180,23 +201,78 @@ void TablePlayback::ProcessStep(TablePlayerChange &tpc) {
           memcpy(hopCount_, state.hopCount_,
                  sizeof(uchar) * TABLE_STEPS * TABLE_COLUMNS);
           memcpy(position_, state.position_, sizeof(int) * TABLE_COLUMNS);
+          groove_ = state.groove_;
         }
 
-        // try local processing for if it changes current table or position
+        const TrackerCommand currentCmd[TABLE_COLUMNS] = {
+            table_->cmd1_[position_[0]],
+            table_->cmd2_[position_[1]],
+            table_->cmd3_[position_[2]],
+        };
+        const ushort currentParam[TABLE_COLUMNS] = {
+            table_->param1_[position_[0]],
+            table_->param2_[position_[1]],
+            table_->param3_[position_[2]],
+        };
 
-        hopped_[0] =
-            ProcessLocalCommand(0, table_->cmd1_, table_->param1_, tpc);
-        hopped_[1] =
-            ProcessLocalCommand(1, table_->cmd2_, table_->param2_, tpc);
-        hopped_[2] =
-            ProcessLocalCommand(2, table_->cmd3_, table_->param3_, tpc);
+        // Keep table HOP handling in the positional pass, but allow a RND
+        // command immediately to the right to randomize the HOP destination
+        // before the jump occurs, or a CHN command to gate it.
+        TableRowFxResult fx = ResolveTableRowFx(currentCmd, currentParam,
+                                                currentNote, lastActive, true);
 
-        instrument_->ProcessCommand(channel_, table_->cmd1_[position_[0]],
-                                    table_->param1_[position_[0]]);
-        instrument_->ProcessCommand(channel_, table_->cmd2_[position_[1]],
-                                    table_->param2_[position_[1]]);
-        instrument_->ProcessCommand(channel_, table_->cmd3_[position_[2]],
-                                    table_->param3_[position_[2]]);
+        hopped_[0] = (fx.allowCmd[0])
+                         ? ProcessPositionCommand(0, fx.cmd[0], fx.param[0])
+                         : false;
+        hopped_[1] = (fx.allowCmd[1])
+                         ? ProcessPositionCommand(1, fx.cmd[1], fx.param[1])
+                         : false;
+        hopped_[2] = (fx.allowCmd[2])
+                         ? ProcessPositionCommand(2, fx.cmd[2], fx.param[2])
+                         : false;
+
+        if (hopped_[0] || hopped_[1] || hopped_[2]) {
+          const TrackerCommand activeCmd[TABLE_COLUMNS] = {
+              table_->cmd1_[position_[0]],
+              table_->cmd2_[position_[1]],
+              table_->cmd3_[position_[2]],
+          };
+          const ushort activeParam[TABLE_COLUMNS] = {
+              table_->param1_[position_[0]],
+              table_->param2_[position_[1]],
+              table_->param3_[position_[2]],
+          };
+          fx = ResolveTableRowFx(activeCmd, activeParam, currentNote,
+                                 lastActive, true);
+        }
+
+        if (fx.allowNote && fx.note <= HIGHEST_NOTE && fx.note != currentNote) {
+          tpc.noteRetrigger_ = fx.note;
+        }
+
+        auto dispatchResolved = [&](int column) {
+          if (!fx.allowCmd[column] ||
+              fx.cmd[column] == TrackerCommand::InstrumentCommandNone ||
+              fx.cmd[column] == TrackerCommand::InstrumentCommandChance ||
+              fx.cmd[column] == TrackerCommand::InstrumentCommandRandom) {
+            return;
+          }
+
+          const bool handledLocally =
+              ProcessLocalCommand(fx.cmd[column], fx.param[column], tpc);
+          if (!handledLocally &&
+              !PlayerMixer::GetInstance()->ProcessVoiceCommand(
+                  channel_, fx.cmd[column], fx.param[column])) {
+            instrument_->ProcessCommand(channel_, fx.cmd[column],
+                                        fx.param[column]);
+          }
+          UpdateLastActiveCommandState(lastActive, fx.cmd[column],
+                                       fx.param[column]);
+        };
+
+        dispatchResolved(0);
+        dispatchResolved(1);
+        dispatchResolved(2);
 
         previous_[0] = position_[0];
         previous_[1] = position_[1];
@@ -207,15 +283,18 @@ void TablePlayback::ProcessStep(TablePlayerChange &tpc) {
 
       if (gs->UpdateGroove(groove_, true)) {
 
-        if ((table_->cmd1_[position_[0]] != FourCC::InstrumentCommandHop) ||
+        if ((table_->cmd1_[position_[0]] !=
+             TrackerCommand::InstrumentCommandHop) ||
             (!hopped_[0])) {
           position_[0] = (position_[0] + 1) % 16;
         }
-        if ((table_->cmd2_[position_[1]] != FourCC::InstrumentCommandHop) ||
+        if ((table_->cmd2_[position_[1]] !=
+             TrackerCommand::InstrumentCommandHop) ||
             (!hopped_[1])) {
           position_[1] = (position_[1] + 1) % 16;
         }
-        if ((table_->cmd3_[position_[2]] != FourCC::InstrumentCommandHop) ||
+        if ((table_->cmd3_[position_[2]] !=
+             TrackerCommand::InstrumentCommandHop) ||
             (!hopped_[2])) {
           position_[2] = (position_[2] + 1) % 16;
         }
@@ -229,6 +308,7 @@ void TablePlayback::ProcessStep(TablePlayerChange &tpc) {
           memcpy(state.hopCount_, hopCount_,
                  sizeof(uchar) * TABLE_STEPS * TABLE_COLUMNS);
           memcpy(state.position_, position_, sizeof(int) * TABLE_COLUMNS);
+          state.groove_ = groove_;
           instrument_->SetTableState(state);
         }
       }

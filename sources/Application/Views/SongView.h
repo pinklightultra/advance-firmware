@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SONG_VIEW_H_
@@ -13,11 +17,12 @@
 #include "ScreenView.h"
 
 class SongView;
+struct SelectionResampleRequest;
 
-class SongView : public ScreenView {
+class SongView : public ScreenView, public I_Observer {
 public:
   SongView(GUIWindow &w, ViewData *viewData);
-  ~SongView();
+  ~SongView() override;
   void Reset();
 
   // View implementation
@@ -25,7 +30,13 @@ public:
   virtual void DrawView();
   virtual void OnPlayerUpdate(PlayerEventType, unsigned int tick = 0);
   virtual void OnFocus();
+  virtual void OnFocusLost();
   virtual void AnimationUpdate();
+  void Update(Observable &o, I_ObservableData *d) override;
+  bool HasSelection() const;
+  bool GetActiveSelectionRect(GUIRect &selectionRect) const;
+  bool BuildSelectionRenderRequest(SelectionResampleRequest &request,
+                                   SelectionOutputIntent outputIntent) const;
 
 protected:
   void processNormalButtonMask(unsigned int mask);
@@ -40,7 +51,8 @@ protected:
   void clonePosition();
   void pasteLast();
   void fillClipboardData();
-  GUIRect getSelectionRect();
+  GUIRect getSelectionRect() const;
+  void clearSelection();
   void copySelection();
   void pasteClipboard();
   void cutSelection();
@@ -59,6 +71,8 @@ protected:
   void nudgeTempo(int direction);
 
 private:
+  bool shouldDrawPlayTime() const override { return true; }
+
   bool updatingChain_; // .Flag that tells we're updating chain
                        //  so we don't allocate chains while
                        //  doing multiple A+ARROWS
@@ -75,20 +89,26 @@ private:
                                                // song
                                                //  used for drawing purpose
 
-  struct {                // .Clipboard structure
-    bool active_;         // .If currently making a selection
-    unsigned char *data_; // .Null if clipboard empty
+  struct { // .Clipboard structure
+    unsigned char *data_;
     unsigned char storage_[SONG_CHANNEL_COUNT * SONG_ROW_COUNT];
-    int x_;      // .Current selection positions
-    int y_;      // .
-    int offset_; // .
-    int width_;  // .Size of selection
+    int width_;
     int height_; // .
   } clipboard_;
 
-  int saveX_;
-  int saveY_;
-  int saveOffset_;
+  struct {
+    bool active_;
+    int anchorX_;
+    int anchorY_;
+    int anchorOffset_;
+    int cursorX_;
+    int cursorY_;
+    int cursorOffset_;
+    int saveX_;
+    int saveY_;
+    int saveOffset_;
+  } selection_;
+
   bool invertBatt_;
   bool needClear_;
 
@@ -96,28 +116,6 @@ private:
   // These prevent core1 from directly updating the UI
   bool needsUIUpdate_ = false; // Single flag for all UI updates (notes, VU
                                // meter, positions, play time)
-  bool needsPlayTimeUpdate_ = false; // Separate flag for play time updates
-
-#ifdef PICO_DEOPTIMIZED_DEBUG
-  // These variables are specifically for thread synchronization in debug builds
-  // They create memory barriers between cores when manipulated in a specific
-  // pattern DO NOT REMOVE - they are critical for performance in debug builds
-  bool syncVar1_ = false;
-  bool syncVar2_ = false;
-  bool syncVar3_ = false;
-#endif
-
-  // Memory barrier function that uses the sync variables in debug DEOPTIMISED
-  // builds only
-  inline void createMemoryBarrier() {
-#ifdef PICO_DEOPTIMIZED_DEBUG
-    // This specific pattern of operations was found to be necessary
-    // for proper thread synchronization in debug builds
-    syncVar1_ = false;
-    syncVar2_ = true;
-    syncVar3_ = false;
-#endif
-  }
 };
 
 #endif

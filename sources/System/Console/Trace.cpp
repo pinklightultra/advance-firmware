@@ -1,15 +1,20 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Trace.h"
 #include "Externals/etl/include/etl/error_handler.h"
 #include "System/System/System.h"
+#include "tim.h"
 #include <string.h>
 
 // be explicit about the nanoprintf configuration
@@ -22,6 +27,25 @@
 #define NANOPRINTF_USE_PRECISION_FORMAT_SPECIFIERS 1
 #include "nanoprintf.h"
 
+namespace {
+
+#if !defined(NDEBUG) || defined(ENABLE_LOGGING)
+uint64_t getMonotonicTimestampUs() {
+  static uint32_t lastCounter = 0;
+  static uint64_t wrapOffset = 0;
+
+  const uint32_t counter = __HAL_TIM_GET_COUNTER(&htim2);
+  if (counter < lastCounter) {
+    wrapOffset += (1ULL << 32);
+  }
+  lastCounter = counter;
+
+  return wrapOffset + counter;
+}
+#endif
+
+} // namespace
+
 Trace::Trace() {}
 
 void Trace::trace_uart_putc(int c, void *context) {
@@ -32,9 +56,15 @@ void Trace::trace_uart_putc(int c, void *context) {
 //------------------------------------------------------------------------------
 
 void Trace::VLog(const char *category, const char *fmt, va_list &args) {
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(ENABLE_LOGGING)
+  const uint64_t timestampUs = getMonotonicTimestampUs();
+  const unsigned long long seconds = timestampUs / 1000000ULL;
+  const unsigned long micros =
+      static_cast<unsigned long>(timestampUs % 1000000ULL);
+
   // first prepend the category
-  npf_pprintf(&trace_uart_putc, NULL, "[%s] ", category);
+  npf_pprintf(&trace_uart_putc, NULL, "[%llu.%06lu] [%s] ", seconds, micros,
+              category);
 
   npf_vpprintf(&trace_uart_putc, NULL, fmt, args);
   // end with NL+CR as thats how it previously worked using stdio' printf
@@ -49,7 +79,7 @@ void Trace::VLog(const char *category, const char *fmt, va_list &args) {
 //------------------------------------------------------------------------------
 
 void Trace::Log(const char *category, const char *fmt, ...) {
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(ENABLE_LOGGING)
   va_list args;
   va_start(args, fmt);
   VLog(category, fmt, args);
@@ -63,7 +93,7 @@ void Trace::Log(const char *category, const char *fmt, ...) {
 //------------------------------------------------------------------------------
 
 void Trace::Debug(const char *fmt, ...) {
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(ENABLE_LOGGING)
   va_list args;
   va_start(args, fmt);
   VLog("-D-", fmt, args);
@@ -76,7 +106,7 @@ void Trace::Debug(const char *fmt, ...) {
 //------------------------------------------------------------------------------
 
 void Trace::Error(const char *fmt, ...) {
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(ENABLE_LOGGING)
   va_list args;
   va_start(args, fmt);
   VLog("*ERROR*", fmt, args);

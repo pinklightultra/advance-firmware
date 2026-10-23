@@ -39,7 +39,7 @@ extern "C" {
  * Notice: This is applicable only for cortex M7 based platform.
  */
 
-#define ENABLE_SD_DMA_CACHE_MAINTENANCE 0
+#define ENABLE_SD_DMA_CACHE_MAINTENANCE 1
 
 extern SD_HandleTypeDef hsd1;
 

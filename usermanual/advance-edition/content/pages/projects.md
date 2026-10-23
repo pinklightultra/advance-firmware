@@ -2,22 +2,40 @@
 title: Project Management
 template: page
 ---
+<!--
+SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+
+Copyright (c) 2026 xiphonics, inc.
+
+Inherited BSD-licensed material remains BSD-3-Clause.
+New original contributions by xiphonics, inc. are GPL-3.0-only.
+Previously granted BSD permissions are preserved. See LICENSING.md.
+-->
+
 
 ![screen capture of project screen](image/project-screen-small.png)
 
-On the project screen you change various settings of the current project, save the current project, rename it (including giving it a random new name) create a new blank project or go to the project browser screen to **load** an another existing project.
+On the project screen you change various settings of the current project, `Save` the current project,`Rename` it (including giving it a `Random` new name) create a `New` blank project or go to the project browser screen to load a project from the `/projects` directory on your sdcard.
 
-Your current project settings are saved automatically every minute except when the sequencer is running, ie. when the current project is playing. This means that should you restart the picoTracker or accidently power off or a crash occurs, your current project state within the last minute will be restored when you restart the picoTracker.
+Your current project settings are backed-up automatically every minute _except_ when the sequencer is running, ie. when the current project is playing. This means that should you restart the picoTracker or a crash occurs, your current project state within the last minute will be restored when you restart the picoTracker.
 
 You can ***explicitly*** save the current project by pressing [SAVE] on the project screen. By doing this you can then later on revert to the state that you just saved by reloading the current project using the [Load] button on screen button on the project screen.
 
 ## Current Project settings
 
-- **Tempo:**: Can be set between 60bpm [0x3c] and 400bpm [0x190]. You can also tap tempo: move the cursor to the `tempo` field and press `EDIT` repeatedly in time.
+- **Tempo:**: Can be set between 60bpm [0x3c] and 300bpm [0x190]. You can also tap tempo: move the cursor to the `tempo` field and press <span class="minikeys">EDIT</span> repeatedly in time.
 - **Transpose:** Live transposition of every triggered instruments.
 - **Scale:** Set the scale that will applied to all notes entered in the project. When entering a note in the Phrase screen, you will only be able to enter notes that belong to the selected scale. See [the reference](scales.html) for a list of all available scales.
 
+{% callout type=note %}
 For best tap tempo results, tap at least 2-3 times at a steady pace. If taps are too far apart, tap detection restarts from the latest tap.
+{% endcallout %}
+
+## Rendering Selection Display
+
+The **Render:** section at the bottom of the Project screen shows information about your current selection from the Song screen. When you make a grid selection in the Song screen (using `EDIT`+`LEFT/RIGHT/UP/DOWN`), the Project screen will display the selected row range and channel range next to "Render:" — for example, `Row[03-0A] Ch[1-4]`. This is the range of rows that will be used for either the mixdown or stems rendering to file as well as the range of channels that will be included in the rendering.
+
+If no selection is active in the Song screen, the Project screen will display `[No Selection]` instead. You must have an active selection before using the **Mixdown** or **Stems** render buttons; otherwise, pressing them will show an error message.
 
 ## Current Project optimisation
 
@@ -30,9 +48,9 @@ For best tap tempo results, tap at least 2-3 times at a steady pace. If taps are
 - **Save** Save the current project **NOTE:** *saving currently cannot be done during playback.*
 - **New** *REPLACE* the current project with a new, *Blank* project.  
 - **Random** *RENAME* the current project with a new, *Randomly generated* name.
-- **Import Sample** Access the sample import file browser with a single press of the `ENTER` key. When you're done in the Import Screen, you can press `NAV`+`LEFT` to return to the Project Screen.
+- **Import Sample** Access the sample import file browser with a single press of the <span class="minikeys">ENTER</span> key. When you're done in the Import Screen, you can press <span class="minikeys">NAV</span>+<span class="minikeys">LEFT</span> to return to the Project Screen.
 
 The project name is **limited to 16 characters**. 
 
-You edit to project name by moving onto the name field and then holding the `ENTER` key while using the `UP` and `DOWN` keys to change the selected character and `LEFT` and `RIGHT` keys to move the cursor to the left or right of the current character. When on the last character, you can add chararacter to the end of the project name by using the `RIGHT` key.
-To delete a character, select the character and press `EDIT`. 
+You edit to project name by moving onto the name field and then holding the <span class="minikeys">ENTER</span> key while using the <span class="minikeys">UP</span> and <span class="minikeys">DOWN</span> keys to change the selected character and <span class="minikeys">LEFT</span> and <span class="minikeys">RIGHT</span> keys to move the cursor to the left or right of the current character. When on the last character, you can add chararacter to the end of the project name by using the <span class="minikeys">RIGHT</span> key.
+To delete a character, place the cursor on the character and press <span class="minikeys">ENTER</span>+<span class="minikeys">EDIT</span>. 

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _APP_TYPES_H_
@@ -13,18 +17,19 @@
 #include "Externals/etl/include/etl/enum_type.h"
 #include <stdint.h>
 
-struct FourCC {
-  // While the names of the FourCC codes can be changed, their values CANNOT.
+struct TrackerCommand {
+  // While the names of the command codes can be changed, their values CANNOT.
   // Values are used as is in save files, so any changes would cause save files
   // to break.
-  enum enum_type {
+  enum enum_type : uint8_t {
     InstrumentCommandArpeggiator = 0,          // ARPG
+    InstrumentCommandChance = 188,             // CHN
     InstrumentCommandCrush = 2,                // CRSH
     InstrumentCommandDelay = 4,                // DLAY
     InstrumentCommandFilterCut = 20,           // FCUT
     InstrumentCommandLowPassFilter = 22,       // FLTR
     InstrumentCommandFilterResonance = 25,     // FRES
-    InstrumentCommandGateOff = 92,             // GTOF
+    InstrumentCommandOff = 92,                 // REL
     InstrumentCommandGroove = 26,              // GROV
     InstrumentCommandHop = 27,                 // HOP
     InstrumentCommandRetrigger = 52,           // RTRG
@@ -43,239 +48,23 @@ struct FourCC {
     InstrumentCommandTempo = 62,               // TMPO
     InstrumentCommandVelocity = 66,            // VELM
     InstrumentCommandVolume = 69,              // VOLM
+    InstrumentCommandGateLength = 28,          // TLN
     InstrumentCommandNone = 45,                // ----
     InstrumentCommandMidiChord = 143,
-
-    SampleInstrumentCrushVolume = 3,
-    SampleInstrumentVolume = 19,
-    SampleInstrumentCrush = 114,
-    SampleInstrumentSample = 54,
-    SampleInstrumentInterpolation = 28,
-    SampleInstrumentDownsample = 5,
-    SampleInstrumentRootNote = 51,
-    SampleInstrumentFineTune = 24,
-    SampleInstrumentPan = 43,
-    SampleInstrumentFilterCutOff = 115,
-    SampleInstrumentFilterResonance = 116,
-    SampleInstrumentFilterType = 23,
-    SampleInstrumentFilterMode = 21,
-    SampleInstrumentStart = 56,
-    SampleInstrumentLoopMode = 34,
-    SampleInstrumentLoopStart = 37,
-    SampleInstrumentEnd = 6,
-    SampleInstrumentTable = 117,
-    SampleInstrumentTableAutomation = 60,
-
-    MacroInstrumentShape = 93,
-    MacroInstrmentTimbre = 94,
-    MacroInstrumentColor = 95,
-    MacroInstrumentAttack = 96,
-    MacroInstrumentDecay = 97,
-    MacroInstrumentSignature = 98,
-
-    MidiInstrumentChannel = 1,
-    MidiInstrumentNoteLength = 32,
-    MidiInstrumentVolume = 118,
-    MidiInstrumentTable = 119,
-    MidiInstrumentTableAutomation = 120,
-    MidiInstrumentName = 144,
-    MidiInstrumentProgram = 160,
-
-    SIDInstrumentWaveform = 72,
-    SIDInstrument1FilterCut = 79,
-    SIDInstrument2FilterCut = 83,
-    SIDInstrument3FilterCut = 87,
-    SIDInstrument1FilterResonance = 80,
-    SIDInstrument2FilterResonance = 84,
-    SIDInstrument3FilterResonance = 88,
-    SIDInstrument1FilterMode = 81,
-    SIDInstrument2FilterMode = 85,
-    SIDInstrument3FilterMode = 89,
-    SIDInstrument1Volume = 82,
-    SIDInstrument2Volume = 86,
-    SIDInstrument3Volume = 90,
-    SIDInstrumentPulseWidth = 71,
-    SIDInstrumentVSync = 75,
-    SIDInstrumentRingModulator = 76,
-    SIDInstrumentADSR = 77,
-    SIDInstrumentFilterOn = 78,
-    SIDInstrumentVoice3Off = 91,
-    SIDInstrumentTable = 121,
-    SIDInstrumentTableAutomation = 122,
-    SIDInstrumentOSCNumber = 142,
-
-    OPALInstrumentChannel = 123,
-    OPALInstrumentAlgorithm = 124,
-    OPALInstrumentFeedback = 125,
-    OPALInstrumentDeepTremeloVibrato = 126,
-
-    OPALInstrumentOp1Level = 127,
-    OPALInstrumentOp1Multiplier = 128,
-    OPALInstrumentOp1KeyScaleLevel = 130,
-    OPALInstrumentOp1ADSR = 131,
-    OPALInstrumentOp1WaveShape = 132,
-    OPALInstrumentOp1TremVibSusKSR = 133,
-
-    OPALInstrumentOp2Level = 134,
-    OPALInstrumentOp2Multiplier = 135,
-    OPALInstrumentOp2KeyScaleLevel = 136,
-    OPALInstrumentOp2ADSR = 137,
-    OPALInstrumentOp2WaveShape = 138,
-    OPALInstrumentOp2TremVibSusKSR = 139,
-
-    ServicePersistency = 57,
-
-    TrigTempoTap = 65,
-    TrigSeqQueueRow = 64,
-    TrigVolumeIncrease = 68,
-    TrigVolumeDecrease = 67,
-    TrigEventEnter = 7,
-    TrigEventEdit = 8,
-    TrigEventLeft = 10,
-    TrigEventRight = 13,
-    TrigEventUp = 15,
-    TrigEventDown = 9,
-    TrigEventAlt = 11,
-    TrigEventNav = 12,
-    TrigEventPlay = 14,
-
-    VarTempo = 33,
-    VarMasterVolume = 41,
-    VarPreviewVolume = 161,
-    VarWrap = 70,
-    VarTranspose = 63,
-    VarScale = 16,
-    VarScaleRoot = 162,
-    VarProjectName = 99,
-    VarMidiDevice = 40,
-    VarLineOut = 17,
-    VarFGColor = 103,
-    VarBGColor = 104,
-    VarHI1Color = 105,
-    VarHI2Color = 106,
-    VarConsoleColor = 107,
-    VarCursorColor = 108,
-    VarInfoColor = 109,
-    VarWarnColor = 110,
-    VarErrorColor = 111,
-    VarAccentColor = 152,
-    VarAccentAltColor = 153,
-    VarEmphasisColor = 154,
-    VarReserved1Color = 155,
-    VarReserved2Color = 156,
-    VarReserved3Color = 157,
-    VarReserved4Color = 158,
-    VarMidiSync = 112,
-    VarMidiClockSync = 151,
-    VarRemoteUI = 140,
-    VarUIFont = 141,
-    // 142 is taken for SIDInstrumentOSCNumber
-    // 143 is taken for InstrumentCommandMidiChord
-    // 144 is taken for InstrumentMidiName
-    // 145 is taken for ActionExport
-    // 146 is taken for ActionImport
-    // 147 is taken for ActionOK
-    // 148 is taken for InstrumentName
-    // 149 is taken for ActionRenderMixdown
-    // 150 is taken for ActionRenderStems
-    // 151 is taken for VarMidiClockSync
-    // 152 is taken for VarPlayColor
-    // 153 is taken for VarMuteColor
-    // 154 is taken for VarSongViewFEColor
-    // 155 is taken for VarSongView00Color
-    // 156 is taken for VarRowColor
-    // 157 is taken for VarRow2Color
-    // 158 is taken for VarMajorBeatColor
-    // 159 is taken for ActionShowTheme
-    // 160 is taken for MidiInstrumentProgram
-    // 161 is taken for VarScaleRoot
-    // 162 is taken for VarPreviewVolume
-    // 163 is taken for VarChannel1Volume
-    // 164 is taken for VarChannel2Volume
-    // 165 is taken for VarChannel3Volume
-    // 166 is taken for VarChannel4Volume
-    // 167 is taken for VarChannel5Volume
-    // 168 is taken for VarChannel6Volume
-    // 169 is taken for VarChannel7Volume
-    // 170 is taken for VarChannel8Volume
-    // 171 is taken for SampleInstrumentSlices
-    // 172 is taken for ActionThemeName
-    // 173 is taken for VarThemeName
-    // 174 is taken for VarBacklightLevel
-    // 175 is taken for ActionShowSampleEditor
-    // 176 is taken for VarRecordSource
-    // 177 is taken for VarSampleEditStart
-    // 178 is taken for VarSampleEditStop
-    // 179 is taken for ActionLoadAndSave
-    // 180 is taken for ActionCancel
-    // 181 is taken for VarSampleEditOperation
-    // 182 is taken for VarRecordLineGain
-    // 183 is taken for VarRecordMicGain
-    // 184 is taken for ActionShowSampleSlices
-    // 185 is taken for VarImportResampler
-    // 186 is taken for ActionAutoSlice
-    // 187 is taken for ActionShowRecordView
-
-    VarChannel1Volume = 163,
-    VarChannel2Volume = 164,
-    VarChannel3Volume = 165,
-    VarChannel4Volume = 166,
-    VarChannel5Volume = 167,
-    VarChannel6Volume = 168,
-    VarChannel7Volume = 169,
-    VarChannel8Volume = 170,
-    VarThemeName = 173, // Variable for storing the current theme name
-
-    VarInstrumentType = 113,
-
-    ActionTempoChanged = 61,
-    ActionPurge = 49,
-    ActionPurgeInstrument = 47,
-    ActionProjectRename = 102,
-    ActionBrowse = 35,
-    ActionSave = 53,
-    ActionLoadAndSave = 179,
-    ActionCancel = 180,
-    ActionNewProject = 101,
-    ActionRandomName = 100,
-    ActionBootSelect = 18,
-    ActionEdit = 59,
-    ActionExport = 145,
-    ActionImport = 146,
-    ActionOK = 147,
-    InstrumentName = 148,
-    ActionRenderMixdown = 149,
-    ActionRenderStems = 150,
-    ActionShowTheme = 159,
-    ActionThemeName = 172,
-    SampleInstrumentSlices = 171,
-    VarBacklightLevel = 174,
-    ActionShowSampleEditor = 175,
-    ActionShowSampleSlices = 184,
-    VarRecordSource = 176,
-    VarSampleEditStart = 177,
-    VarSampleEditEnd = 178,
-    VarSampleEditOperation = 181,
-    VarRecordLineGain = 182,
-    VarRecordMicGain = 183,
-    VarOutputVolume = 184,
-    VarImportResampler = 185,
-    ActionAutoSlice = 186,
-    ActionShowRecordView = 187,
-
-    Default = 255, // "    "
+    InstrumentCommandRandom = 189, // RND
+    Invalid = 255,
   };
-  ETL_DECLARE_ENUM_TYPE(FourCC, char)
-  // Not all enums need reflection. Only cases where we need reflection is the
-  // FourCC codes that need to be converted to text in order to display on
-  // screen
+  ETL_DECLARE_ENUM_TYPE(TrackerCommand, uint8_t)
   ETL_ENUM_TYPE(InstrumentCommandArpeggiator, "ARP")
+  ETL_ENUM_TYPE(InstrumentCommandChance, "CHN")
   ETL_ENUM_TYPE(InstrumentCommandCrush, "CSH")
   ETL_ENUM_TYPE(InstrumentCommandKill, "KIL")
   ETL_ENUM_TYPE(InstrumentCommandLoopOfset, "LOF")
   ETL_ENUM_TYPE(InstrumentCommandVelocity, "VEL")
   ETL_ENUM_TYPE(InstrumentCommandVolume, "VOL")
+  ETL_ENUM_TYPE(InstrumentCommandGateLength, "TLN")
   ETL_ENUM_TYPE(InstrumentCommandPitchSlide, "PSL")
+  ETL_ENUM_TYPE(InstrumentCommandRandom, "RND")
   ETL_ENUM_TYPE(InstrumentCommandHop, "HOP")
   ETL_ENUM_TYPE(InstrumentCommandLegato, "LEG")
   ETL_ENUM_TYPE(InstrumentCommandRetrigger, "RTG")
@@ -288,7 +77,7 @@ struct FourCC {
   ETL_ENUM_TYPE(InstrumentCommandFilterCut, "FCT")
   ETL_ENUM_TYPE(InstrumentCommandFilterResonance, "FRS")
   ETL_ENUM_TYPE(InstrumentCommandPan, "PAN")
-  ETL_ENUM_TYPE(InstrumentCommandGateOff, "GOF")
+  ETL_ENUM_TYPE(InstrumentCommandOff, "REL")
   ETL_ENUM_TYPE(InstrumentCommandGroove, "GRV")
   ETL_ENUM_TYPE(InstrumentCommandStop, "STP")
   ETL_ENUM_TYPE(InstrumentCommandNone, "---")
@@ -296,10 +85,262 @@ struct FourCC {
   ETL_ENUM_TYPE(InstrumentCommandDelay, "DLY")
   ETL_ENUM_TYPE(InstrumentCommandInstrumentRetrigger, "IRT")
   ETL_ENUM_TYPE(InstrumentCommandMidiChord, "MCH")
+  ETL_END_ENUM_TYPE
+};
 
+struct FourCC {
+  enum enum_type : uint16_t {
+    Default,
+
+    SampleInstrumentCrushVolume,
+    SampleInstrumentVolume,
+    SampleInstrumentCrush,
+    SampleInstrumentSample,
+    SampleInstrumentInterpolation,
+    SampleInstrumentDownsample,
+    SampleInstrumentRootNote,
+    SampleInstrumentFineTune,
+    SampleInstrumentPan,
+    SampleInstrumentFilterCutOff,
+    SampleInstrumentFilterResonance,
+    SampleInstrumentFilterType,
+    SampleInstrumentFilterMode,
+    SampleInstrumentStart,
+    SampleInstrumentLoopMode,
+    SampleInstrumentLoopStart,
+    SampleInstrumentEnd,
+    SampleInstrumentTable,
+    SampleInstrumentTableAutomation,
+
+    MacroInstrumentShape,
+    MacroInstrmentTimbre,
+    MacroInstrumentColor,
+    MacroInstrumentAttack,
+    MacroInstrumentDecay,
+    MacroInstrumentSignature,
+
+    MidiInstrumentChannel,
+    MidiInstrumentNoteLength,
+    MidiInstrumentVolume,
+    MidiInstrumentTable,
+    MidiInstrumentTableAutomation,
+    MidiInstrumentName,
+    MidiInstrumentProgram,
+
+    SIDInstrumentWaveform,
+    SIDInstrument1FilterCut,
+    SIDInstrument2FilterCut,
+    SIDInstrument3FilterCut,
+    SIDInstrument1FilterResonance,
+    SIDInstrument2FilterResonance,
+    SIDInstrument3FilterResonance,
+    SIDInstrument1FilterMode,
+    SIDInstrument2FilterMode,
+    SIDInstrument3FilterMode,
+    SIDInstrument1Volume,
+    SIDInstrument2Volume,
+    SIDInstrument3Volume,
+    SIDInstrumentPulseWidth,
+    SIDInstrumentVSync,
+    SIDInstrumentRingModulator,
+    SIDInstrumentADSR,
+    SIDInstrumentFilterOn,
+    SIDInstrumentVoice3Off,
+    SIDInstrumentTable,
+    SIDInstrumentTableAutomation,
+    SIDInstrumentOSCNumber,
+
+    LFO1Target,
+    LFO1Shape,
+    LFO1Trigger,
+    LFO1RateMode,
+    LFO1Depth,
+    LFO1HertzTenths,
+    LFO1Sync,
+    LFO2Target,
+    LFO2Shape,
+    LFO2Trigger,
+    LFO2RateMode,
+    LFO2Depth,
+    LFO2HertzTenths,
+    LFO2Sync,
+
+    ServicePersistency,
+
+    TrigTempoTap,
+    TrigSeqQueueRow,
+    TrigVolumeIncrease,
+    TrigVolumeDecrease,
+    TrigEventEnter,
+    TrigEventEdit,
+    TrigEventLeft,
+    TrigEventRight,
+    TrigEventUp,
+    TrigEventDown,
+    TrigEventAlt,
+    TrigEventNav,
+    TrigEventPlay,
+
+    VarTempo,
+    VarMasterVolume,
+    VarPreviewVolume,
+    VarWrap,
+    VarTranspose,
+    VarScale,
+    VarScaleRoot,
+    VarProjectName,
+    VarProjectAudioMode,
+    VarMidiDevice,
+    VarMidiControlSurface,
+    VarLineOut,
+    VarFGColor,
+    VarBGColor,
+    VarHI1Color,
+    VarHI2Color,
+    VarConsoleColor,
+    VarCursorColor,
+    VarInfoColor,
+    VarWarnColor,
+    VarErrorColor,
+    VarAccentColor,
+    VarAccentAltColor,
+    VarEmphasisColor,
+    VarReserved1Color,
+    VarReserved2Color,
+    VarReserved3Color,
+    VarReserved4Color,
+    VarMidiSync,
+    VarMidiInputDevice,
+    VarMidiClockSync,
+    VarRemoteUI,
+    VarUIFont,
+
+    VarChannel1Volume,
+    VarChannel2Volume,
+    VarChannel3Volume,
+    VarChannel4Volume,
+    VarChannel5Volume,
+    VarChannel6Volume,
+    VarChannel7Volume,
+    VarChannel8Volume,
+    VarChannel1FX1Send,
+    VarChannel2FX1Send,
+    VarChannel3FX1Send,
+    VarChannel4FX1Send,
+    VarChannel5FX1Send,
+    VarChannel6FX1Send,
+    VarChannel7FX1Send,
+    VarChannel8FX1Send,
+    VarChannel1FX2Send,
+    VarChannel2FX2Send,
+    VarChannel3FX2Send,
+    VarChannel4FX2Send,
+    VarChannel5FX2Send,
+    VarChannel6FX2Send,
+    VarChannel7FX2Send,
+    VarChannel8FX2Send,
+    VarChannel1FX3Send,
+    VarChannel2FX3Send,
+    VarChannel3FX3Send,
+    VarChannel4FX3Send,
+    VarChannel5FX3Send,
+    VarChannel6FX3Send,
+    VarChannel7FX3Send,
+    VarChannel8FX3Send,
+    VarFX1Volume,
+    VarFX2Volume,
+    VarFX3Volume,
+    VarFX1Type,
+    VarFX2Type,
+    VarFX3Type,
+    VarReverbInputGain,
+    VarReverbTime,
+    VarReverbDiffusion,
+    VarReverbLowPass,
+    VarThemeName, // Variable for storing the current theme name
+
+    VarInstrumentType,
+
+    ActionTempoChanged,
+    ActionPurge,
+    ActionPurgeInstrument,
+    ActionProjectRename,
+    ActionBrowse,
+    ActionSave,
+    ActionLoadAndSave,
+    ActionCancel,
+    ActionNewProject,
+    ActionRandomName,
+    ActionBootSelect,
+    ActionEdit,
+    ActionExport,
+    ActionImport,
+    ActionOK,
+    InstrumentName,
+    ActionRenderMixdown,
+    ActionRenderStems,
+    ActionShowTheme,
+    ActionThemeName,
+    ActionResetTheme,
+    SampleInstrumentSlices,
+    VarBacklightLevel,
+    ActionShowSampleEditor,
+    ActionShowSampleSlices,
+    VarRecordSource,
+    VarSampleEditStart,
+    VarSampleEditEnd,
+    VarSampleEditOperation,
+    VarRecordLineGain,
+    VarRecordMicGain,
+    VarOutputVolume,
+    VarImportResampler,
+    ActionAutoSlice,
+    ActionShowRecordView,
+    VoiceOverdrive,
+    VoiceBandpassCutoff,
+    VoiceBandpassResonance,
+    VoiceBandpassMix,
+    VoiceFilterCutoff,
+    VoiceFilterResonance,
+    VoiceFilterMix,
+    VoiceAmp,
+    VoicePan,
+    VoiceInsertType,
+    VoiceAmpAttack,
+    VoiceAmpDecay,
+    VoiceAmpSustain,
+    VoiceAmpRelease,
+    VoiceFilterAttack,
+    VoiceFilterDecay,
+    VoiceFilterSustain,
+    VoiceFilterRelease,
+    VoiceFilterEnvAmount,
+    VoiceInsertType2,
+    VoiceInsertAmount,
+    VoiceInsertAmount2,
+    VoiceInsertPosition,
+    VoiceInsertPosition2,
+    VoiceTriggerLength,
+    VoiceFilterType,
+    SampleSourceInstrumentSample,
+    SampleSourceInstrumentRootNote,
+    SampleSourceInstrumentStart,
+    SampleSourceInstrumentLoopMode,
+    SampleSourceInstrumentLoopStart,
+    SampleSourceInstrumentEnd,
+    SampleSourceInstrumentTable,
+    SampleSourceInstrumentTableAutomation,
+    SampleSourceInstrumentLevel,
+  };
+  ETL_DECLARE_ENUM_TYPE(FourCC, uint16_t)
+  // Not all enums need reflection. Only cases where we need reflection is the
+  // FourCC codes that need to be converted to text in order to display on
+  // screen
   ETL_ENUM_TYPE(VarLineOut, "LINEOUT")
   ETL_ENUM_TYPE(VarMidiDevice, "MIDIDEVICE")
+  ETL_ENUM_TYPE(VarMidiControlSurface, "MIDICTRLSURF")
   ETL_ENUM_TYPE(VarMidiSync, "MIDISYNC")
+  ETL_ENUM_TYPE(VarMidiInputDevice, "MIDIINPUTDEV")
   ETL_ENUM_TYPE(VarMidiClockSync, "MIDICLOCKSYNC")
   ETL_ENUM_TYPE(VarRemoteUI, "REMOTEUI")
   ETL_ENUM_TYPE(VarUIFont, "UIFONT")
@@ -356,25 +397,20 @@ struct FourCC {
   ETL_ENUM_TYPE(SIDInstrumentTableAutomation, "table automation")
   ETL_ENUM_TYPE(SIDInstrumentOSCNumber, "OSCNUM")
 
-  // channel variable not currently used by OPAL instruments but maybe in future
-  ETL_ENUM_TYPE(OPALInstrumentChannel, "CHANNEL")
-  ETL_ENUM_TYPE(OPALInstrumentAlgorithm, "ALGORITHM")
-  ETL_ENUM_TYPE(OPALInstrumentFeedback, "FEEDBACK")
-  ETL_ENUM_TYPE(OPALInstrumentDeepTremeloVibrato, "DEEPTREMELOVIBRATO")
-
-  ETL_ENUM_TYPE(OPALInstrumentOp1Level, "OP1LEVEL")
-  ETL_ENUM_TYPE(OPALInstrumentOp1Multiplier, "OP1MULTIPLIER")
-  ETL_ENUM_TYPE(OPALInstrumentOp1KeyScaleLevel, "OP1KEYSCALELEVEL")
-  ETL_ENUM_TYPE(OPALInstrumentOp1ADSR, "OP1ADSR")
-  ETL_ENUM_TYPE(OPALInstrumentOp1WaveShape, "OP1WAVESHAPE")
-  ETL_ENUM_TYPE(OPALInstrumentOp1TremVibSusKSR, "OP1TREMVIBSUSKSR")
-
-  ETL_ENUM_TYPE(OPALInstrumentOp2Level, "OP2LEVEL")
-  ETL_ENUM_TYPE(OPALInstrumentOp2Multiplier, "OP2MULTIPLIER")
-  ETL_ENUM_TYPE(OPALInstrumentOp2KeyScaleLevel, "OP2KEYSCALELEVEL")
-  ETL_ENUM_TYPE(OPALInstrumentOp2ADSR, "OP2ADSR")
-  ETL_ENUM_TYPE(OPALInstrumentOp2WaveShape, "OP2WAVESHAPE")
-  ETL_ENUM_TYPE(OPALInstrumentOp2TremVibSusKSR, "OP2TREMVIBSUSKSR")
+  ETL_ENUM_TYPE(LFO1Target, "lfo1 target")
+  ETL_ENUM_TYPE(LFO1Shape, "lfo1 shape")
+  ETL_ENUM_TYPE(LFO1Trigger, "lfo1 trigger")
+  ETL_ENUM_TYPE(LFO1RateMode, "lfo1 rate mode")
+  ETL_ENUM_TYPE(LFO1Depth, "lfo1 depth")
+  ETL_ENUM_TYPE(LFO1HertzTenths, "lfo1 hz")
+  ETL_ENUM_TYPE(LFO1Sync, "lfo1 sync")
+  ETL_ENUM_TYPE(LFO2Target, "lfo2 target")
+  ETL_ENUM_TYPE(LFO2Shape, "lfo2 shape")
+  ETL_ENUM_TYPE(LFO2Trigger, "lfo2 trigger")
+  ETL_ENUM_TYPE(LFO2RateMode, "lfo2 rate mode")
+  ETL_ENUM_TYPE(LFO2Depth, "lfo2 depth")
+  ETL_ENUM_TYPE(LFO2HertzTenths, "lfo2 hz")
+  ETL_ENUM_TYPE(LFO2Sync, "lfo2 sync")
 
   ETL_ENUM_TYPE(VarFGColor, "FOREGROUND")
   ETL_ENUM_TYPE(VarBGColor, "BACKGROUND")
@@ -399,6 +435,7 @@ struct FourCC {
   ETL_ENUM_TYPE(VarTranspose, "transpose")
   ETL_ENUM_TYPE(VarScale, "scale")
   ETL_ENUM_TYPE(VarProjectName, "projectname")
+  ETL_ENUM_TYPE(VarProjectAudioMode, "projectaudiomode")
   ETL_ENUM_TYPE(VarInstrumentType, "INSTRUMENTTYPE")
   ETL_ENUM_TYPE(VarChannel1Volume, "channel1vol")
   ETL_ENUM_TYPE(VarChannel2Volume, "channel2vol")
@@ -408,21 +445,107 @@ struct FourCC {
   ETL_ENUM_TYPE(VarChannel6Volume, "channel6vol")
   ETL_ENUM_TYPE(VarChannel7Volume, "channel7vol")
   ETL_ENUM_TYPE(VarChannel8Volume, "channel8vol")
+  ETL_ENUM_TYPE(VarChannel1FX1Send, "channel1fx1send")
+  ETL_ENUM_TYPE(VarChannel2FX1Send, "channel2fx1send")
+  ETL_ENUM_TYPE(VarChannel3FX1Send, "channel3fx1send")
+  ETL_ENUM_TYPE(VarChannel4FX1Send, "channel4fx1send")
+  ETL_ENUM_TYPE(VarChannel5FX1Send, "channel5fx1send")
+  ETL_ENUM_TYPE(VarChannel6FX1Send, "channel6fx1send")
+  ETL_ENUM_TYPE(VarChannel7FX1Send, "channel7fx1send")
+  ETL_ENUM_TYPE(VarChannel8FX1Send, "channel8fx1send")
+  ETL_ENUM_TYPE(VarChannel1FX2Send, "channel1fx2send")
+  ETL_ENUM_TYPE(VarChannel2FX2Send, "channel2fx2send")
+  ETL_ENUM_TYPE(VarChannel3FX2Send, "channel3fx2send")
+  ETL_ENUM_TYPE(VarChannel4FX2Send, "channel4fx2send")
+  ETL_ENUM_TYPE(VarChannel5FX2Send, "channel5fx2send")
+  ETL_ENUM_TYPE(VarChannel6FX2Send, "channel6fx2send")
+  ETL_ENUM_TYPE(VarChannel7FX2Send, "channel7fx2send")
+  ETL_ENUM_TYPE(VarChannel8FX2Send, "channel8fx2send")
+  ETL_ENUM_TYPE(VarChannel1FX3Send, "channel1fx3send")
+  ETL_ENUM_TYPE(VarChannel2FX3Send, "channel2fx3send")
+  ETL_ENUM_TYPE(VarChannel3FX3Send, "channel3fx3send")
+  ETL_ENUM_TYPE(VarChannel4FX3Send, "channel4fx3send")
+  ETL_ENUM_TYPE(VarChannel5FX3Send, "channel5fx3send")
+  ETL_ENUM_TYPE(VarChannel6FX3Send, "channel6fx3send")
+  ETL_ENUM_TYPE(VarChannel7FX3Send, "channel7fx3send")
+  ETL_ENUM_TYPE(VarChannel8FX3Send, "channel8fx3send")
+  ETL_ENUM_TYPE(VarFX1Volume, "fx1vol")
+  ETL_ENUM_TYPE(VarFX2Volume, "fx2vol")
+  ETL_ENUM_TYPE(VarFX3Volume, "fx3vol")
+  ETL_ENUM_TYPE(VarFX1Type, "fx1type")
+  ETL_ENUM_TYPE(VarFX2Type, "fx2type")
+  ETL_ENUM_TYPE(VarFX3Type, "fx3type")
+  ETL_ENUM_TYPE(VarReverbInputGain, "revin")
+  ETL_ENUM_TYPE(VarReverbTime, "revtim")
+  ETL_ENUM_TYPE(VarReverbDiffusion, "revdif")
+  ETL_ENUM_TYPE(VarReverbLowPass, "revlp")
 
   ETL_ENUM_TYPE(ActionEdit, "edit")
   ETL_ENUM_TYPE(ActionExport, "export")
   ETL_ENUM_TYPE(ActionImport, "import")
   ETL_ENUM_TYPE(ActionThemeName, "themename")
+  ETL_ENUM_TYPE(ActionResetTheme, "resettheme")
   ETL_ENUM_TYPE(VarBacklightLevel, "backlightLevel")
   ETL_ENUM_TYPE(VarRecordSource, "recordsource")
   ETL_ENUM_TYPE(VarRecordLineGain, "recordlinegain")
   ETL_ENUM_TYPE(VarRecordMicGain, "recordmicgain")
   ETL_ENUM_TYPE(VarOutputVolume, "outputvolume")
   ETL_ENUM_TYPE(VarImportResampler, "IMPORTRESAMP")
+  ETL_ENUM_TYPE(VoiceOverdrive, "voice drive")
+  ETL_ENUM_TYPE(VoiceBandpassCutoff, "voice base")
+  ETL_ENUM_TYPE(VoiceBandpassResonance, "voice bw res")
+  ETL_ENUM_TYPE(VoiceBandpassMix, "voice wdth")
+  ETL_ENUM_TYPE(VoiceFilterCutoff, "voice filter cut")
+  ETL_ENUM_TYPE(VoiceFilterResonance, "voice filter res")
+  ETL_ENUM_TYPE(VoiceFilterMix, "voice filter mix")
+  ETL_ENUM_TYPE(VoiceAmp, "voice amp")
+  ETL_ENUM_TYPE(VoicePan, "voice pan")
+  ETL_ENUM_TYPE(VoiceInsertType, "voice insert")
+  ETL_ENUM_TYPE(VoiceAmpAttack, "voice amp atk")
+  ETL_ENUM_TYPE(VoiceAmpDecay, "voice amp dec")
+  ETL_ENUM_TYPE(VoiceAmpSustain, "voice amp sus")
+  ETL_ENUM_TYPE(VoiceAmpRelease, "voice amp rel")
+  ETL_ENUM_TYPE(VoiceFilterAttack, "voice filter atk")
+  ETL_ENUM_TYPE(VoiceFilterDecay, "voice filter dec")
+  ETL_ENUM_TYPE(VoiceFilterSustain, "voice filter sus")
+  ETL_ENUM_TYPE(VoiceFilterRelease, "voice filter rel")
+  ETL_ENUM_TYPE(VoiceFilterEnvAmount, "voice filter env")
+  ETL_ENUM_TYPE(VoiceInsertType2, "voice insert 2")
+  ETL_ENUM_TYPE(VoiceInsertAmount, "voice insert amt")
+  ETL_ENUM_TYPE(VoiceInsertAmount2, "voice insert amt2")
+  ETL_ENUM_TYPE(VoiceInsertPosition, "voice insert pos")
+  ETL_ENUM_TYPE(VoiceInsertPosition2, "voice insert pos2")
+  ETL_ENUM_TYPE(VoiceTriggerLength, "voice trig len")
+  ETL_ENUM_TYPE(VoiceFilterType, "voice filter type")
+  ETL_ENUM_TYPE(SampleSourceInstrumentSample, "sample")
+  ETL_ENUM_TYPE(SampleSourceInstrumentRootNote, "root note")
+  ETL_ENUM_TYPE(SampleSourceInstrumentStart, "start")
+  ETL_ENUM_TYPE(SampleSourceInstrumentLoopMode, "loopmode")
+  ETL_ENUM_TYPE(SampleSourceInstrumentLoopStart, "loopstart")
+  ETL_ENUM_TYPE(SampleSourceInstrumentEnd, "end")
+  ETL_ENUM_TYPE(SampleSourceInstrumentTable, "table")
+  ETL_ENUM_TYPE(SampleSourceInstrumentTableAutomation, "table automation")
+  ETL_ENUM_TYPE(SampleSourceInstrumentLevel, "level")
 
   ETL_ENUM_TYPE(Default, "   ")
   ETL_END_ENUM_TYPE
 };
+
+static_assert(sizeof(TrackerCommand) == sizeof(uint8_t),
+              "Tracker commands are persisted as one byte");
+static_assert(sizeof(FourCC) == sizeof(uint16_t),
+              "Runtime IDs are expected to be two bytes");
+
+static_assert(FourCC::VarChannel8Volume == FourCC::VarChannel1Volume + 7,
+              "Channel volume IDs must remain contiguous");
+static_assert(FourCC::VarChannel8FX3Send == FourCC::VarChannel1FX1Send + 23,
+              "Channel FX send IDs must remain contiguous");
+static_assert(FourCC::VarFX3Volume == FourCC::VarFX1Volume + 2,
+              "FX return volume IDs must remain contiguous");
+static_assert(FourCC::VarFX3Type == FourCC::VarFX1Type + 2,
+              "FX type IDs must remain contiguous");
+static_assert(FourCC::VarReverbLowPass == FourCC::VarReverbInputGain + 3,
+              "Reverb IDs must remain contiguous");
 
 typedef unsigned short ushort;
 typedef unsigned int uint;

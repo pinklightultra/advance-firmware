@@ -1,20 +1,25 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "ChainView.h"
 #include "Application/Utils/char.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Application/Views/SelectionResampleSupport.h"
+#include "Externals/etl/include/etl/to_string.h"
 #include "ScreenView.h"
 #include "System/Console/Trace.h"
 #include "UIController.h"
 #include "ViewData.h"
-#include <nanoprintf.h>
 
 ChainView::ChainView(GUIWindow &w, ViewData *viewData)
     : ScreenView(w, viewData) {
@@ -138,17 +143,19 @@ void ChainView::warpInColumn(int offset) {
 
 void ChainView::warpToNeighbour(int offset) {
 
-  int newPos = viewData_->songX_ + offset;
-  if ((newPos > -1) && (newPos < SONG_CHANNEL_COUNT)) {
+  const int channelCount = viewData_->song_->GetChannelCount();
+  int oldSongX = viewData_->songX_;
+  for (int newPos = oldSongX + offset; (newPos > -1) && (newPos < channelCount);
+       newPos += offset) {
     viewData_->songX_ = newPos;
     unsigned char *c = viewData_->GetCurrentSongPointer();
     if (*c != 0xFF) {
       viewData_->currentChain_ = *c;
       isDirty_ = true;
-    } else {
-      viewData_->songX_ -= offset;
+      return;
     }
   }
+  viewData_->songX_ = oldSongX;
 };
 
 void ChainView::clonePosition() {
@@ -158,7 +165,7 @@ void ChainView::clonePosition() {
   if (current == 255)
     return;
 
-  unsigned short next = viewData_->song_->phrase_.GetNext();
+  uint16_t next = viewData_->song_->phrase_.GetNextFrom(current);
   if (next == NO_MORE_PHRASE)
     return;
 
@@ -208,12 +215,45 @@ void ChainView::clonePosition() {
         selection. Valid only while selection is drawn
  ******************************************************/
 
-GUIRect ChainView::getSelectionRect() {
+GUIRect ChainView::getSelectionRect() const {
   GUIRect r(clipboard_.col_, clipboard_.row_, viewData_->chainCol_,
             viewData_->chainRow_);
   r.Normalize();
   return r;
 };
+
+bool ChainView::buildSelectionResampleRequest(
+    SelectionResampleRequest &request) const {
+  GUIRect selectionRect = getSelectionRect();
+  const unsigned char phrase =
+      viewData_->song_->chain_
+          .data_[16 * viewData_->currentChain_ + selectionRect.Top()];
+  if (phrase == 0xFF) {
+    return false;
+  }
+
+  request = SelectionResampleRequest();
+  request.sourceKind = SelectionResampleSourceKind::Chain;
+  request.startSongRow =
+      static_cast<uint8_t>(viewData_->songY_ + viewData_->songOffset_);
+  request.endSongRow = request.startSongRow;
+  request.startChainRow = static_cast<uint8_t>(selectionRect.Top());
+  request.endChainRow = static_cast<uint8_t>(selectionRect.Bottom());
+  request.channelStart = static_cast<uint8_t>(viewData_->songX_);
+  request.channelEnd = request.channelStart;
+  request.trackerChannel = request.channelStart;
+  request.currentChain = static_cast<uint8_t>(viewData_->currentChain_);
+  return SelectionResampleSupport::BuildNextProjectSamplePath(
+      viewData_->project_, request);
+}
+
+void ChainView::clearSelection() {
+  clipboard_.active_ = false;
+  viewMode_ = VM_NORMAL;
+  viewData_->chainRow_ = saveRow_;
+  viewData_->chainCol_ = saveCol_;
+  isDirty_ = true;
+}
 
 /******************************************************
  fillClipboardData:
@@ -420,9 +460,32 @@ void ChainView::ProcessButtonMask(unsigned short mask, bool pressed) {
     return;
   };
 
+  if (mask == (EPBM_ENTER | EPBM_PLAY)) {
+    SelectionResampleSupport::ClearProjectSamplePathError();
+    if (!clipboard_.active_) {
+      SelectionResampleSupport::ShowResampleError(*this,
+                                                  "Select rows to resample");
+      return;
+    }
+
+    SelectionResampleRequest request;
+    if (!buildSelectionResampleRequest(request)) {
+      const char *error = SelectionResampleSupport::GetProjectSamplePathError();
+      SelectionResampleSupport::ShowResampleError(
+          *this, error[0] != '\0' ? error : "Selection must start on a phrase");
+      return;
+    }
+
+    if (SelectionResampleSupport::StartSelectionResample(*this, request)) {
+      clearSelection();
+    }
+    return;
+  }
+
   if (viewMode_ == VM_NEW) {
     if (mask == EPBM_ENTER) {
-      unsigned short next = viewData_->song_->phrase_.GetNext();
+      unsigned char *current = viewData_->GetCurrentChainPointer();
+      uint16_t next = viewData_->song_->phrase_.GetNextFrom(*current);
       if (next != NO_MORE_PHRASE) {
         setPhrase((unsigned char)next);
         isDirty_ = true;
@@ -684,12 +747,11 @@ void ChainView::DrawView() {
   GUITextProperties props;
   GUIPoint pos = GetTitlePosition();
 
-  // Draw title
-
-  char title[20];
-  SetColor(CD_NORMAL);
-  npf_snprintf(title, sizeof(title), "Chain %2.2X", viewData_->currentChain_);
-  DrawString(pos._x, pos._y, title, props);
+  etl::string<23> title("Chain ");
+  etl::format_spec format;
+  format.width(2).fill('0');
+  etl::to_string(viewData_->currentChain_, title, format, true);
+  setTitle(title);
 
   // Compute song grid location
 
@@ -807,7 +869,8 @@ void ChainView::AnimationUpdate() {
     // Only update play position if player is running
     if (player->IsRunning()) {
       // Loop on all channels to see if one of them is playing current chain
-      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+      const int channelCount = viewData_->song_->GetChannelCount();
+      for (int i = 0; i < channelCount; i++) {
         if (player->IsChannelPlaying(i)) {
           if (viewData_->currentPlayChain_[i] == viewData_->currentChain_ &&
               viewData_->playMode_ != PM_AUDITION) {
@@ -828,13 +891,14 @@ void ChainView::AnimationUpdate() {
 
     // Handle queue position updates if in live mode
     if (player->GetSequencerMode() == SM_LIVE) {
-      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+      const int channelCount = viewData_->song_->GetChannelCount();
+      for (int i = 0; i < channelCount; i++) {
         // is anything queued?
         if (player->GetQueueingMode(i) != QM_NONE) {
           // find the chain queued in channel
           unsigned char songPos = player->GetQueuePosition(i);
-          unsigned char *chain =
-              viewData_->song_->data_ + i + SONG_CHANNEL_COUNT * songPos;
+          unsigned char *chain = viewData_->song_->data_ + i +
+                                 viewData_->song_->GetChannelCount() * songPos;
           if (*chain == viewData_->currentChain_) {
             unsigned char chainPos = player->GetQueueChainPosition(i);
             pos._y = anchor._y + chainPos;

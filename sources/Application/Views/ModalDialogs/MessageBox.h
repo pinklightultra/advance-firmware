@@ -11,12 +11,8 @@
 #define _MESSAGE_BOX_H_
 
 #include "Application/Views/BaseClasses/ModalView.h"
-#include <string>
-
-#ifdef MessageBox
-#undef MessageBox
-#endif
 #include <Application/AppWindow.h>
+#include <string>
 
 enum MessageBoxList { MBL_OK = 0, MBL_YES, MBL_CANCEL, MBL_NO, MBL_LAST };
 

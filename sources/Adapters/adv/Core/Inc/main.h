@@ -24,18 +24,11 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "firmware_info.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-typedef struct {
-  uint32_t magic;   // e.g. 0xBEEFC0DE
-  uint32_t length;  // Length of firmware in bytes
-  uint32_t version; // Semantic version or build ID
-  uint32_t crc32;   // CRC of the firmware (excluding this struct)
-  uint32_t type;    // type of firmware
-} firmware_info_t;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -111,6 +104,7 @@ void Error_Handler(void);
 #define CHARGER_OTG_GPIO_Port GPIOA
 #define USB_INT_Pin GPIO_PIN_15
 #define USB_INT_GPIO_Port GPIOA
+#define USB_INT_EXTI_IRQn EXTI15_10_IRQn
 #define INPUT_RIGHT_Pin GPIO_PIN_4
 #define INPUT_RIGHT_GPIO_Port GPIOD
 #define INPUT_UP_Pin GPIO_PIN_5

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "TableView.h"
@@ -13,6 +17,8 @@
 #include "Application/Utils/HelpLegend.h"
 #include "Application/Utils/char.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Externals/etl/include/etl/to_string.h"
+#include "System/Console/Trace.h"
 #include "ViewData.h"
 #include <nanoprintf.h>
 
@@ -26,7 +32,7 @@ TableView::TableView(GUIWindow &w, ViewData *viewData)
   lastVol_ = 0;
   lastTick_ = 0;
   lastTsp_ = 0;
-  lastCmd_ = FourCC::InstrumentCommandNone;
+  lastCmd_ = TrackerCommand::InstrumentCommandNone;
   lastParam_ = 0;
 
   clipboard_.active_ = false;
@@ -42,7 +48,7 @@ void TableView::Reset() {
   lastVol_ = 0;
   lastTick_ = 0;
   lastTsp_ = 0;
-  lastCmd_ = FourCC::InstrumentCommandNone;
+  lastCmd_ = TrackerCommand::InstrumentCommandNone;
   lastParam_ = 0;
   cmdEdit_.SetInt(0, false);
 
@@ -58,6 +64,9 @@ void TableView::Reset() {
     clipboard_.param2_[i] = 0;
     clipboard_.cmd3_[i] = 0;
     clipboard_.param3_[i] = 0;
+  }
+  for (int i = 0; i < 6; i++) {
+    clipboard_.columnTypes_[i] = TableClipboardColumnType::Invalid;
   }
 
   saveCol_ = 0;
@@ -99,6 +108,21 @@ GUIRect TableView::getSelectionRect() {
 
 void TableView::fillClipboardData() {
 
+  auto getColumnType = [](int column) {
+    switch (column) {
+    case 0:
+    case 2:
+    case 4:
+      return TableClipboardColumnType::Command;
+    case 1:
+    case 3:
+    case 5:
+      return TableClipboardColumnType::Parameter;
+    default:
+      return TableClipboardColumnType::Invalid;
+    }
+  };
+
   // Get Current normalized selection rect
 
   GUIRect selRect = getSelectionRect();
@@ -109,6 +133,12 @@ void TableView::fillClipboardData() {
   clipboard_.height_ = selRect.Height() + 1;
   clipboard_.row_ = selRect.Top();
   clipboard_.col_ = selRect.Left();
+  for (int i = 0; i < 6; i++) {
+    clipboard_.columnTypes_[i] = TableClipboardColumnType::Invalid;
+  }
+  for (int i = 0; i < clipboard_.width_; i++) {
+    clipboard_.columnTypes_[i] = getColumnType(clipboard_.col_ + i);
+  }
 
   // Copy the data
 
@@ -197,19 +227,19 @@ void TableView::cutSelection() {
     for (int j = 0; j < clipboard_.height_; j++) {
       switch (i + clipboard_.col_) {
       case 0:
-        dst1[j + clipboard_.row_] = FourCC::InstrumentCommandNone;
+        dst1[j + clipboard_.row_] = TrackerCommand::InstrumentCommandNone;
         break;
       case 1:
         dst2[j + clipboard_.row_] = 0x0000;
         break;
       case 2:
-        dst3[j + clipboard_.row_] = FourCC::InstrumentCommandNone;
+        dst3[j + clipboard_.row_] = TrackerCommand::InstrumentCommandNone;
         break;
       case 3:
         dst4[j + clipboard_.row_] = 0x0000;
         break;
       case 4:
-        dst5[j + clipboard_.row_] = FourCC::InstrumentCommandNone;
+        dst5[j + clipboard_.row_] = TrackerCommand::InstrumentCommandNone;
         break;
       case 5:
         dst6[j + clipboard_.row_] = 0x0000;
@@ -234,10 +264,28 @@ void TableView::cutSelection() {
  ******************************************************/
 
 void TableView::pasteClipboard() {
+  auto getColumnType = [](int column) {
+    switch (column) {
+    case 0:
+    case 2:
+    case 4:
+      return TableClipboardColumnType::Command;
+    case 1:
+    case 3:
+    case 5:
+      return TableClipboardColumnType::Parameter;
+    default:
+      return TableClipboardColumnType::Invalid;
+    }
+  };
 
   // Get number of row to paste
 
+  int width = clipboard_.width_;
   int height = clipboard_.height_;
+  if (col_ + width > 6) {
+    width = 6 - col_;
+  }
   /*    if (row_+height>16) {
           height=16-row_ ;
       }
@@ -257,28 +305,58 @@ void TableView::pasteClipboard() {
   ushort *dst6 = table.param3_;
   ushort *src6 = clipboard_.param3_;
 
-  for (int i = 0; i < clipboard_.width_; i++) {
+  auto readClipboardValue = [&](int sourceColumn, int sourceRow) -> ushort {
+    switch (sourceColumn) {
+    case 0:
+      return src1[sourceRow];
+    case 1:
+      return src2[sourceRow];
+    case 2:
+      return src3[sourceRow];
+    case 3:
+      return src4[sourceRow];
+    case 4:
+      return src5[sourceRow];
+    case 5:
+      return src6[sourceRow];
+    default:
+      return 0;
+    }
+  };
+
+  auto writeDestinationValue = [&](int destinationColumn, int destinationRow,
+                                   ushort value) {
+    switch (destinationColumn) {
+    case 0:
+      dst1[destinationRow] = static_cast<uchar>(value);
+      break;
+    case 1:
+      dst2[destinationRow] = value;
+      break;
+    case 2:
+      dst3[destinationRow] = static_cast<uchar>(value);
+      break;
+    case 3:
+      dst4[destinationRow] = value;
+      break;
+    case 4:
+      dst5[destinationRow] = static_cast<uchar>(value);
+      break;
+    case 5:
+      dst6[destinationRow] = value;
+      break;
+    }
+  };
+
+  for (int i = 0; i < width; i++) {
+    int sourceColumn = i + clipboard_.col_;
+    int destinationColumn = i + col_;
+    if (clipboard_.columnTypes_[i] != getColumnType(destinationColumn)) {
+      continue;
+    }
     for (int j = 0; j < height; j++) {
-      switch (i + clipboard_.col_) {
-      case 0:
-        dst1[(j + row_) % 16] = src1[j];
-        break;
-      case 1:
-        dst2[(j + row_) % 16] = src2[j];
-        break;
-      case 2:
-        dst3[(j + row_) % 16] = src3[j];
-        break;
-      case 3:
-        dst4[(j + row_) % 16] = src4[j];
-        break;
-      case 4:
-        dst5[(j + row_) % 16] = src5[j];
-        break;
-      case 5:
-        dst6[(j + row_) % 16] = src6[j];
-        break;
-      }
+      ushort value = readClipboardValue(sourceColumn, j);
+      writeDestinationValue(destinationColumn, (j + row_) % 16, value);
     }
   }
   int offset = (row_ + height) % 16 - row_;
@@ -344,95 +422,121 @@ void TableView::warpToNeighbour(int dir) {
   isDirty_ = true;
 }
 
-void TableView::updateCursorValue(int offset) {
+void TableView::updateCursorValue(int offset, int xOffset, int yOffset) {
 
   unsigned char *c = 0;
   unsigned char limit = 0;
   bool wrap = false;
-  FourCC *cc;
+  TrackerCommand *cc;
 
   Table &table = TableHolder::GetInstance()->GetTable(viewData_->currentTable_);
 
-  switch (col_) {
-  case 0:
-    cc = table.cmd1_ + row_;
+  switch (col_ + xOffset) {
+  case 0: {
+    cc = table.cmd1_ + row_ + yOffset;
+    if ((viewMode_ == VM_SELECTION) &&
+        (*cc == TrackerCommand::InstrumentCommandNone)) {
+      break;
+    }
     switch (offset) {
     case 0x01:
       *cc = CommandList::GetNext(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetNext(*cc);
       }
       break;
     case 0x10:
       *cc = CommandList::GetNextAlpha(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetNextAlpha(*cc);
       }
       break;
     case -0x01:
       *cc = CommandList::GetPrev(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetPrev(*cc);
       }
       break;
     case -0x10:
       *cc = CommandList::GetPrevAlpha(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetPrevAlpha(*cc);
       }
       break;
     }
     lastCmd_ = *cc;
     break;
-
+  }
   case 1: {
-    switch (offset) {
-    case 0x01:
-      cmdEditField_.ProcessArrow(EPBM_RIGHT);
-      break;
-    case 0x10:
-      cmdEditField_.ProcessArrow(EPBM_UP);
-      break;
-    case -0x01:
-      cmdEditField_.ProcessArrow(EPBM_LEFT);
-      break;
-    case -0x10:
-      cmdEditField_.ProcessArrow(EPBM_DOWN);
+    TrackerCommand currentCmd = *(table.cmd1_ + row_ + yOffset);
+    if ((viewMode_ == VM_SELECTION) &&
+        (currentCmd == TrackerCommand::InstrumentCommandNone)) {
       break;
     }
+    cmdEdit_.SetInt(*(table.param1_ + row_ + yOffset));
+    Trace::Log("CMD_EDIT_PROBE",
+               "Table param edit col:%d row:%d y:%d offset:%d mode:%d "
+               "before:%04x",
+               col_ + xOffset, row_, yOffset, offset, viewMode_,
+               cmdEdit_.GetInt());
+    if (viewMode_ == VM_SELECTION) {
+      if (offset == 0x10) {
+        cmdEditField_.ApplyOffset(1);
+      } else if (offset == -0x10) {
+        cmdEditField_.ApplyOffset(-1);
+      }
+    } else {
+      switch (offset) {
+      case 0x01:
+        cmdEditField_.ProcessArrow(EPBM_RIGHT);
+        break;
+      case 0x10:
+        cmdEditField_.ProcessArrow(EPBM_UP);
+        break;
+      case -0x01:
+        cmdEditField_.ProcessArrow(EPBM_LEFT);
+        break;
+      case -0x10:
+        cmdEditField_.ProcessArrow(EPBM_DOWN);
+        break;
+      }
+    }
     // Sanitize MIDI velocity values if needed
-    FourCC currentCmd = *(table.cmd1_ + row_);
     ushort paramValue = cmdEdit_.GetInt();
     paramValue = CommandList::RangeLimitCommandParam(currentCmd, paramValue);
     cmdEdit_.SetInt(paramValue);
-    *(table.param1_ + row_) = paramValue;
+    *(table.param1_ + row_ + yOffset) = paramValue;
     lastParam_ = paramValue;
     break;
   }
   case 2: {
-    cc = table.cmd2_ + row_;
+    cc = table.cmd2_ + row_ + yOffset;
+    if ((viewMode_ == VM_SELECTION) &&
+        (*cc == TrackerCommand::InstrumentCommandNone)) {
+      break;
+    }
     switch (offset) {
     case 0x01:
       *cc = CommandList::GetNext(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetNext(*cc);
       }
       break;
     case 0x10:
       *cc = CommandList::GetNextAlpha(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetNextAlpha(*cc);
       }
       break;
     case -0x01:
       *cc = CommandList::GetPrev(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetPrev(*cc);
       }
       break;
     case -0x10:
       *cc = CommandList::GetPrevAlpha(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetPrevAlpha(*cc);
       }
       break;
@@ -441,53 +545,75 @@ void TableView::updateCursorValue(int offset) {
     break;
   }
   case 3: {
-    switch (offset) {
-    case 0x01:
-      cmdEditField_.ProcessArrow(EPBM_RIGHT);
-      break;
-    case 0x10:
-      cmdEditField_.ProcessArrow(EPBM_UP);
-      break;
-    case -0x01:
-      cmdEditField_.ProcessArrow(EPBM_LEFT);
-      break;
-    case -0x10:
-      cmdEditField_.ProcessArrow(EPBM_DOWN);
+    TrackerCommand currentCmd = *(table.cmd2_ + row_ + yOffset);
+    if ((viewMode_ == VM_SELECTION) &&
+        (currentCmd == TrackerCommand::InstrumentCommandNone)) {
       break;
     }
+    cmdEdit_.SetInt(*(table.param2_ + row_ + yOffset));
+    Trace::Log("CMD_EDIT_PROBE",
+               "Table param edit col:%d row:%d y:%d offset:%d mode:%d "
+               "before:%04x",
+               col_ + xOffset, row_, yOffset, offset, viewMode_,
+               cmdEdit_.GetInt());
+    if (viewMode_ == VM_SELECTION) {
+      if (offset == 0x10) {
+        cmdEditField_.ApplyOffset(1);
+      } else if (offset == -0x10) {
+        cmdEditField_.ApplyOffset(-1);
+      }
+    } else {
+      switch (offset) {
+      case 0x01:
+        cmdEditField_.ProcessArrow(EPBM_RIGHT);
+        break;
+      case 0x10:
+        cmdEditField_.ProcessArrow(EPBM_UP);
+        break;
+      case -0x01:
+        cmdEditField_.ProcessArrow(EPBM_LEFT);
+        break;
+      case -0x10:
+        cmdEditField_.ProcessArrow(EPBM_DOWN);
+        break;
+      }
+    }
     // Sanitize MIDI velocity values if needed
-    FourCC currentCmd = *(table.cmd2_ + row_);
     ushort paramValue = cmdEdit_.GetInt();
     paramValue = CommandList::RangeLimitCommandParam(currentCmd, paramValue);
     cmdEdit_.SetInt(paramValue);
-    *(table.param2_ + row_) = paramValue;
+    *(table.param2_ + row_ + yOffset) = paramValue;
     lastParam_ = paramValue;
     break;
   }
   case 4: {
-    cc = table.cmd3_ + row_;
+    cc = table.cmd3_ + row_ + yOffset;
+    if ((viewMode_ == VM_SELECTION) &&
+        (*cc == TrackerCommand::InstrumentCommandNone)) {
+      break;
+    }
     switch (offset) {
     case 0x01:
       *cc = CommandList::GetNext(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetNext(*cc);
       }
       break;
     case 0x10:
       *cc = CommandList::GetNextAlpha(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetNextAlpha(*cc);
       }
       break;
     case -0x01:
       *cc = CommandList::GetPrev(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetPrev(*cc);
       }
       break;
     case -0x10:
       *cc = CommandList::GetPrevAlpha(*cc);
-      if (*cc == FourCC::InstrumentCommandTable) {
+      if (*cc == TrackerCommand::InstrumentCommandTable) {
         *cc = CommandList::GetPrevAlpha(*cc);
       }
       break;
@@ -496,33 +622,51 @@ void TableView::updateCursorValue(int offset) {
     break;
   }
   case 5: {
-    switch (offset) {
-    case 0x01:
-      cmdEditField_.ProcessArrow(EPBM_RIGHT);
-      break;
-    case 0x10:
-      cmdEditField_.ProcessArrow(EPBM_UP);
-      break;
-    case -0x01:
-      cmdEditField_.ProcessArrow(EPBM_LEFT);
-      break;
-    case -0x10:
-      cmdEditField_.ProcessArrow(EPBM_DOWN);
+    TrackerCommand currentCmd = *(table.cmd3_ + row_ + yOffset);
+    if ((viewMode_ == VM_SELECTION) &&
+        (currentCmd == TrackerCommand::InstrumentCommandNone)) {
       break;
     }
+    cmdEdit_.SetInt(*(table.param3_ + row_ + yOffset));
+    Trace::Log("CMD_EDIT_PROBE",
+               "Table param edit col:%d row:%d y:%d offset:%d mode:%d "
+               "before:%04x",
+               col_ + xOffset, row_, yOffset, offset, viewMode_,
+               cmdEdit_.GetInt());
+    if (viewMode_ == VM_SELECTION) {
+      if (offset == 0x10) {
+        cmdEditField_.ApplyOffset(1);
+      } else if (offset == -0x10) {
+        cmdEditField_.ApplyOffset(-1);
+      }
+    } else {
+      switch (offset) {
+      case 0x01:
+        cmdEditField_.ProcessArrow(EPBM_RIGHT);
+        break;
+      case 0x10:
+        cmdEditField_.ProcessArrow(EPBM_UP);
+        break;
+      case -0x01:
+        cmdEditField_.ProcessArrow(EPBM_LEFT);
+        break;
+      case -0x10:
+        cmdEditField_.ProcessArrow(EPBM_DOWN);
+        break;
+      }
+    }
     // Sanitize MIDI velocity values if needed
-    FourCC currentCmd = *(table.cmd3_ + row_);
     ushort paramValue = cmdEdit_.GetInt();
     paramValue = CommandList::RangeLimitCommandParam(currentCmd, paramValue);
     cmdEdit_.SetInt(paramValue);
-    *(table.param3_ + row_) = paramValue;
+    *(table.param3_ + row_ + yOffset) = paramValue;
     lastParam_ = paramValue;
     break;
   }
   }
   if (c) {
     updateData(c, offset, limit, wrap);
-    switch (col_) {
+    switch (col_ + xOffset) {
     case 0:
       lastVol_ = *c;
       break;
@@ -537,6 +681,25 @@ void TableView::updateCursorValue(int offset) {
   isDirty_ = true;
 }
 
+void TableView::updateSelectionValue(int offset) {
+  saveRow_ = row_;
+  saveCol_ = col_;
+
+  GUIRect r = getSelectionRect();
+  col_ = r.Left();
+  row_ = r.Top();
+
+  for (int i = 0; i <= r.Width(); i++) {
+    for (int j = 0; j <= r.Height(); j++) {
+      if (col_ + i < 6) {
+        updateCursorValue(offset, i, j);
+      }
+    }
+  }
+  row_ = saveRow_;
+  col_ = saveCol_;
+}
+
 void TableView::pasteLast() {
   uchar *c = 0;
 
@@ -545,7 +708,7 @@ void TableView::pasteLast() {
   switch (col_) {
   case 0:
     c = (unsigned char *)table.cmd1_ + row_;
-    if (*c == FourCC::InstrumentCommandNone) {
+    if (*c == TrackerCommand::InstrumentCommandNone) {
       *c = lastCmd_;
       isDirty_ = true;
     } else {
@@ -558,7 +721,7 @@ void TableView::pasteLast() {
 
   case 2:
     c = (unsigned char *)table.cmd2_ + row_;
-    if (*c == FourCC::InstrumentCommandNone) {
+    if (*c == TrackerCommand::InstrumentCommandNone) {
       *c = lastCmd_;
       isDirty_ = true;
     } else {
@@ -571,7 +734,7 @@ void TableView::pasteLast() {
 
   case 4:
     c = (unsigned char *)table.cmd3_ + row_;
-    if (*c == FourCC::InstrumentCommandNone) {
+    if (*c == TrackerCommand::InstrumentCommandNone) {
       *c = lastCmd_;
       isDirty_ = true;
     } else {
@@ -585,6 +748,10 @@ void TableView::pasteLast() {
 };
 
 void TableView::ProcessButtonMask(unsigned short mask, bool pressed) {
+  Trace::Log("BUTTON_PROBE",
+             "Table ProcessButtonMask mask:%04x pressed:%d mode:%d col:%d "
+             "row:%d",
+             mask, pressed ? 1 : 0, viewMode_, col_, row_);
 
   if (!pressed) {
     return;
@@ -701,6 +868,14 @@ void TableView::processSelectionButtonMask(unsigned short mask) {
     // A Modifer
 
     if (mask & EPBM_ENTER) {
+      if (mask & EPBM_DOWN)
+        updateSelectionValue(-0x10);
+      if (mask & EPBM_UP)
+        updateSelectionValue(0x10);
+      if (mask & EPBM_LEFT)
+        updateSelectionValue(-0x01);
+      if (mask & EPBM_RIGHT)
+        updateSelectionValue(0x01);
       if (mask & EPBM_ALT)
         cutSelection();
       //		if (mask&EPBM_R) switchSoloMode() ;
@@ -783,12 +958,13 @@ void TableView::DrawView() {
 
   Table &table = TableHolder::GetInstance()->GetTable(viewData_->currentTable_);
 
-  // Draw title
-
-  char title[20];
-  SetColor(CD_NORMAL);
-  npf_snprintf(title, sizeof(title), "Table %2.2X", viewData_->currentTable_);
-  DrawString(pos._x, pos._y, title, props);
+  // Draw title (help text will overwrite it when cursor is on a command column)
+  etl::string<23> title("Table ");
+  etl::format_spec format;
+  format.width(2).fill('0');
+  etl::to_string(viewData_->currentTable_, title, format, true);
+  setTitle(title);
+  // drawTitlebar(props);
 
   // Compute song grid location
 
@@ -812,10 +988,10 @@ void TableView::DrawView() {
 
   pos = anchor;
 
-  FourCC *f = table.cmd1_;
+  TrackerCommand *f = table.cmd1_;
 
   for (int j = 0; j < 16; j++) {
-    FourCC command = *f++;
+    TrackerCommand command = *f++;
     setTextProps(props, 0, j, false);
     DrawString(pos._x, pos._y, command.c_str(), props);
     setTextProps(props, 0, j, true);
@@ -850,7 +1026,7 @@ void TableView::DrawView() {
   f = table.cmd2_;
 
   for (int j = 0; j < 16; j++) {
-    FourCC command = *f++;
+    TrackerCommand command = *f++;
     setTextProps(props, 2, j, false);
     DrawString(pos._x, pos._y, command.c_str(), props);
     setTextProps(props, 2, j, true);
@@ -885,7 +1061,7 @@ void TableView::DrawView() {
   f = table.cmd3_;
 
   for (int j = 0; j < 16; j++) {
-    FourCC command = *f++;
+    TrackerCommand command = *f++;
     setTextProps(props, 4, j, false);
     DrawString(pos._x, pos._y, command.c_str(), props);
     setTextProps(props, 4, j, true);
@@ -935,14 +1111,28 @@ void TableView::OnPlayerUpdate(PlayerEventType eventType, unsigned int tick) {
   needsUIUpdate_ = true;
   needsNotesUpdate_ = true;
   needsPlayPositionUpdate_ = true;
-
-  // Create a memory barrier to ensure changes are visible across cores
-  createMemoryBarrier();
 }
 
 void TableView::AnimationUpdate() {
   // First call the parent class implementation to draw the battery gauge
   ScreenView::AnimationUpdate();
+
+  // Redraw help legend if cursor is on a command column (ScreenView::
+  // AnimationUpdate redraws the title bar which overwrites it)
+  GUITextProperties props;
+  drawTitlebar(props);
+  if (col_ >= 0 && col_ <= 5) {
+    Table &table =
+        TableHolder::GetInstance()->GetTable(viewData_->currentTable_);
+    TrackerCommand cmd = table.cmd1_[row_];
+    if (col_ >= 2 && col_ <= 3) {
+      cmd = table.cmd2_[row_];
+    }
+    if (col_ >= 4 && col_ <= 5) {
+      cmd = table.cmd3_[row_];
+    }
+    printHelpLegend(cmd, props);
+  }
 
   // Get player instance safely
   Player *player = Player::GetInstance();
@@ -978,28 +1168,34 @@ void TableView::AnimationUpdate() {
     if (player->IsRunning()) {
       // Get current channel
       int channel = viewData_->songX_;
-      // Table associated to the channel player
       TablePlayback &tpb = TablePlayback::GetTablePlayback(channel);
-      Table *playbackTable = tpb.GetTable();
-      // Table we're viewing
+      TablePlayback &atp = TablePlayback::GetAutomationPlayback(channel);
       Table &viewTable = th->GetTable(viewData_->currentTable_);
 
-      if (playbackTable == &viewTable && viewData_->playMode_ != PM_AUDITION) {
-        // Draw cursors at current positions
+      if (viewData_->playMode_ != PM_AUDITION) {
         SetColor(CD_ACCENT);
-        for (int i = 0; i < 3; i++) {
-          int yPos = tpb.GetPlaybackPosition(i);
-          if (yPos >= 0 && yPos < 16) { // Only draw if position is valid
-            pos._x = anchor._x - 1 + (i * 9);
-            pos._y = anchor._y + yPos;
-            DrawString(pos._x, pos._y, ">", props);
+        if (tpb.GetTable() == &viewTable) {
+          for (int i = 0; i < 3; i++) {
+            int yPos = tpb.GetPlaybackPosition(i);
+            if (yPos >= 0 && yPos < 16) {
+              pos._x = anchor._x - 1 + (i * 9);
+              pos._y = anchor._y + yPos;
+              DrawString(pos._x, pos._y, ">", props);
+            }
+          }
+        }
+        if (atp.GetTable() == &viewTable) {
+          for (int i = 0; i < 3; i++) {
+            int yPos = atp.GetPlaybackPosition(i);
+            if (yPos >= 0 && yPos < 16) {
+              pos._x = anchor._x - 1 + (i * 9);
+              pos._y = anchor._y + yPos;
+              DrawString(pos._x, pos._y, ">", props);
+            }
           }
         }
       }
     }
-
-    // Create a memory barrier to ensure proper synchronization between cores
-    createMemoryBarrier();
 
     // Reset the consolidated flag
     needsUIUpdate_ = false;
@@ -1007,17 +1203,4 @@ void TableView::AnimationUpdate() {
 
   // Flush the window to ensure changes are displayed
   w_.Flush();
-}
-
-void TableView::printHelpLegend(FourCC command, GUITextProperties props) {
-  char **helpLegend = getHelpLegend(command);
-  char line[32]; //-1 for 1char space start of line
-  strcpy(line, " ");
-  strcpy(line, helpLegend[0]);
-  DrawString(0, 0, line, props);
-  memset(line, ' ', 32);
-  if (helpLegend[1] != NULL) {
-    strcpy(line, helpLegend[1]);
-    DrawString(0, 1, line, props);
-  }
 }

@@ -38,7 +38,7 @@ subject to its own license. Below is a summary of included external code:
    SPDX-License-Identifier: MIT
    License file: sources/Externals/SdFat/LICENSE.md
 
-4. SdFat
+4. TinyXML2
    Path: sources/Externals/TinyXML2
    SPDX-License-Identifier: Zlib
    License file: sources/Externals/TinyXML2/LICENSE.txt
@@ -68,35 +68,42 @@ subject to its own license. Below is a summary of included external code:
    SPDX-License-Identifier: Unlicense (or equivalent)
    License file: sources/Externals/opal/LICENSE.md
 
-10. pico-sdk
-   Path: sources/Externals/pico-sdk
-   SPDX-License-Identifier: BSD-3-Clause
-   License file: sources/Externals/pico-sdk/LICENSE.TXT
-
-11. opal
+10. yxml
    Path: sources/Externals/yxml
    SPDX-License-Identifier: MIT
    License file: sources/Externals/yxml/COPYING
 
-12. STM32 CMSIS
+11. STM32 CMSIS
    Path: sources/Adapters/adv/Drivers/CMSIS
    SPDX-License-Identifier: Apache-2.0
    License file: sources/Adapters/adv/Drivers/CMSIS/LICENSE.txt
 
-13. STM32 HAL
+12. STM32 HAL
    Path: sources/Adapters/adv/Drivers/STM32H7xx_HAL_Driver
    SPDX-License-Identifier: BSD-3-Clause
    License file: sources/Adapters/adv/Drivers/STM32H7xx_HAL_Driver/LICENSE.txt
 
-14. Ubuntu Mono font
+13. Ubuntu Mono font
    Path: sources/Adapters/adv/display/font.h
    SPDX-License-Identifier: Ubuntu-font-1.0
    License file: sources/Adapters/adv/display/Ubuntu-Font-Licence-1.0.txt
 
-15. ZX-Origins fonts
-   Path: sources/Adapters/picoTracker/display/font.h
-   SPDX-License-Identifier: custom
-   License file: sources/Adapters/picoTracker/display/FONT-LICENSE.md
+14. Mutable Instruments Rings and stmlib
+   Paths: sources/Externals/rings, sources/Externals/stmlib
+   SPDX-License-Identifier: MIT
+   License text and copyright notices: individual source file headers
+
+15. tinyusb
+   Path: sources/Externals/tinyusb
+   SPDX-License-Identifier: MIT
+   License file: sources/Externals/tinyusb/LICENSE
+   Project contributions in files with mixed MIT/GPL notices are GPL-3.0-only.
+
+16. nanoprintf
+   Path: sources/System/Console/nanoprintf.h
+   SPDX-License-Identifier: 0BSD OR Unlicense
+   License texts: included at the end of the header
 
 The license texts for the above components are available in their respective
-folders. This project does not relicense or modify the terms of those licenses.
+folders. Original component licenses remain applicable to their respective portions;
+file-specific notices identify any separately licensed project contributions.

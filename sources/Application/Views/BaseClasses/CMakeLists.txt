@@ -1,10 +1,22 @@
+# SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+#
+# Copyright (c) 2026 xiphonics, inc.
+#
+# Inherited BSD-licensed material remains BSD-3-Clause.
+# New original contributions by xiphonics, inc. are GPL-3.0-only.
+# Previously granted BSD permissions are preserved. See LICENSING.md.
+
 add_library(application_views_baseclasses
+  BrowserListingStorage.cpp
   I_Action.cpp
   ModalView.cpp
   UIActionField.cpp
   UIBigHexVarField.cpp
   UIField.cpp
+  UIFieldInputDispatcher.cpp
   UIIntField.cpp
+  UIInsertAmountField.cpp
+  UILFOField.cpp
   UIIntVarField.cpp
   UIIntVarOffField.cpp
   UINoteVarField.cpp

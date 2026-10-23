@@ -1,17 +1,27 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "InstrumentImportView.h"
 #include "Application/AppWindow.h"
 #include "Application/Instruments/I_Instrument.h"
 #include "Application/Persistency/PersistencyService.h"
+#include "Application/Views/BaseClasses/BrowserEntrySort.h"
+#include "Application/Views/BaseClasses/BrowserPathUtils.h"
+#include "Externals/etl/include/etl/string.h"
+#include "Externals/etl/include/etl/to_string.h"
 #include "ModalDialogs/MessageBox.h"
+#include "System/FileSystem/PathUtils.h"
+#include <cstring>
 #include <memory>
 #include <nanoprintf.h>
 
@@ -19,9 +29,58 @@
 // -4 to allow for title, filesize & spacers
 #define LIST_PAGE_SIZE (SCREEN_HEIGHT - 4)
 
+namespace {
+
+bool extractLeafName(const char *path,
+                     etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &leafName) {
+  FileSystemPath::PathString baseName;
+  if (!FileSystemPath::BaseName(path, baseName)) {
+    leafName.clear();
+    return false;
+  }
+
+  leafName = baseName.c_str();
+  return !leafName.is_truncated() && !leafName.empty();
+}
+
+const FileSystemEntry *
+getCurrentEntry(const etl::ivector<FileSystemEntry> &entries,
+                const size_t currentIndex) {
+  if (currentIndex >= entries.size()) {
+    return nullptr;
+  }
+  return &entries[currentIndex];
+}
+
+bool resolveEntryPath(const FileSystemPath::PathString &currentDir,
+                      const FileSystemEntry &entry,
+                      FileSystemPath::PathString &resolvedPath) {
+  if (entry.name == "..") {
+    return BrowserPathUtils::ResolveParentDirectory(
+        currentDir.c_str(), INSTRUMENTS_DIR, resolvedPath);
+  }
+
+  return FileSystemPath::JoinPath(currentDir.c_str(), entry.name.c_str(),
+                                  resolvedPath);
+}
+
+bool isDirectoryListTruncated(FileSystem *fs) {
+  return fs != nullptr &&
+         fs->GetLastListDirectoryStatus() == DirectoryListStatus::Truncated;
+}
+
+void showDirectoryListTruncatedDialog(View &view) {
+  etl::string<24> line("Showing first ");
+  etl::to_string(MAX_FILE_INDEX_SIZE, line, true);
+  MessageBox *mb =
+      MessageBox::Create(view, "Directory too large", line.c_str(), MBBF_OK);
+  view.DoModal(mb);
+}
+
+} // namespace
+
 InstrumentImportView::InstrumentImportView(GUIWindow &w, ViewData *viewData)
-    : ScreenView(w, viewData) {
-  // Store the current instrument ID
+    : ScreenView(w, viewData), fileEntries_(GetInstrumentBrowserFileEntries()) {
   toInstrID_ = viewData_->currentInstrumentID_;
 }
 
@@ -32,7 +91,8 @@ void InstrumentImportView::Reset() {
   currentIndex_ = 0;
   selected_ = 0;
   toInstrID_ = 0;
-  fileIndexList_.clear();
+  currentDir_.clear();
+  fileEntries_.clear();
 }
 
 void InstrumentImportView::ProcessButtonMask(unsigned short mask,
@@ -41,20 +101,16 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
     return;
 
   if (mask & EPBM_PLAY) {
-    auto fs = FileSystem::GetInstance();
-    char name[PFILENAME_SIZE];
-
-    if (currentIndex_ < fileIndexList_.size()) {
-      unsigned fileIndex = fileIndexList_[currentIndex_];
-      fs->getFileName(fileIndex, name, PFILENAME_SIZE);
-
-      if (mask & EPBM_ALT) {
-        Trace::Log("INSTRUMENTIMPORT", "SHIFT play - import");
-        importInstrument(name);
-      } else {
-        // TODO: audition instrument by temporarily loading it and playing a
-        // note
+    const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+    FileSystemPath::PathString instrumentPath;
+    if (entry != nullptr && (mask & EPBM_ALT) && entry->type == PFT_FILE) {
+      if (!resolveEntryPath(currentDir_, *entry, instrumentPath)) {
+        return;
       }
+      Trace::Log("INSTRUMENTIMPORT", "SHIFT play - import");
+      importInstrument(instrumentPath.c_str());
+    } else {
+      // TODO: audition instrument by temporarily loading it and playing a note
     }
 
     // handle moving up and down the file list
@@ -63,30 +119,28 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
   } else if (mask & EPBM_DOWN) {
     warpToNextInstrument(false);
   } else if ((mask & EPBM_LEFT) && (mask & EPBM_NAV)) {
-    // Go to back "left" to instrument screen
     ViewType vt = VT_INSTRUMENT;
     ViewEvent ve(VET_SWITCH_VIEW, &vt);
     SetChanged();
     NotifyObservers(&ve);
     return;
   } else {
-    // ENTER modifier
     if (mask & EPBM_ENTER) {
       auto fs = FileSystem::GetInstance();
+      const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+      FileSystemPath::PathString selectedPath;
+      if (entry == nullptr) {
+        return;
+      }
 
-      if (currentIndex_ < fileIndexList_.size()) {
-        unsigned fileIndex = fileIndexList_[currentIndex_];
-        char name[PFILENAME_SIZE];
-        fs->getFileName(fileIndex, name, PFILENAME_SIZE);
+      if (!resolveEntryPath(currentDir_, *entry, selectedPath)) {
+        return;
+      }
 
-        // Only allow navigation into directories, not to parent directory
-        if (fs->getFileType(fileIndex) == PFT_DIR && strcmp(name, ".") != 0 &&
-            strcmp(name, "..") != 0) {
-          setCurrentFolder(fs, name);
-          isDirty_ = true;
-          topIndex_ = 0; // need to reset when entering a dir as prev dir may
-                         // have been already scrolled down
-        }
+      if (entry->type == PFT_DIR) {
+        setCurrentFolder(fs, selectedPath.c_str());
+        isDirty_ = true;
+        topIndex_ = 0;
       }
     }
   }
@@ -98,24 +152,16 @@ void InstrumentImportView::DrawView() {
   GUITextProperties props;
   GUIPoint pos = GetTitlePosition();
 
-  auto fs = FileSystem::GetInstance();
-
   // Draw title
-  const char *title = "Import Instrument";
-  SetColor(CD_INFO);
-  DrawString(pos._x + 1, pos._y, title, props);
+  setTitle(etl::string<23>("Import Instrument"));
 
   SetColor(CD_NORMAL);
 
-  // Draw instrument files
   int x = 1;
   int y = pos._y + 2;
 
-  // need to use fullsize buffer as sdfat doesnt truncate if filename longer
-  // than buffer but instead returns empty string in buffer :-(
-  char buffer[PFILENAME_SIZE];
   for (size_t i = topIndex_;
-       i < topIndex_ + LIST_PAGE_SIZE && (i < fileIndexList_.size()); i++) {
+       i < topIndex_ + LIST_PAGE_SIZE && (i < fileEntries_.size()); i++) {
     if (i == currentIndex_) {
       SetColor(CD_HILITE2);
       props.invert_ = true;
@@ -124,18 +170,13 @@ void InstrumentImportView::DrawView() {
       props.invert_ = false;
     }
 
-    memset(buffer, '\0', sizeof(buffer));
-    unsigned fileIndex = fileIndexList_[i];
-    fs->getFileName(fileIndex, buffer, PFILENAME_SIZE);
-
-    if (fs->getFileType(fileIndex) == PFT_DIR) {
-      // Draw a directory
+    const auto &entry = fileEntries_[i];
+    if (entry.type == PFT_DIR) {
       DrawString(x, y, "[", props);
-      DrawString(x + 1, y, buffer, props);
-      DrawString(x + strlen(buffer) + 1, y, "]", props);
+      DrawString(x + 1, y, entry.name.c_str(), props);
+      DrawString(x + entry.name.size() + 1, y, "]", props);
     } else {
-      // Draw a file
-      DrawString(x, y, buffer, props);
+      DrawString(x, y, entry.name.c_str(), props);
     }
     y++;
   }
@@ -145,13 +186,11 @@ void InstrumentImportView::OnPlayerUpdate(PlayerEventType, unsigned int tick) {}
 
 void InstrumentImportView::OnFocus() {
   auto fs = FileSystem::GetInstance();
-
-  // Navigate to the instruments directory
   setCurrentFolder(fs, INSTRUMENTS_DIR);
 }
 
 void InstrumentImportView::warpToNextInstrument(bool goUp) {
-  if (fileIndexList_.empty())
+  if (fileEntries_.empty())
     return;
 
   if (goUp) {
@@ -162,7 +201,7 @@ void InstrumentImportView::warpToNextInstrument(bool goUp) {
       }
     }
   } else {
-    if (currentIndex_ < fileIndexList_.size() - 1) {
+    if (currentIndex_ < fileEntries_.size() - 1) {
       currentIndex_++;
       if (currentIndex_ >= topIndex_ + LIST_PAGE_SIZE) {
         topIndex_ = currentIndex_ - LIST_PAGE_SIZE + 1;
@@ -172,14 +211,21 @@ void InstrumentImportView::warpToNextInstrument(bool goUp) {
   isDirty_ = true;
 }
 
-void InstrumentImportView::importInstrument(char *name) {
-  // TODO: check that current instrument is not modified
+void InstrumentImportView::importInstrument(const char *name) {
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> leafName;
+  if (!extractLeafName(name, leafName)) {
+    Trace::Error("INSTRUMENTIMPORT: Failed to extract leaf name from %s", name);
+    MessageBox *mb =
+        MessageBox::Create(*this, "Invalid instrument file", MBBF_OK);
+    DoModal(mb);
+    return;
+  }
 
-  // Check if the filename exceeds the maximum allowed length
-  if (strlen(name) > MAX_INSTRUMENT_FILENAME_LENGTH) {
+  if (leafName.size() > MAX_INSTRUMENT_FILENAME_LENGTH) {
     Trace::Error("INSTRUMENTIMPORT: Instrument filename exceeds maximum "
                  "length: %s (%zu > %d)",
-                 name, strlen(name), MAX_INSTRUMENT_FILENAME_LENGTH);
+                 leafName.c_str(), leafName.size(),
+                 MAX_INSTRUMENT_FILENAME_LENGTH);
 
     char sizeMesg[32];
     npf_snprintf(sizeMesg, sizeof(sizeMesg), "Max is %d chars",
@@ -190,16 +236,11 @@ void InstrumentImportView::importInstrument(char *name) {
     return;
   }
 
-  // Get the current instrument bank
   InstrumentBank *bank = viewData_->project_->GetInstrumentBank();
-
-  // assert bank is not null
   assert(bank);
 
-  // use current instrument ID if importing a new instrument
   toInstrID_ = viewData_->currentInstrumentID_;
 
-  // First detect the instrument type from the file
   InstrumentType importedType =
       PersistencyService::GetInstance()->DetectInstrumentType(name);
 
@@ -214,7 +255,6 @@ void InstrumentImportView::importInstrument(char *name) {
   Trace::Log("INSTRUMENTIMPORT", "Importing instrument from file: %s", name);
   Trace::Log("INSTRUMENTIMPORT", "Target instrument ID: %d", toInstrID_);
 
-  // Get the current instrument
   I_Instrument *currentInstrument = bank->GetInstrument(toInstrID_);
 
   if (!currentInstrument) {
@@ -223,7 +263,6 @@ void InstrumentImportView::importInstrument(char *name) {
     return;
   }
 
-  // Log the current instrument type for debugging
   Trace::Log("INSTRUMENTIMPORT",
              "Current instrument type: %d, Imported type: %d",
              currentInstrument->GetType(), importedType);
@@ -232,10 +271,8 @@ void InstrumentImportView::importInstrument(char *name) {
     Trace::Log("INSTRUMENTIMPORT", "Converting instrument from type %d to %d",
                currentInstrument->GetType(), importedType);
 
-    // Delete the current instrument
     bank->releaseInstrument(toInstrID_);
 
-    // Create a new instrument of the correct type in the same slot
     if (bank->GetNextAndAssignID(importedType, toInstrID_) ==
         NO_MORE_INSTRUMENT) {
       MessageBox *mb =
@@ -253,31 +290,19 @@ void InstrumentImportView::importInstrument(char *name) {
                importedType, toInstrID_);
   }
 
-  // Force the ViewData to update its current instrument type
-  // This ensures the InstrumentView will show the correct instrument type
-  // when we return to it
   Trace::Log("INSTRUMENTIMPORT", "Created new instrument of type %d",
              importedType);
 
-  // Get the updated instrument (which may be a new one if we converted)
   I_Instrument *instrument = bank->GetInstrument(toInstrID_);
-
-  // Import the instrument settings
   PersistencyResult result =
       PersistencyService::GetInstance()->ImportInstrument(instrument, name);
 
-  // debug logging to show final instrument type
   Trace::Log("INSTRUMENTIMPORT", "Imported TYPE: %d", instrument->GetType());
 
   if (result == PERSIST_LOADED) {
-    // Force a strong notification to ensure the UI updates
-    // First mark the instrument as changed
     instrument->SetChanged();
-
-    // Then notify all observers to update their state
     instrument->NotifyObservers();
 
-    // Log the final state of the instrument for debugging
     Variable *channelVar =
         instrument->FindVariable(FourCC::MidiInstrumentChannel);
     if (channelVar) {
@@ -285,19 +310,14 @@ void InstrumentImportView::importInstrument(char *name) {
                  channelVar->GetInt());
     }
 
-    // Log the final instrument type for debugging
     Trace::Log("INSTRUMENTIMPORT",
                "Final instrument type in importInstrument: %d",
                instrument->GetType());
 
-    // Update the current instrument ID in the view data
-    // This ensures the InstrumentView will display the correct instrument when
-    // we return
     viewData_->currentInstrumentID_ = toInstrID_;
     Trace::Log("INSTRUMENTIMPORT",
                "Updated viewData_ currentInstrumentID_ to: %d", toInstrID_);
 
-    // Show success message and return to instrument view
     MessageBox *mb = MessageBox::Create(*this, "Import successful", MBBF_OK);
     DoModal(mb,
             ModalViewCallback::create<InstrumentImportView,
@@ -333,17 +353,48 @@ void InstrumentImportView::onImportSuccess(View &, ModalView &dialog) {
 }
 
 void InstrumentImportView::setCurrentFolder(FileSystem *fs, const char *name) {
-  if (!fs->chdir(name)) {
-    Trace::Error("FAILED to chdir to %s", name);
+  if (fs == nullptr || name == nullptr) {
     return;
   }
+
+  FileSystemPath::PathString nextDir;
+  if (std::strcmp(name, "..") == 0) {
+    if (!BrowserPathUtils::ResolveParentDirectory(currentDir_.c_str(),
+                                                  INSTRUMENTS_DIR, nextDir)) {
+      return;
+    }
+  } else if (FileSystemPath::IsAbsolutePath(name)) {
+    if (!FileSystemPath::NormalizePath(name, nextDir)) {
+      Trace::Error("INSTRUMENTIMPORT: Failed to normalize %s", name);
+      return;
+    }
+  } else if (!FileSystemPath::JoinPath(currentDir_.c_str(), name, nextDir)) {
+    Trace::Error("INSTRUMENTIMPORT: Failed to resolve %s from %s", name,
+                 currentDir_.c_str());
+    return;
+  }
+
+  fileEntries_.clear();
+  const bool listed = fs->ListDirectory(nextDir.c_str(), &fileEntries_,
+                                        INSTRUMENT_FILE_EXTENSION, false);
+  const bool truncated = isDirectoryListTruncated(fs);
+  if (!listed && !truncated) {
+    Trace::Error("INSTRUMENTIMPORT: Failed to list %s", nextDir.c_str());
+    return;
+  }
+  if (truncated) {
+    Trace::Error("INSTRUMENTIMPORT: Truncated listing for %s", nextDir.c_str());
+    showDirectoryListTruncatedDialog(*this);
+  }
+
+  SortBrowserEntries(fileEntries_);
+
+  currentDir_ = nextDir;
   currentIndex_ = 0;
   topIndex_ = 0;
   isDirty_ = true;
-
-  // Update list of file indexes in this new dir
-  fileIndexList_.clear();
-  // Use false for subDirOnly to include both files and directories
-  fs->list(&fileIndexList_, INSTRUMENT_FILE_EXTENSION, false);
-  Trace::Debug("loaded %d files from %s", fileIndexList_.size(), name);
+  BrowserPathUtils::PrependParentEntry(currentDir_.c_str(), INSTRUMENTS_DIR,
+                                       &fileEntries_);
+  Trace::Debug("loaded %d files from %s", fileEntries_.size(),
+               currentDir_.c_str());
 }

@@ -1,27 +1,20 @@
 /*
- * Test stub for host-only builds.
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+ *
+ * Copyright (c) 2026 xiphonics, inc.
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
-#ifndef _CONFIG_H_
-#define _CONFIG_H_
 
-class Config {
-public:
-  static Config *GetInstance() {
-    static Config instance;
-    return &instance;
-  }
+/*
+ * Host-test wrapper that keeps the stub include path stable while using the
+ * real Config implementation everywhere in the unified test binary.
+ */
+#ifndef _HOST_TEST_CONFIG_WRAPPER_H_
+#define _HOST_TEST_CONFIG_WRAPPER_H_
 
-  int GetValue(const char *key) {
-    (void)key;
-    return importResampler_;
-  }
-
-  static void SetImportResampler(int value) {
-    GetInstance()->importResampler_ = value;
-  }
-
-private:
-  int importResampler_ = 0;
-};
+#include "../../../../sources/Application/Model/Config.h"
 
 #endif

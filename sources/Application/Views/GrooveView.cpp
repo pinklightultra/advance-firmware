@@ -1,19 +1,23 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "GrooveView.h"
 #include "Application/Model/Groove.h"
 #include "Application/Utils/char.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Externals/etl/include/etl/to_string.h"
 #include "ViewData.h"
 #include <Application/AppWindow.h>
-#include <nanoprintf.h>
 
 GrooveView::GrooveView(GUIWindow &w, ViewData *viewData)
     : ScreenView(w, viewData) {
@@ -158,13 +162,11 @@ void GrooveView::DrawView() {
   GUIPoint pos = GetTitlePosition();
 
   // Draw title
-  char title[SCREEN_WIDTH + 1];
-
-  SetColor(CD_NORMAL);
-
-  npf_snprintf(title, sizeof(title), "Groove: %2.2X",
-               viewData_->currentGroove_);
-  DrawString(pos._x, pos._y, title, props);
+  etl::string<23> title("Groove: ");
+  etl::format_spec format;
+  format.width(2).fill('0');
+  etl::to_string(viewData_->currentGroove_, title, format, true);
+  setTitle(title);
 
   // Compute song grid location
 

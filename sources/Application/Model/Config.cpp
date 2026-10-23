@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Config.h"
@@ -13,14 +17,79 @@
 #include "Externals/etl/include/etl/flat_map.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Externals/etl/include/etl/string_utilities.h"
-#include "Services/Midi/MidiService.h"
 #include "System/Console/Trace.h"
 #include "System/Console/nanoprintf.h"
 #include "System/FileSystem/FileSystem.h"
 #include "System/FileSystem/I_File.h"
+#include "System/FileSystem/PathUtils.h"
 #include "ThemeConstants.h"
 #include "Variable.h"
 #include <stdlib.h>
+
+namespace {
+
+constexpr FourCC::enum_type THEME_COLOR_VARIABLE_IDS[] = {
+    FourCC::VarBGColor,
+    FourCC::VarFGColor,
+    FourCC::VarHI1Color,
+    FourCC::VarHI2Color,
+    FourCC::VarConsoleColor,
+    FourCC::VarCursorColor,
+    FourCC::VarInfoColor,
+    FourCC::VarWarnColor,
+    FourCC::VarErrorColor,
+    FourCC::VarAccentColor,
+    FourCC::VarAccentAltColor,
+    FourCC::VarEmphasisColor,
+};
+
+bool isThemeColorVariable(FourCC id) {
+  for (FourCC::enum_type colorID : THEME_COLOR_VARIABLE_IDS) {
+    if (id == colorID) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool resolveThemePath(const char *themeName, FileSystemPath::PathString &path) {
+  if (themeName == nullptr || themeName[0] == '\0') {
+    return false;
+  }
+
+  if (FileSystemPath::IsAbsolutePath(themeName)) {
+    return FileSystemPath::NormalizePath(themeName, path);
+  }
+
+  FileSystemPath::PathString themeLeaf(themeName);
+  const char *extension = strrchr(themeName, '.');
+  if (!extension || strcmp(extension, THEME_FILE_EXTENSION) != 0) {
+    themeLeaf.append(THEME_FILE_EXTENSION);
+  }
+
+  return FileSystemPath::JoinPath(THEMES_DIR, themeLeaf.c_str(), path);
+}
+
+bool extractThemeName(const char *themePath,
+                      etl::string<MAX_THEME_NAME_LENGTH> &themeName) {
+  FileSystemPath::PathString baseName;
+  if (!FileSystemPath::BaseName(themePath, baseName)) {
+    themeName.clear();
+    return false;
+  }
+
+  const char *extension = strrchr(baseName.c_str(), '.');
+  if (extension && strcmp(extension, THEME_FILE_EXTENSION) == 0) {
+    themeName.assign(baseName.c_str(),
+                     static_cast<size_t>(extension - baseName.c_str()));
+  } else {
+    themeName = baseName.c_str();
+  }
+
+  return !themeName.empty();
+}
+
+} // namespace
 
 #define CONFIG_FILE_PATH "/.config.xml"
 #define CONFIG_VERSION_NUMBER 1
@@ -28,19 +97,17 @@
 #define MIDI_DEVICE_LEN 4
 
 static const char *lineOutOptions[3] = {"HP Low", "HP High", "Line Level"};
-static const char *midiDeviceList[MIDI_DEVICE_LEN] = {"OFF", "TRS", "USB",
+static const char *midiDeviceList[MIDI_DEVICE_LEN] = {"Off", "TRS", "USB",
                                                       "TRS+USB"};
+static const char *midiInputDeviceList[4] = {"Off", "TRS", "USB",
+                                             "TRS+USB"};
 static const char *midiSendSync[2] = {"Off", "Send"};
 static const char *midiClockSyncOptions[2] = {"Internal", "External"};
 static const char *remoteUIOnOff[2] = {"Off", "On"};
-#ifdef ADV
+static const char *midiControlSurfaceOptions[2] = {"Off", "Auto"};
 static const char *importResamplerOptions[] = {"None", "Linear", "Sinc",
-                                               "Sinc Best"};
+                                               "Sinc HQ"};
 static constexpr int kImportResamplerOptionCount = 4;
-#else
-static const char *importResamplerOptions[] = {"None", "Linear"};
-static constexpr int kImportResamplerOptionCount = 2;
-#endif
 
 // NOTE: these MUST match up to the RecordSource enum in record.h (of all
 // adapters) also note we *dont* show "All Off" as a UI option for now
@@ -54,6 +121,8 @@ typedef etl::string<13> ParamString;
 // Other default values not related to theme colors:
 constexpr int DEFAULT_LINEOUT = 0x2;
 constexpr int DEFAULT_MIDIDEVICE = 0x0;
+constexpr int DEFAULT_MIDI_INPUT_DEVICE = 0x0;
+constexpr int DEFAULT_MIDI_CONTROL_SURFACE = 0x0;
 constexpr int DEFAULT_MIDISYNC = 0x0;
 constexpr int DEFAULT_REMOTEUI = 0x1;
 constexpr int DEFAULT_BACKLIGHT_LEVEL = 0xFF; // Default to max brightness (255)
@@ -61,11 +130,19 @@ constexpr int DEFAULT_REC_SOURCE = 0x0;
 constexpr int DEFAULT_RECORD_LINE_GAIN_DB = 0;
 constexpr int DEFAULT_RECORD_MIC_GAIN_DB = 0;
 constexpr int DEFAULT_OUTPUT_VOLUME = 40;
-#ifdef ADV
 constexpr int DEFAULT_IMPORT_RESAMPLER = 2; // Sinc by default
-#else
-constexpr int DEFAULT_IMPORT_RESAMPLER = 0; // default for picoTracker is none (as original)
-#endif
+
+int NormalizeImportResamplerValue(int value) {
+  if (value <= 0 || value >= kImportResamplerOptionCount) {
+    return DEFAULT_IMPORT_RESAMPLER;
+  }
+
+  return value;
+}
+
+int NormalizeMidiControlSurfaceValue(int value) {
+  return value <= 0 ? 0 : 1;
+}
 
 // Use a struct to define parameter information
 struct ConfigParam {
@@ -171,6 +248,18 @@ static const ConfigParam configParams[] = {
      midiDeviceList,
      4,
      false},
+    {"MIDIINPUTDEV",
+     {.intValue = DEFAULT_MIDI_INPUT_DEVICE},
+     FourCC::VarMidiInputDevice,
+     midiInputDeviceList,
+     4,
+     false},
+    {"MIDICTRLSURF",
+     {.intValue = DEFAULT_MIDI_CONTROL_SURFACE},
+     FourCC::VarMidiControlSurface,
+     midiControlSurfaceOptions,
+     2,
+     false},
     {"MIDISYNC",
      {.intValue = DEFAULT_MIDISYNC},
      FourCC::VarMidiSync,
@@ -274,6 +363,11 @@ Config::Config()
                      static_cast<int>(ThemeConstants::DEFAULT_EMPHASIS)),
       lineOut_(FourCC::VarLineOut, lineOutOptions, 3, DEFAULT_LINEOUT),
       midiDevice_(FourCC::VarMidiDevice, midiDeviceList, 4, DEFAULT_MIDIDEVICE),
+      midiInputDevice_(FourCC::VarMidiInputDevice, midiInputDeviceList,
+                       4, DEFAULT_MIDI_INPUT_DEVICE),
+      midiControlSurface_(FourCC::VarMidiControlSurface,
+                          midiControlSurfaceOptions, 2,
+                          DEFAULT_MIDI_CONTROL_SURFACE),
       midiSync_(FourCC::VarMidiSync, midiSendSync, 2, DEFAULT_MIDISYNC),
       remoteUI_(FourCC::VarRemoteUI, remoteUIOnOff, 2, DEFAULT_REMOTEUI),
       importResampler_(FourCC::VarImportResampler, importResamplerOptions,
@@ -301,6 +395,8 @@ Config::Config()
   variables_.push_back(&emphasisColor_);
   variables_.push_back(&lineOut_);
   variables_.push_back(&midiDevice_);
+  variables_.push_back(&midiInputDevice_);
+  variables_.push_back(&midiControlSurface_);
   variables_.push_back(&midiSync_);
   variables_.push_back(&remoteUI_);
   variables_.push_back(&importResampler_);
@@ -328,6 +424,7 @@ Config::Config()
     Save(); // and write the defaults to SDCard
     return;
   }
+
   elem = doc.FirstChild(); // now get first child element of CONFIG
   while (elem) {
     // Check if the parameter exists in our parameters list
@@ -367,7 +464,13 @@ Config::Config()
         for (const auto &param : configParams) {
           if (!strcmp(doc.ElemName(), param.name)) {
             if (Variable *var = FindVariable(param.fourcc)) {
-              var->SetInt(atoi(doc.attrval_));
+              int value = atoi(doc.attrval_);
+              if (param.fourcc == FourCC::VarImportResampler) {
+                value = NormalizeImportResamplerValue(value);
+              } else if (param.fourcc == FourCC::VarMidiControlSurface) {
+                value = NormalizeMidiControlSurfaceValue(value);
+              }
+              var->SetInt(value);
               Trace::Log("CONFIG", "Set %s = %s", param.name, doc.attrval_);
             }
             break;
@@ -407,16 +510,7 @@ void Config::WriteColorVariables(tinyxml2::XMLPrinter *printer) {
     FourCC id = var->GetID();
 
     // Check if this is a color variable
-    if (id == FourCC::VarBGColor || id == FourCC::VarFGColor ||
-        id == FourCC::VarHI1Color || id == FourCC::VarHI2Color ||
-        id == FourCC::VarConsoleColor || id == FourCC::VarCursorColor ||
-        id == FourCC::VarInfoColor || id == FourCC::VarWarnColor ||
-        id == FourCC::VarErrorColor || id == FourCC::VarAccentColor ||
-        id == FourCC::VarAccentAltColor || id == FourCC::VarEmphasisColor
-        // ||
-        // id == FourCC::VarReserved1Color || id == FourCC::VarReserved2Color ||
-        // id == FourCC::VarReserved3Color || id == FourCC::VarReserved4Color
-    ) {
+    if (isThemeColorVariable(id)) {
 
       // Open a Color element
       printer->OpenElement("Color");
@@ -581,12 +675,7 @@ void Config::SaveContent(tinyxml2::XMLPrinter *printer) {
     FourCC id = var->GetID();
 
     // Skip color variables as they will be handled by WriteColorVariables
-    if (id == FourCC::VarBGColor || id == FourCC::VarFGColor ||
-        id == FourCC::VarHI1Color || id == FourCC::VarHI2Color ||
-        id == FourCC::VarConsoleColor || id == FourCC::VarCursorColor ||
-        id == FourCC::VarInfoColor || id == FourCC::VarWarnColor ||
-        id == FourCC::VarErrorColor || id == FourCC::VarAccentColor ||
-        id == FourCC::VarAccentAltColor || id == FourCC::VarEmphasisColor ||
+    if (isThemeColorVariable(id) ||
         id == FourCC::VarReserved1Color || id == FourCC::VarReserved2Color ||
         id == FourCC::VarReserved3Color || id == FourCC::VarReserved4Color) {
       it++;
@@ -661,6 +750,21 @@ bool Config::LoadTheme(PersistencyDocument *doc) {
   return true;
 }
 
+void Config::ResetTheme() {
+  for (FourCC::enum_type colorID : THEME_COLOR_VARIABLE_IDS) {
+    if (Variable *variable = FindVariable(colorID)) {
+      variable->Reset();
+    }
+  }
+
+  if (Variable *font = FindVariable(FourCC::VarUIFont)) {
+    font->Reset();
+  }
+  if (Variable *name = FindVariable(FourCC::VarThemeName)) {
+    name->Reset();
+  }
+}
+
 int Config::GetValue(const char *key) {
   Variable *v = FindVariable(key);
   if (v) {
@@ -714,27 +818,18 @@ bool Config::ExportTheme(const char *themeName, bool overwrite) {
 bool Config::ImportTheme(const char *themeName) {
   auto fs = FileSystem::GetInstance();
 
-  // Check if the filename already has the .ptt extension
-  etl::string<MAX_THEME_NAME_LENGTH + strlen(THEME_FILE_EXTENSION)> filename =
-      themeName;
-  const char *extension = strrchr(themeName, '.');
-  if (!extension || strcmp(extension, THEME_FILE_EXTENSION) != 0) {
-    // Add .ptt extension only if it's not already there
-    filename.append(THEME_FILE_EXTENSION);
+  FileSystemPath::PathString path;
+  if (!resolveThemePath(themeName, path)) {
+    Trace::Error("Failed to resolve theme path for %s",
+                 themeName ? themeName : "(null)");
+    return false;
   }
 
-  // Extract the theme name without extension for storing in the config
-  etl::string<MAX_THEME_NAME_LENGTH> baseThemeName = themeName;
-  if (extension && strcmp(extension, THEME_FILE_EXTENSION) == 0) {
-    // Remove the extension from the theme name
-    baseThemeName =
-        etl::string<MAX_THEME_NAME_LENGTH>(themeName, extension - themeName);
+  etl::string<MAX_THEME_NAME_LENGTH> baseThemeName;
+  if (!extractThemeName(path.c_str(), baseThemeName)) {
+    Trace::Error("Failed to extract theme name from %s", path.c_str());
+    return false;
   }
-
-  // Build the full path to the theme file
-  etl::string<MAX_THEME_EXPORT_PATH_LENGTH> path = THEMES_DIR;
-  path.append("/");
-  path.append(filename);
 
   // Sanity check if the file exists
   if (!fs->exists(path.c_str())) {

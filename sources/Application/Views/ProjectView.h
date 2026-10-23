@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _PROJECT_VIEW_H_
@@ -17,6 +21,8 @@
 #include "BaseClasses/UITextField.h"
 #include "FieldView.h"
 #include "Foundation/Observable.h"
+#include "UIFramework/BasicDatas/GUIPoint.h"
+#include "UIFramework/BasicDatas/GUIRect.h"
 #include "ViewData.h"
 #include <stdint.h>
 
@@ -55,8 +61,6 @@ public:
   void OnQuit();
 
 private:
-  bool canRenderFromFirstSongRow() const;
-
   Project *project_;
   // Debug
   unsigned long lastTick_;
@@ -71,9 +75,13 @@ private:
 
   // References to specific fields that need direct access
   UITextField<MAX_PROJECT_NAME_LENGTH> *nameField_;
+  UIActionField *mixdownField_ = nullptr;
+  UIActionField *stemsField_ = nullptr;
+  GUIPoint renderLabelPos_;
   bool saveAsFlag_ = false;
   etl::string<MAX_PROJECT_NAME_LENGTH> oldProjName_;
 
+  void DrawRenderSelectionSummary(const GUIRect &selectionRect);
   bool CanExit();
 };
 #endif

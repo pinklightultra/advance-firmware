@@ -1,9 +1,20 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+ *
+ * Copyright (c) 2026 xiphonics, inc.
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
+ */
+
 #include "record.h"
 #include "Application/Instruments/WavHeader.h"
 #include "Application/Persistency/PersistenceConstants.h"
 #include "Application/Player/Player.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/FileSystem/PathUtils.h"
 #include "sai.h"
 #include "sd_diskio.h"
 #include "tlv320aic3204.h"
@@ -22,9 +33,9 @@ static constexpr uint32_t kStopRecordingTimeoutMs = 30000;
 // On ADV hardware, mic signal is present on the even interleaved lane.
 static constexpr uint8_t kMicInputLaneIndex = 0;
 
-__attribute__((section(".SDRAM1"))) __attribute__((aligned(32)))
+__attribute__((section(".SDRAM1_NC"))) __attribute__((aligned(32)))
 uint16_t recordBuffer[RECORD_BUFFER_SIZE];
-__attribute__((section(".SDRAM1")))
+__attribute__((section(".SDRAM1_NC")))
 __attribute__((aligned(32))) static uint16_t recordRamBuffer[kRecordRamSamples];
 
 TaskHandle_t RecordHandle = NULL;
@@ -41,17 +52,8 @@ static volatile bool recordingSessionActive = false;
 static volatile bool monitoringOnly = false;
 static volatile uint8_t buffersToSkip = 0;
 
-static int lineInGainDb = 0;
-static int micGainDb = 0;
-
-static inline void SetRecordMonitorAudioActive(bool active) {
-  // Keep this local to record/monitor flow and avoid changing core player
-  // behavior. If the sequencer is running, player owns audio-active state.
-  Player *player = Player::GetInstance();
-  if (player && !player->IsRunning()) {
-    tlv320_set_audio_output_active(active);
-  }
-}
+static int32_t lineInGainDb = 0;
+static int32_t micGainDb = 0;
 
 bool IsRecordingActive() { return recordingActive; }
 bool IsSavingRecording() { return savingInProgress; }
@@ -66,21 +68,43 @@ static uint32_t totalSamplesWritten = 0;
 static uint32_t recordDuration_ = MAX_INT32;
 static RecordSource source_ = LineIn;
 static uint32_t recordRamSamples = 0;
-static char recordingFilename_[PFILENAME_SIZE] = {0};
+static FileSystemPath::PathString recordingFilename_;
 static uint16_t recordChannelCount = 2;
+
+namespace {
+
+bool resolveRecordingPath(const FileSystemPath::PathString &path,
+                          FileSystemPath::PathString &resolvedPath) {
+  if (path.empty() || path.is_truncated() ||
+      !FileSystemPath::NormalizePath(path.c_str(), resolvedPath) ||
+      !FileSystemPath::IsAbsolutePath(resolvedPath.c_str())) {
+    Trace::Error("RECORD: recording path must be absolute: %s", path.c_str());
+    return false;
+  }
+
+  return true;
+}
+
+} // namespace
 
 static bool DeleteRecordingFile(const char *filename) {
   if (!filename || filename[0] == '\0') {
     return false;
   }
-  auto fs = FileSystem::GetInstance();
-  if (!fs || !fs->chdir(RECORDINGS_DIR)) {
-    Trace::Error("RECORD: could not access recording directory %s",
-                 RECORDINGS_DIR);
+
+  FileSystemPath::PathString requestedPath(filename);
+  FileSystemPath::PathString recordingPath;
+  if (!resolveRecordingPath(requestedPath, recordingPath)) {
     return false;
   }
-  if (!fs->DeleteFile(filename)) {
-    Trace::Error("RECORD: failed to delete file %s", filename);
+
+  auto fs = FileSystem::GetInstance();
+  if (!fs) {
+    Trace::Error("RECORD: filesystem unavailable while deleting recording");
+    return false;
+  }
+  if (!fs->DeleteFile(recordingPath.c_str())) {
+    Trace::Error("RECORD: failed to delete file %s", recordingPath.c_str());
     return false;
   }
   return true;
@@ -97,16 +121,21 @@ static bool PersistRecordingToWav(const char *filename, const uint8_t *data,
     return false;
   }
 
-  auto fs = FileSystem::GetInstance();
-  if (!fs || !fs->chdir(RECORDINGS_DIR)) {
-    Trace::Error("RECORD: could not access recording directory %s",
-                 RECORDINGS_DIR);
+  FileSystemPath::PathString requestedPath(filename);
+  FileSystemPath::PathString recordingPath;
+  if (!resolveRecordingPath(requestedPath, recordingPath)) {
     return false;
   }
 
-  RecordFile = fs->Open(filename, "w");
+  auto fs = FileSystem::GetInstance();
+  if (!fs) {
+    Trace::Error("RECORD: filesystem unavailable while saving recording");
+    return false;
+  }
+
+  RecordFile = fs->Open(recordingPath.c_str(), "w");
   if (!RecordFile) {
-    Trace::Error("RECORD: could not create file %s", filename);
+    Trace::Error("RECORD: could not create file %s", recordingPath.c_str());
     return false;
   }
 
@@ -188,12 +217,12 @@ void SetInputSource(RecordSource source) {
   case LineIn:
     tlv320_disable_mic();
     tlv320_enable_linein();
-    tlv320_set_linein_gain_db(lineInGainDb);
+    tlv320_set_linein_analog_gain_db(lineInGainDb);
     break;
   case Mic:
     tlv320_disable_linein();
     tlv320_enable_mic();
-    tlv320_set_mic_gain_db(micGainDb);
+    tlv320_set_mic_digital_gain_db(micGainDb);
     break;
   case USBIn:
     // TODO:
@@ -207,17 +236,17 @@ void SetInputSource(RecordSource source) {
   }
 }
 
-void SetLineInGain(uint8_t gainDb) {
+void SetLineInGain(int32_t gainDb) {
   lineInGainDb = gainDb;
   if (source_ == LineIn) {
-    tlv320_set_linein_gain_db(lineInGainDb);
+    tlv320_set_linein_analog_gain_db(lineInGainDb);
   }
 }
 
-void SetMicGain(uint8_t gainDb) {
+void SetMicGain(int32_t gainDb) {
   micGainDb = gainDb;
   if (source_ == Mic) {
-    tlv320_set_mic_gain_db(micGainDb);
+    tlv320_set_mic_digital_gain_db(micGainDb);
   }
 }
 
@@ -231,7 +260,6 @@ void StartMonitoring() {
   start = xTaskGetTickCount();
   recordingActive = true; // Use this to keep the task loop active
   first_pass = true;      // Ensure StartRecordStreaming is called
-  SetRecordMonitorAudioActive(true);
 
   // Clear the buffer and start the SAI DMA
   memset(recordBuffer, 0, RECORD_BUFFER_SIZE * sizeof(uint16_t));
@@ -273,13 +301,19 @@ bool StartRecording(const char *filename, uint8_t threshold,
     recordDuration_ = pdMS_TO_TICKS(kRecordRamSeconds * 1000);
   }
 
-  if (filename && filename[0] != '\0') {
-    snprintf(recordingFilename_, sizeof(recordingFilename_), "%s", filename);
-  } else {
+  if (filename == nullptr || filename[0] == '\0') {
     Trace::Error("RECORD: invalid recording filename");
-    recordingFilename_[0] = '\0';
+    recordingFilename_.clear();
     return false;
   }
+  FileSystemPath::PathString requestedPath(filename);
+  FileSystemPath::PathString recordingPath;
+  if (!resolveRecordingPath(requestedPath, recordingPath)) {
+    Trace::Error("RECORD: invalid recording filename");
+    recordingFilename_.clear();
+    return false;
+  }
+  recordingFilename_ = recordingPath;
 
   recordChannelCount = (source_ == Mic) ? 1 : 2;
 
@@ -379,7 +413,6 @@ void Record(void *) {
       HAL_SAI_DMAStop(&hsai_BlockB1);
 
       Player::GetInstance()->StopRecordStreaming();
-      SetRecordMonitorAudioActive(false);
 
       bool writeFailed = false;
       if (recordingSessionActive) {
@@ -390,9 +423,9 @@ void Record(void *) {
           uint32_t framesWritten = 0;
           const uint8_t *data =
               reinterpret_cast<const uint8_t *>(recordRamBuffer);
-          bool saved =
-              PersistRecordingToWav(recordingFilename_, data, bytesToWrite,
-                                    recordChannelCount, &framesWritten);
+          bool saved = PersistRecordingToWav(recordingFilename_.c_str(), data,
+                                             bytesToWrite, recordChannelCount,
+                                             &framesWritten);
           totalSamplesWritten = framesWritten;
           lastRecordingSavedAudio = saved;
           writeFailed = !saved;
@@ -497,7 +530,6 @@ void Record(void *) {
     // start playing
     if (first_pass) {
       first_pass = false;
-      SetRecordMonitorAudioActive(true);
       Player::GetInstance()->StartRecordStreaming(recordBuffer,
                                                   RECORD_BUFFER_SIZE, true);
     }

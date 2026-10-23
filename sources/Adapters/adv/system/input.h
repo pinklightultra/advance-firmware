@@ -8,7 +8,7 @@
 #ifndef _PICOTRACKERINPUT_H_
 #define _PICOTRACKERINPUT_H_
 
-#include "utils.h"
+#include "Application/Utils/bit.h"
 #include <cstdint>
 
 typedef enum KEYPAD_BITS {

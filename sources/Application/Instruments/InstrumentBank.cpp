@@ -1,33 +1,33 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "InstrumentBank.h"
 #include "Application/Instruments/MidiInstrument.h"
-#include "Application/Instruments/SIDInstrument.h"
 #include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
+#include "Application/Instruments/SampleSourceInstrument.h"
 #include "Application/Model/Config.h"
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Utils/char.h"
 #include "Filters.h"
 #include "MidiInstrument.h"
-#include "OpalInstrument.h"
-#include "SIDInstrument.h"
 #include "System/io/Status.h"
 
 #define XML_DEBUG_LOGGING 0
 
 // Contain all instrument definition
 InstrumentBank::InstrumentBank()
-    : Persistent("INSTRUMENTBANK"), sampleInstrumentPool_(),
-      midiInstrumentPool_(), sidInstrumentPool_(), opalInstrumentPool_() {
-
+    : Persistent("INSTRUMENTBANK"), instrumentPool_() {
   for (size_t i = 0; i < instruments_.max_size(); i++) {
     instruments_[i] = &none_;
   }
@@ -38,18 +38,33 @@ InstrumentBank::InstrumentBank()
 InstrumentBank::~InstrumentBank() { Reset(); };
 
 void InstrumentBank::Reset() {
-  sampleInstrumentPool_.release_all();
-  midiInstrumentPool_.release_all();
-  sidInstrumentPool_.release_all();
-  opalInstrumentPool_.release_all();
-
   for (size_t i = 0; i < instruments_.max_size(); i++) {
-    instruments_[i] = &none_;
+    if (instruments_[i] != &none_) {
+      releaseInstrument(i);
+    } else {
+      voiceParameters_[i].Reset();
+    }
   }
   sidOscCount = 0;
 };
 
 I_Instrument *InstrumentBank::GetInstrument(int i) { return instruments_[i]; };
+
+VoiceParameters *InstrumentBank::GetVoiceParameters(int i) {
+  if (i < 0 || i >= MAX_INSTRUMENT_COUNT) {
+    return nullptr;
+  }
+  return &voiceParameters_[i];
+}
+
+void InstrumentBank::attachVoiceParameters(int id, I_Instrument *instrument) {
+  if (!instrument || instrument == &none_) {
+    return;
+  }
+
+  voiceParameters_[id].Reset();
+  voiceParameters_[id].AppendTo(*instrument->Variables());
+}
 
 void InstrumentBank::SaveContent(tinyxml2::XMLPrinter *printer) {
   char hex[3];
@@ -138,7 +153,7 @@ unsigned short InstrumentBank::GetNextAndAssignID(InstrumentType type,
                                                   uint8_t id) {
   switch (type) {
   case IT_SAMPLE: {
-    SampleInstrument *si = sampleInstrumentPool_.create();
+    SampleInstrument *si = instrumentPool_.create<SampleInstrument>();
     if (si == nullptr) {
       Trace::Log("INSTRUMENTBANK", "Sample INSTRUMENT EXHAUSTED!");
       return NO_MORE_INSTRUMENT;
@@ -157,35 +172,36 @@ unsigned short InstrumentBank::GetNextAndAssignID(InstrumentType type,
     }
     return id;
   } break;
+  case IT_SAMPLE_SOURCE: {
+    SampleSourceInstrument *ssi =
+        instrumentPool_.create<SampleSourceInstrument>();
+    if (ssi == nullptr) {
+      Trace::Log("INSTRUMENTBANK", "Sample Source INSTRUMENT EXHAUSTED!");
+      return NO_MORE_INSTRUMENT;
+    }
+    ssi->Init();
+
+    Variable *sample = ssi->FindVariable(FourCC::SampleSourceInstrumentSample);
+    if (sample) {
+      if (sample->GetInt() == -1) {
+        attachVoiceParameters(id, ssi);
+        instruments_[id] = ssi;
+      } else {
+        Trace::Log("INSTRUMENTBANK",
+                   "unexpected sample source value for new instrument: %d",
+                   sample->GetInt());
+      }
+    }
+    return id;
+  } break;
   case IT_MIDI: {
-    MidiInstrument *mi = midiInstrumentPool_.create();
+    MidiInstrument *mi = instrumentPool_.create<MidiInstrument>();
     if (mi == nullptr) {
       Trace::Error("MIDI INSTRUMENT EXHAUSTED!");
       return NO_MORE_INSTRUMENT;
     }
     mi->Init();
     instruments_[id] = mi;
-    return id;
-  } break;
-  case IT_SID: {
-    // TODO need to figure out how to properly manage sid oc count
-    SIDInstrument *si = sidInstrumentPool_.create(SID1);
-    if (si == nullptr) {
-      Trace::Error("SID INSTRUMENT EXHAUSTED!");
-      return NO_MORE_INSTRUMENT;
-    }
-    si->Init();
-    instruments_[id] = si;
-    return id;
-  } break;
-  case IT_OPAL: {
-    OpalInstrument *oi = opalInstrumentPool_.create();
-    if (oi == nullptr) {
-      Trace::Error("Opal INSTRUMENT EXHAUSTED!");
-      return NO_MORE_INSTRUMENT;
-    }
-    oi->Init();
-    instruments_[id] = oi;
     return id;
   } break;
   case IT_NONE:
@@ -203,16 +219,13 @@ void InstrumentBank::releaseInstrument(unsigned short id) {
 
   switch (instrument->GetType()) {
   case IT_SAMPLE:
-    sampleInstrumentPool_.destroy(instrument);
+    instrumentPool_.destroy(static_cast<SampleInstrument *>(instrument));
+    break;
+  case IT_SAMPLE_SOURCE:
+    instrumentPool_.destroy(static_cast<SampleSourceInstrument *>(instrument));
     break;
   case IT_MIDI:
-    midiInstrumentPool_.destroy(instrument);
-    break;
-  case IT_SID:
-    sidInstrumentPool_.destroy(instrument);
-    break;
-  case IT_OPAL:
-    opalInstrumentPool_.destroy(instrument);
+    instrumentPool_.destroy(static_cast<MidiInstrument *>(instrument));
     break;
   case IT_NONE:
     // NA: None is a "singleton" so no need to release from pool
@@ -221,6 +234,7 @@ void InstrumentBank::releaseInstrument(unsigned short id) {
     break;
   }
   instruments_[id] = &none_;
+  voiceParameters_[id].Reset();
 }
 
 unsigned short InstrumentBank::GetNextFreeInstrumentSlotId() {

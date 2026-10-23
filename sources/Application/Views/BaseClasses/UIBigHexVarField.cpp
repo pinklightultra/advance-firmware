@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "UIBigHexVarField.h"
@@ -55,6 +59,28 @@ void UIBigHexVarField::Draw(GUIWindow &w, int offset) {
   } else {
     DrawLabeledField(w, position, buffer);
   }
+};
+
+void UIBigHexVarField::ResetDigitPosition() { position_ = 0; }
+
+// ApplyOffset is used for selection editing where callers need to directly
+// change the value without moving the focused digit.
+// ProcessArrow is not suitable because it treats LEFT/RIGHT as digit-
+// position navigation (changing which hex digit UP/DOWN modifies) rather
+// than value change, and when position_ is 0 UP/DOWN only changes by 1.
+void UIBigHexVarField::ApplyOffset(int offset) {
+  int value = src_.GetInt() + offset;
+  if (value > max_) {
+    value = (wrap_) ? value - max_ + min_ - 1 : max_;
+  };
+  if (value < min_) {
+    value = (wrap_) ? max_ + (value - min_) + 1 : min_;
+  };
+  src_.SetInt(value);
+
+  SetChanged();
+  NotifyObservers(reinterpret_cast<I_ObservableData *>(
+      static_cast<uintptr_t>(src_.GetID())));
 };
 
 void UIBigHexVarField::ProcessArrow(unsigned short mask) {

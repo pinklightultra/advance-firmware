@@ -1,14 +1,20 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "I_Instrument.h"
 #include "../Model/Project.h"
+#include "Application/Model/FirmwareVersion.h"
+#include "Application/Player/InsertEffectDefinitions.h"
 #include "Application/Utils/char.h"
 #include "System/Console/Trace.h"
 
@@ -18,7 +24,8 @@ I_Instrument::~I_Instrument() {
 
 void I_Instrument::SaveContent(tinyxml2::XMLPrinter *printer) {
   // Add firmware version information
-  printer->PushAttribute("VERSION", PROJECT_NUMBER);
+  const FirmwareNumberString firmwareVersion = FormatFirmwareVersionNumber();
+  printer->PushAttribute("VERSION", firmwareVersion.c_str());
   // Save the instrument type
   printer->PushAttribute("TYPE", InstrumentTypeNames[GetType()]);
 
@@ -32,9 +39,16 @@ void I_Instrument::SaveContent(tinyxml2::XMLPrinter *printer) {
 
   // Save all the instrument's parameters
   for (auto it = Variables()->begin(); it != Variables()->end(); it++) {
+    etl::string<MAX_VARIABLE_STRING_LENGTH> value = (*it)->GetString();
+    const FourCC id = (*it)->GetID();
+    // ensure to use full name not short UI displayname for persistance
+    if (id == FourCC::VoiceInsertType || id == FourCC::VoiceInsertType2) {
+      value = GetVoiceInsertEffectInfo((*it)->GetInt()).name_;
+    }
+
     printer->OpenElement("PARAM");
     printer->PushAttribute("NAME", (*it)->GetName());
-    printer->PushAttribute("VALUE", (*it)->GetString().c_str());
+    printer->PushAttribute("VALUE", value.c_str());
     printer->CloseElement(); // PARAM
   }
 }

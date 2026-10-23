@@ -1,16 +1,20 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Player.h"
-#include "Application/Instruments/CommandList.h"
 #include "Application/Instruments/I_Instrument.h"
 #include "Application/Instruments/SampleInstrument.h"
+#include "Application/Instruments/SampleSourceInstrument.h"
 #include "Application/Mixer/MixerService.h"
 #include "Application/Model/Groove.h"
 #include "Application/Player/TablePlayback.h"
@@ -19,14 +23,50 @@
 #include "PlayerMixer.h"
 #include "Services/Midi/MidiService.h"
 #include "System/Console/n_assert.h"
+#include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
 #include "System/io/Status.h"
+#include <algorithm>
 #include <math.h>
 #include <string.h>
 
+namespace {
+
+constexpr int kEngineSampleRate = 44100;
+constexpr uint16_t kProfileOrderPlayerControl = 39;
+
+DWTProfileStats gPlayerControlProfile = {" player ctrl"};
+
+void registerPlayerProfiles() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+
+  gPlayerControlProfile.displayOrder_ = kProfileOrderPlayerControl;
+  // This scope measures once-per-buffer player control work: note starts,
+  // phrase commands, table stepping, and retrigger/release handling.
+  RegisterDWTProfileStats(&gPlayerControlProfile);
+  registered = true;
+}
+
+} // namespace
+
+int32_t DecodeRetriggerOffset(int32_t value) {
+  return static_cast<int8_t>(value & 0xFF);
+}
+
+int GetSongChannelCount(const ViewData *viewData) {
+  if (viewData == nullptr || viewData->song_ == nullptr) {
+    return SONG_CHANNEL_COUNT_STEREO;
+  }
+  return viewData->song_->GetChannelCount();
+}
+
 // Private constructor - Singleton
 
-Player::Player() : mixer_() {
+Player::Player() : Observable(&observers_), mixer_() {
+  registerPlayerProfiles();
 
   isRunning_ = false;
   viewData_ = 0;
@@ -41,6 +81,9 @@ Player::Player() : mixer_() {
     instrumentOnChannel_[i][0] = ' ';
     instrumentOnChannel_[i][1] = ' ';
     instrumentOnChannel_[i][2] = '\0';
+    timeToLive_[i] = 0;
+    timeToRelease_[i] = 0;
+    timeToStart_[i] = 0;
   }
 };
 
@@ -111,6 +154,9 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
   // or from last stored
 
   unsigned playPos = viewData_->songY_ + viewData_->songOffset_;
+  if (selectionRender_.active) {
+    playPos = selectionRender_.startSongRow;
+  }
 
   if (forceSongMode == false) {
     lastSongPos_ = playPos;
@@ -120,12 +166,16 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
 
   // Clear all channel based data
 
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+  const int channelCount = GetSongChannelCount(viewData_);
+  for (int i = 0; i < channelCount; i++) {
     mixer_.StopChannel(i);
     timeToLive_[i] = 0;
+    timeToRelease_[i] = 0;
     timeToStart_[i] = 0;
     TablePlayback &tpb = TablePlayback::GetTablePlayback(i);
+    TablePlayback &atp = TablePlayback::GetAutomationPlayback(i);
     tpb.Stop();
+    atp.Stop();
   }
 
   // Tell the instruments we're starting
@@ -137,13 +187,9 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
   // Let's get started !
 
   SyncMaster::GetInstance()->Start();
-#ifdef ADV
-  // On Advance, keep analog output muted during stem rendering to avoid
+  // keep analog output muted during stem rendering to avoid
   // audible glitches while multiple stem files are being written.
   SetAudioActive(msmMode != MSM_FILESPLIT);
-#else
-  SetAudioActive(true);
-#endif
 
   firstPlayCycle_ = true;
   mode_ = viewData_->playMode_;
@@ -157,14 +203,14 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
 
   switch (viewData_->playMode_) {
   case PM_SONG: {
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    for (int i = 0; i < channelCount; i++) {
       mixer_.StartChannel(i);
       updateSongPos(playPos, i);
     }
   } break;
 
   case PM_LIVE: {
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    for (int i = 0; i < channelCount; i++) {
       if ((liveQueueingMode_[i] == QM_CHAINSTART) ||
           (liveQueueingMode_[i] == QM_PHRASESTART) ||
           (liveQueueingMode_[i] == QM_TICKSTART)) {
@@ -178,10 +224,20 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
   case PM_CHAIN:
   case PM_PHRASE: {
     int currentChannel = viewData_->songX_;
+    if (selectionRender_.active) {
+      currentChannel = selectionRender_.trackerChannel;
+    }
     mixer_.StartChannel(currentChannel);
-    ;
     int currentChainPos = viewData_->chainRow_;
-    updateSongPos(playPos, currentChannel, currentChainPos);
+    if (selectionRender_.active) {
+      currentChainPos = selectionRender_.startChainRow;
+    }
+    int currentPhrasePos = 0;
+    if (selectionRender_.active &&
+        selectionRender_.sourceKind == SelectionResampleSourceKind::Phrase) {
+      currentPhrasePos = selectionRender_.startPhraseRow;
+    }
+    updateSongPos(playPos, currentChannel, currentChainPos, currentPhrasePos);
   } break;
 
   case PM_AUDITION: {
@@ -212,18 +268,37 @@ void Player::Start(PlayMode mode, bool forceSongMode, MixerServiceMode msmMode,
   mixer_.Unlock();
 }
 
-void Player::Stop() {
-  mixer_.Lock();
-
+void Player::stopLocked(PlayerStopMode stopMode) {
+  // This checks whether audio is still active in the mixer right now, not
+  // whether the sequencer will still be running after this stop call. We
+  // sample it before releasing channels so analog output stays enabled long
+  // enough for voice release and FX tails.
   bool keepAudioActive = mixer_.IsPlaying();
 
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-    mixer_.StopChannel(i);
+  if (stopMode == PSM_PANIC) {
+    mixer_.Panic();
+    const int channelCount = GetSongChannelCount(viewData_);
+    for (int i = 0; i < channelCount; i++) {
+      TablePlayback &tpb = TablePlayback::GetTablePlayback(i);
+      TablePlayback &atp = TablePlayback::GetAutomationPlayback(i);
+      tpb.Stop();
+      atp.Stop();
+    }
+  } else {
+    const int channelCount = GetSongChannelCount(viewData_);
+    for (int i = 0; i < channelCount; i++) {
+      mixer_.ReleaseChannel(i);
+      TablePlayback &tpb = TablePlayback::GetTablePlayback(i);
+      TablePlayback &atp = TablePlayback::GetAutomationPlayback(i);
+      tpb.Stop();
+      atp.Stop();
+    }
   }
   MidiService::GetInstance()->OnPlayerStop();
   mixer_.OnPlayerStop();
 
   SyncMaster::GetInstance()->Stop();
+  ClearSelectionRender();
   isRunning_ = false;
   SetChanged();
   PlayerEvent pe(PET_STOP);
@@ -231,8 +306,70 @@ void Player::Stop() {
   if (!keepAudioActive) {
     SetAudioActive(false);
   }
+}
 
+void Player::Stop(PlayerStopMode stopMode) {
+  mixer_.Lock();
+  stopLocked(stopMode);
   mixer_.Unlock();
+}
+
+void Player::Kill() {
+  mixer_.Lock();
+  if (isRunning_) {
+    stopLocked(PSM_PANIC);
+  } else {
+    mixer_.Panic();
+    SetAudioActive(false);
+  }
+  mixer_.Unlock();
+}
+
+void Player::ConfigureSelectionRender(const SelectionResampleRequest &request) {
+  selectionRender_.active = true;
+  selectionRender_.sourceKind = request.sourceKind;
+  selectionRender_.startSongRow = request.startSongRow;
+  selectionRender_.endSongRow = request.endSongRow;
+  selectionRender_.startChainRow = request.startChainRow;
+  selectionRender_.endChainRow = request.endChainRow;
+  selectionRender_.startPhraseRow = request.startPhraseRow;
+  selectionRender_.endPhraseRow = request.endPhraseRow;
+  selectionRender_.trackerChannel = request.trackerChannel;
+  selectionRender_.songChannelMask = request.GetSongChannelMask();
+  selectionRender_.currentSongRow = request.startSongRow;
+  selectionRenderSongRowAdvanced_ = false;
+}
+
+void Player::ClearSelectionRender() {
+  selectionRender_ = SelectionRenderState();
+}
+
+bool Player::HasSelectionRender() const { return selectionRender_.active; }
+
+int Player::GetSelectionRenderSongRow() const {
+  return static_cast<int>(selectionRender_.currentSongRow);
+}
+
+bool Player::shouldStopSelectionRenderAtChainRow(int channel,
+                                                 int nextChainRow) const {
+  if (!selectionRender_.active ||
+      selectionRender_.sourceKind != SelectionResampleSourceKind::Chain) {
+    return false;
+  }
+
+  return channel == selectionRender_.trackerChannel &&
+         nextChainRow > selectionRender_.endChainRow;
+}
+
+bool Player::shouldStopSelectionRenderAtPhraseRow(int channel,
+                                                  int nextPhraseRow) const {
+  if (!selectionRender_.active ||
+      selectionRender_.sourceKind != SelectionResampleSourceKind::Phrase) {
+    return false;
+  }
+
+  return channel == selectionRender_.trackerChannel &&
+         nextPhraseRow > selectionRender_.endPhraseRow;
 }
 
 const char *Player::GetPlayedNote(int channel) {
@@ -257,6 +394,12 @@ const char *Player::GetPlayedInstrument(int channel) {
 
 bool Player::GetPlayedSliceIndex(int channel, uint8_t &sliceIndex) {
   return mixer_.GetPlayedSliceIndex(channel, sliceIndex);
+}
+
+bool Player::GetInstrumentPlaybackPosition(I_Instrument *instrument,
+                                           uint32_t &position) {
+  return mixer_.GetInstrumentPlaybackPosition(
+      instrument, GetSongChannelCount(viewData_), position);
 }
 
 const char *Player::GetLiveIndicator(int channel) {
@@ -301,6 +444,7 @@ const char *Player::GetLiveIndicator(int channel) {
 };
 
 void Player::SetSequencerMode(SequencerMode mode) {
+  const bool modeChanged = (sequencerMode_ != mode);
   if (isRunning_) {
     switch (mode) {
     case SM_LIVE:
@@ -312,6 +456,15 @@ void Player::SetSequencerMode(SequencerMode mode) {
     };
   };
   sequencerMode_ = mode;
+
+  if (modeChanged) {
+    if (mode == SM_LIVE) {
+      MidiService::GetInstance()->RefreshControlSurfaceSelection();
+    }
+    SetChanged();
+    PlayerEvent pe(PET_STATE_CHANGE);
+    NotifyObservers(&pe);
+  }
 };
 
 SequencerMode Player::GetSequencerMode() { return sequencerMode_; };
@@ -319,6 +472,14 @@ SequencerMode Player::GetSequencerMode() { return sequencerMode_; };
 bool Player::IsChannelPlaying(int channel) {
   return mixer_.IsChannelPlaying(channel);
 };
+
+int Player::GetChannelSongPlayPosition(int channel) {
+  if ((viewData_ == nullptr) || (channel < 0) ||
+      (channel >= SONG_CHANNEL_COUNT)) {
+    return -1;
+  }
+  return viewData_->songPlayPos_[channel];
+}
 
 // Handles start button on any screen BUT the song screen
 
@@ -335,7 +496,8 @@ void Player::OnStartButton(PlayMode origin, unsigned int from,
     if (isRunning_ && viewData_->playMode_ != PM_AUDITION) {
       Stop();
     } else {
-      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+      const int channelCount = GetSongChannelCount(viewData_);
+      for (int i = 0; i < channelCount; i++) {
         liveQueueingMode_[i] = QM_NONE;
       };
       Start(origin, startFromPrevious, msmMode);
@@ -349,7 +511,8 @@ void Player::OnStartButton(PlayMode origin, unsigned int from,
 // Handles start on song screen
 void Player::OnSongStartButton(unsigned int from, unsigned int to,
                                bool requestStop, bool forceImmediate,
-                               MixerServiceMode msmMode, bool stopAtEnd) {
+                               MixerServiceMode msmMode, bool stopAtEnd,
+                               int useStartRow) {
 
   switch (GetSequencerMode()) {
 
@@ -366,7 +529,8 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
         retrigAllImmediate_ = true;
       }
     } else {
-      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+      const int channelCount = GetSongChannelCount(viewData_);
+      for (int i = 0; i < channelCount; i++) {
         liveQueueingMode_[i] = QM_NONE;
       };
       Start(PM_SONG, false, msmMode);
@@ -377,13 +541,28 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
 
     // Get current song row
     unsigned char songPos = viewData_->songY_ + viewData_->songOffset_;
+    if ((useStartRow >= 0) && (useStartRow < SONG_ROW_COUNT)) {
+      songPos = static_cast<unsigned char>(useStartRow);
+    }
+
+    const unsigned int channelCount = GetSongChannelCount(viewData_);
+    if ((channelCount <= 0) || (from >= channelCount)) {
+      break;
+    }
+
+    if (to >= channelCount) {
+      to = (channelCount - 1);
+    }
+    if (from > to) {
+      break;
+    }
 
     if (!IsRunning()) {
 
       // not playing; we queue the chains in the selection
       // that contain something then start the player
 
-      for (unsigned int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+      for (unsigned int i = 0; i < channelCount; i++) {
         if ((i < from) || (i > to)) {
           QueueChannel(i, QM_NONE, 0);
         } else {
@@ -399,7 +578,7 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
 
       // Queue all chain in the given selection
 
-      for (unsigned int i = from; i < to + 1; i++) {
+      for (unsigned int i = from; i <= to; i++) {
 
         QueueingMode mode = QM_NONE;
 
@@ -434,13 +613,35 @@ void Player::OnSongStartButton(unsigned int from, unsigned int to,
   }
 }
 
+bool Player::ToggleLiveStartStop(MixerServiceMode msmMode) {
+  if ((GetSequencerMode() != SM_LIVE) || (viewData_ == nullptr)) {
+    return false;
+  }
+
+  if (IsRunning()) {
+    Stop();
+    return true;
+  }
+
+  const int channelCount = GetSongChannelCount(viewData_);
+  if (channelCount <= 0) {
+    return false;
+  }
+
+  const unsigned char songRow =
+      static_cast<unsigned char>(viewData_->songY_ + viewData_->songOffset_);
+  OnSongStartButton(0, static_cast<unsigned int>(channelCount - 1), false,
+                    false, msmMode, false, songRow);
+  return true;
+}
+
 bool Player::IsRunning() { return isRunning_; };
 
 stereosample Player::GetMasterLevel() { return mixer_.GetMasterOutLevel(); }
 
 bool Player::isPlayable(int row, int col, int chainPos) {
-
-  uchar *chain = viewData_->song_->data_ + SONG_CHANNEL_COUNT * row + col;
+  const int channelCount = GetSongChannelCount(viewData_);
+  uchar *chain = viewData_->song_->data_ + channelCount * row + col;
   if (*chain != 0xFF) {
     uchar data = viewData_->song_->chain_.data_[16 * (*chain) + chainPos];
     return (data != 0xFF);
@@ -452,7 +653,8 @@ bool Player::findPlayable(uchar *row, int col, uchar chainPos) {
 
   // first look if current is fine
 
-  uchar *chain = viewData_->song_->data_ + SONG_CHANNEL_COUNT * (*row) + col;
+  const int channelCount = GetSongChannelCount(viewData_);
+  uchar *chain = viewData_->song_->data_ + channelCount * (*row) + col;
   if (*chain != 0xFF) {
     uchar data = viewData_->song_->chain_.data_[16 * (*chain) + chainPos];
     return (data != 0xFF);
@@ -461,7 +663,7 @@ bool Player::findPlayable(uchar *row, int col, uchar chainPos) {
   // Find upwards the first non blank
 
   while (*row != 255) {
-    chain = viewData_->song_->data_ + SONG_CHANNEL_COUNT * (*row) + col;
+    chain = viewData_->song_->data_ + channelCount * (*row) + col;
     if (*chain != 0xFF) {
       break;
     }
@@ -474,7 +676,7 @@ bool Player::findPlayable(uchar *row, int col, uchar chainPos) {
   // Find upwards the first blank
 
   while (*row != 255) {
-    chain = viewData_->song_->data_ + SONG_CHANNEL_COUNT * (*row) + col;
+    chain = viewData_->song_->data_ + channelCount * (*row) + col;
     if (*chain == 0xFF) {
       break;
     }
@@ -486,7 +688,7 @@ bool Player::findPlayable(uchar *row, int col, uchar chainPos) {
   } else {
     *row += 1;
   }
-  chain = viewData_->song_->data_ + SONG_CHANNEL_COUNT * (*row) + col;
+  chain = viewData_->song_->data_ + channelCount * (*row) + col;
   uchar data = 0xFF;
   if (*chain != 0xFF) {
     data = viewData_->song_->chain_.data_[16 * (*chain) + chainPos];
@@ -495,6 +697,86 @@ bool Player::findPlayable(uchar *row, int col, uchar chainPos) {
 }
 
 QueueingMode Player::GetQueueingMode(int i) { return liveQueueingMode_[i]; };
+
+void Player::FillControlSurfaceState(ControlSurfaceState &state,
+                                     int windowOffset, int matrixSize) {
+  state = {};
+  state.isLiveMode = (sequencerMode_ == SM_LIVE);
+  state.isRunning = isRunning_;
+
+  if (!state.isLiveMode || project_ == nullptr || viewData_ == nullptr) {
+    return;
+  }
+
+  const Song &song = project_->song_;
+  const int songChannelCount = song.GetChannelCount();
+  const unsigned char *songData = song.data_;
+  const unsigned char *chainData = song.chain_.data_;
+
+  if (songData != nullptr) {
+    const int maxChan =
+        (songChannelCount < matrixSize) ? songChannelCount : matrixSize;
+    const unsigned char *data = songData + (songChannelCount * windowOffset);
+
+    for (int row = 0; row < matrixSize; ++row) {
+      if (windowOffset + row >= SONG_ROW_COUNT)
+        break;
+
+      for (int channel = 0; channel < maxChan; ++channel) {
+        const unsigned char cellVal = *data++;
+        if (cellVal == EMPTY_SONG_VALUE) {
+          continue;
+        }
+
+        if (cellVal == NOTE_OFF) {
+          state.cells[channel][row] = ControlSurfaceState::Cell::NoteOff;
+          continue;
+        }
+
+        const bool chainHasPlayableFirstPhrase =
+            chainData[(16 * cellVal)] != EMPTY_SONG_VALUE;
+        if (!chainHasPlayableFirstPhrase) {
+          continue;
+        }
+
+        if (cellVal == 0x00) {
+          state.cells[channel][row] = ControlSurfaceState::Cell::FirstPattern;
+        } else {
+          state.cells[channel][row] = ControlSurfaceState::Cell::Populated;
+        }
+      }
+      data += (songChannelCount - maxChan);
+    }
+  }
+
+  const int stateMaxChan =
+      (SONG_CHANNEL_COUNT < matrixSize) ? SONG_CHANNEL_COUNT : matrixSize;
+  for (int channel = 0; channel < stateMaxChan; ++channel) {
+    if (mixer_.IsChannelMuted(channel)) {
+      for (int row = 0; row < matrixSize; ++row) {
+        state.cells[channel][row] = ControlSurfaceState::Cell::Muted;
+      }
+    }
+
+    const QueueingMode qMode = liveQueueingMode_[channel];
+    if (qMode != QM_NONE && qMode != QM_CHAINSTOP) {
+      const int row = liveQueuePosition_[channel] - windowOffset;
+      if (row >= 0 && row < matrixSize) {
+        state.cells[channel][row] = ControlSurfaceState::Cell::Queued;
+      }
+    }
+
+    if (mixer_.IsChannelPlaying(channel) && viewData_ != nullptr) {
+      if (viewData_->currentPlayChain_[channel] != 0xFF) {
+        const int row = viewData_->songPlayPos_[channel] - windowOffset;
+        if (row >= 0 && row < matrixSize &&
+            viewData_->playMode_ != PM_AUDITION) {
+          state.cells[channel][row] = ControlSurfaceState::Cell::Playing;
+        }
+      }
+    }
+  }
+}
 
 unsigned char Player::GetQueuePosition(int i) { return liveQueuePosition_[i]; };
 
@@ -532,7 +814,8 @@ void Player::Update(Observable &o, I_ObservableData *d) {
       sync->NextSlice();
       triggerLiveChains_ = false;
       if (retrigAllImmediate_) {
-        for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+        const int channelCount = GetSongChannelCount(viewData_);
+        for (int i = 0; i < channelCount; i++) {
           QueueChannel(i, QM_TICKSTART, retrigPos_, 0);
         };
         retrigAllImmediate_ = false;
@@ -545,59 +828,72 @@ void Player::Update(Observable &o, I_ObservableData *d) {
       };
     }
 
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-      if (timeToStart_[i] > 0) {
-        if (--timeToStart_[i] == 0) {
-          playCursorPosition(i);
-        }
-      }
-    }
+    {
+      const int channelCount = GetSongChannelCount(viewData_);
+      const int playSampleCount = static_cast<int>(sync->GetPlaySampleCount());
+      ScopedDWTProfile playerControlProfile(&gPlayerControlProfile,
+                                            playSampleCount, kEngineSampleRate,
+                                            channelCount);
 
-    // Process commands in current phrase
-    if (viewData_->playMode_ != PM_AUDITION)
-      ProcessCommands();
-
-    // Initialise retrigger table
-    int instrRetrigger[SONG_CHANNEL_COUNT];
-    memset(instrRetrigger, -1, SONG_CHANNEL_COUNT * sizeof(int));
-
-    // Process any table commands now
-    for (int channel = 0; channel < SONG_CHANNEL_COUNT; channel++) {
-      TablePlayback &tpb = TablePlayback::GetTablePlayback(channel);
-      if (!tpb.GetAutomation()) {
-        TablePlayerChange tpc;
-        tpc.timeToLive_ = timeToLive_[channel];
-        tpc.instrRetrigger_ = -1;
-        tpb.ProcessStep(tpc);
-        timeToLive_[channel] = tpc.timeToLive_;
-        instrRetrigger[channel] = tpc.instrRetrigger_;
-      }
-    }
-
-    // Do we need to kill a voice?
-    if (sync->TableSlice()) {
-      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-        bool stopped = false;
-        if (timeToLive_[i] > 0) {
-          if (--timeToLive_[i] == 0) {
-            mixer_.StopInstrument(i);
-            stopped = true;
+      for (int i = 0; i < channelCount; i++) {
+        if (timeToStart_[i] > 0) {
+          if (--timeToStart_[i] == 0) {
+            playCursorPosition(i);
           }
         }
-        if (!stopped) {
-          if (instrRetrigger[i] >= 0) {
-            int note = mixer_.GetChannelNote(i);
-            I_Instrument *instr = mixer_.GetInstrument(i);
-            if ((note <= HIGHEST_NOTE) && (instr != 0)) {
-              note += (instrRetrigger[i] > 80) ? instrRetrigger[i] - 256
-                                               : instrRetrigger[i];
-              while (note > 127) {
-                note -= 12;
-              };
+      }
+
+      // Process commands in current phrase
+      if (viewData_->playMode_ != PM_AUDITION)
+        ProcessCommands();
+
+      // Initialise retrigger table
+      int32_t instrRetrigger[SONG_CHANNEL_COUNT];
+      int32_t noteRetrigger[SONG_CHANNEL_COUNT];
+      memset(instrRetrigger, -1, SONG_CHANNEL_COUNT * sizeof(int32_t));
+      memset(noteRetrigger, -1, SONG_CHANNEL_COUNT * sizeof(int32_t));
+
+      // Process any table commands now
+      for (int channel = 0; channel < channelCount; channel++) {
+        TablePlayback &tpb = TablePlayback::GetTablePlayback(channel);
+        if (!tpb.GetAutomation()) {
+          TablePlayerChange tpc;
+          tpc.timeToLive_ = timeToLive_[channel];
+          tpc.timeToRelease_ = timeToRelease_[channel];
+          tpc.instrRetrigger_ = -1;
+          tpc.noteRetrigger_ = -1;
+          tpb.ProcessStep(tpc, mixer_.GetChannelNote(channel),
+                          lastActiveCommands_[channel]);
+          timeToLive_[channel] = tpc.timeToLive_;
+          timeToRelease_[channel] = tpc.timeToRelease_;
+          instrRetrigger[channel] = tpc.instrRetrigger_;
+          noteRetrigger[channel] = tpc.noteRetrigger_;
+        }
+      }
+
+      // Do we need to kill a voice?
+      if (sync->TableSlice()) {
+        for (int i = 0; i < channelCount; i++) {
+          bool stopped = false;
+          if (timeToLive_[i] > 0) {
+            if (--timeToLive_[i] == 0) {
               mixer_.StopInstrument(i);
-              mixer_.StartInstrument(i, instr, note, false);
+              stopped = true;
+            }
+          }
+          if (!stopped && timeToRelease_[i] > 0) {
+            if (--timeToRelease_[i] == 0) {
+              mixer_.ReleaseInstrument(i);
+            }
+          }
+          if (!stopped) {
+            if (noteRetrigger[i] >= 0) {
+              RetriggerChannelInstrumentAtNote(i, noteRetrigger[i], true);
+            } else if (instrRetrigger[i] >= 0) {
+              RetriggerChannelInstrument(
+                  i, DecodeRetriggerOffset(instrRetrigger[i]), true);
             };
-          };
+          }
         }
       }
     }
@@ -626,7 +922,8 @@ void Player::ProcessCommands() {
 
   Groove *gs = Groove::GetInstance();
 
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+  const int channelCount = GetSongChannelCount(viewData_);
+  for (int i = 0; i < channelCount; i++) {
 
     if (mixer_.IsChannelPlaying(i)) {
 
@@ -636,55 +933,65 @@ void Player::ProcessCommands() {
       if (phrase != 0xFF) {
         if (gs->TriggerChannel(i)) { // If groove says it is time to play
           int pos = viewData_->phrasePlayPos_[i];
-          FourCC cc = viewData_->song_->phrase_.cmd1_[phrase * 16 + pos];
-          ushort param = viewData_->song_->phrase_.param1_[phrase * 16 + pos];
+          uchar note = viewData_->song_->phrase_.note_[phrase * 16 + pos];
+          RowFxResult fx = ResolveRowFx(
+              note, viewData_->song_->phrase_.cmd1_[phrase * 16 + pos],
+              viewData_->song_->phrase_.param1_[phrase * 16 + pos],
+              viewData_->song_->phrase_.cmd2_[phrase * 16 + pos],
+              viewData_->song_->phrase_.param2_[phrase * 16 + pos],
+              lastActiveCommands_[i], true, false);
 
-          // if there's any command to trigger, first pass it on the player
-          // then pass it on to the instrument
+          auto dispatchResolvedCommand = [&](bool allowed, TrackerCommand cc,
+                                             ushort param) {
+            if (!allowed || cc == TrackerCommand::InstrumentCommandNone ||
+                cc == TrackerCommand::InstrumentCommandChance ||
+                cc == TrackerCommand::InstrumentCommandRandom) {
+              return;
+            }
 
-          if (cc != FourCC::InstrumentCommandNone) {
-            if (!ProcessChannelCommand(i, cc, param)) {
+            bool handledByPlayer = ProcessChannelCommand(i, cc, param);
+            bool executed = handledByPlayer;
+            if (!handledByPlayer && !mixer_.ProcessVoiceCommand(i, cc, param)) {
               I_Instrument *instrument = mixer_.GetInstrument(i);
               if (instrument) {
                 instrument->ProcessCommand(i, cc, param);
+                executed = true;
               }
-            };
+            } else if (!handledByPlayer) {
+              executed = true;
+            }
+            if (executed) {
+              RecordLastActiveCommand(i, cc, param);
+            }
           };
 
-          // Now process second command row
-
-          cc = viewData_->song_->phrase_.cmd2_[phrase * 16 + pos];
-          param = viewData_->song_->phrase_.param2_[phrase * 16 + pos];
-
-          // if there's any command to trigger, first pass it on the player
-          // then pass it on to the instrument
-
-          if (cc != FourCC::InstrumentCommandNone) {
-            if (!ProcessChannelCommand(i, cc, param)) {
-              I_Instrument *instrument = mixer_.GetInstrument(i);
-              if (instrument) {
-                instrument->ProcessCommand(i, cc, param);
-              }
-            };
-          };
+          dispatchResolvedCommand(fx.allowCmd1, fx.cmd1, fx.param1);
+          dispatchResolvedCommand(fx.allowCmd2, fx.cmd2, fx.param2);
         }
       }
     }
   };
 };
 
-bool Player::ProcessChannelCommand(int channel, FourCC cmd, ushort param) {
+bool Player::ProcessChannelCommand(int channel, TrackerCommand cmd,
+                                   ushort param) {
 
   I_Instrument *instr = mixer_.GetInstrument(channel);
 
   switch (cmd) {
-  case FourCC::InstrumentCommandKill:
+  case TrackerCommand::InstrumentCommandKill:
     if (instr) {
-      int timeToLive = (param & 0xFF);
+      uint32_t timeToLive = (param & 0xFF);
       timeToLive_[channel] = timeToLive + 1;
     }
     return true;
-  case FourCC::InstrumentCommandTempo: {
+  case TrackerCommand::InstrumentCommandOff:
+    if (instr) {
+      uint32_t timeToRelease = (param & 0xFF);
+      timeToRelease_[channel] = timeToRelease + 1;
+    }
+    return true;
+  case TrackerCommand::InstrumentCommandTempo: {
     param = std::clamp(param, MIN_TEMPO, MAX_TEMPO);
     Variable *v = project_->FindVariable(FourCC::VarTempo);
     v->SetInt(param);
@@ -693,7 +1000,7 @@ bool Player::ProcessChannelCommand(int channel, FourCC cmd, ushort param) {
     return true;
     break;
   }
-  case FourCC::InstrumentCommandTable: {
+  case TrackerCommand::InstrumentCommandTable: {
     TableHolder *th = TableHolder::GetInstance();
     TablePlayback &tpb = TablePlayback::GetTablePlayback(channel);
     param = param & 0x7F;
@@ -702,23 +1009,42 @@ bool Player::ProcessChannelCommand(int channel, FourCC cmd, ushort param) {
     return true;
     break;
   }
-  case FourCC::InstrumentCommandGroove: {
+  case TrackerCommand::InstrumentCommandGroove: {
     Groove *gr = Groove::GetInstance();
     bool all = (param & 0xFF00) != 0;
     param = param & 0xFF;
     if (all) {
-      for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+      const int channelCount = GetSongChannelCount(viewData_);
+      for (int i = 0; i < channelCount; i++) {
         gr->SetGroove(i, param);
       }
     } else {
       gr->SetGroove(channel, param);
     }
-  } break;
+    return true;
+    break;
+  }
   default:
     break;
   };
   return false;
 };
+
+void Player::ResetLastActiveCommands() {
+  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    lastActiveCommands_[i].lastCmd = TrackerCommand::InstrumentCommandNone;
+    lastActiveCommands_[i].lastParam = 0;
+    lastActiveCommands_[i].valid = false;
+  }
+}
+
+void Player::RecordLastActiveCommand(int channel, TrackerCommand cmd,
+                                     ushort param) {
+  if (channel < 0 || channel >= SONG_CHANNEL_COUNT) {
+    return;
+  }
+  UpdateLastActiveCommandState(lastActiveCommands_[channel], cmd, param);
+}
 
 /********************************************************
  triggerLiveChains:
@@ -730,7 +1056,8 @@ bool Player::ProcessChannelCommand(int channel, FourCC cmd, ushort param) {
 void Player::triggerLiveChains() {
 
   if (mode_ == PM_LIVE) {
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    const int channelCount = GetSongChannelCount(viewData_);
+    for (int i = 0; i < channelCount; i++) {
       if (!(mixer_.IsChannelPlaying(i)) &&
           ((liveQueueingMode_[i] == QM_CHAINSTART) ||
            (liveQueueingMode_[i] == QM_TICKSTART) ||
@@ -754,8 +1081,8 @@ void Player::triggerLiveChains() {
  ********************************************************/
 
 void Player::updateSongPos(int pos, int channel, int chainPos, int hop) {
-  unsigned char *data =
-      viewData_->song_->data_ + channel + SONG_CHANNEL_COUNT * pos;
+  const int channelCount = GetSongChannelCount(viewData_);
+  unsigned char *data = viewData_->song_->data_ + channel + channelCount * pos;
   viewData_->songPlayPos_[channel] = pos;
   viewData_->currentPlayChain_[channel] = *data;
   updateChainPos(chainPos, channel, hop);
@@ -799,14 +1126,14 @@ void Player::updatePhrasePos(int pos, int channel) {
 
   // Check both param colum 1 & 2
 
-  FourCC cc = viewData_->song_->phrase_.cmd1_[phrase * 16 + pos];
-  if (cc == FourCC::InstrumentCommandDelay) {
+  TrackerCommand cc = viewData_->song_->phrase_.cmd1_[phrase * 16 + pos];
+  if (cc == TrackerCommand::InstrumentCommandDelay) {
     ushort param = viewData_->song_->phrase_.param1_[phrase * 16 + pos];
     timeToStart_[channel] = (param & 0x0F) + 1;
   }
 
   cc = viewData_->song_->phrase_.cmd2_[phrase * 16 + pos];
-  if (cc == FourCC::InstrumentCommandDelay) {
+  if (cc == TrackerCommand::InstrumentCommandDelay) {
     ushort param = viewData_->song_->phrase_.param2_[phrase * 16 + pos];
     timeToStart_[channel] = (param & 0x0F) + 1;
   }
@@ -825,27 +1152,32 @@ void Player::playCursorPosition(int channel) {
     Phrase *phrase = &(song->phrase_);
     unsigned char note = phrase->note_[16 * currentPhrase + pos];
     unsigned char instr = phrase->instr_[16 * currentPhrase + pos];
+    RowFxResult fx = ResolveRowFx(note, phrase->cmd1_[16 * currentPhrase + pos],
+                                  phrase->param1_[16 * currentPhrase + pos],
+                                  phrase->cmd2_[16 * currentPhrase + pos],
+                                  phrase->param2_[16 * currentPhrase + pos],
+                                  lastActiveCommands_[channel], false);
+    note = fx.note;
 
     TableHolder *th = TableHolder::GetInstance();
     TablePlayback &tpb = TablePlayback::GetTablePlayback(channel);
+    TablePlayback &atp = TablePlayback::GetAutomationPlayback(channel);
 
     if (note == NOTE_OFF) {
-      mixer_.StopInstrument(channel);
-    } else if (note <= HIGHEST_NOTE) {
-
-      // Stop instrument if playing
-
-      mixer_.StopInstrument(channel);
+      mixer_.ReleaseInstrument(channel);
+    } else if (note <= HIGHEST_NOTE && fx.allowNote) {
+      // clear pending release before next note
+      timeToRelease_[channel] = 0;
       InstrumentBank *bank = viewData_->project_->GetInstrumentBank();
 
       // get instrument for next note
 
-      bool newInstrument = false;
+      bool shouldRetrigger = false;
 
       I_Instrument *instrument;
       if (instr != 0xFF) {
         instrument = bank->GetInstrument(instr);
-        newInstrument = true;
+        shouldRetrigger = true;
       } else {
         instrument = mixer_.GetLastInstrument(channel);
       }
@@ -865,6 +1197,10 @@ void Player::playCursorPosition(int channel) {
           SampleInstrument *sampleInstrument =
               static_cast<SampleInstrument *>(instrument);
           preserveNote = sampleInstrument->HasSlicesForPlayback();
+        } else if (instrument->GetType() == IT_SAMPLE_SOURCE) {
+          SampleSourceInstrument *sampleSourceInstrument =
+              static_cast<SampleSourceInstrument *>(instrument);
+          preserveNote = sampleSourceInstrument->HasSlicesForPlayback();
         }
         if (!preserveNote) {
           note += *trsp;
@@ -879,19 +1215,29 @@ void Player::playCursorPosition(int channel) {
         // Check if note is in acceptable midi range
 
         if (note < 128) {
-          mixer_.StartInstrument(channel, instrument, note, newInstrument);
+          if (shouldRetrigger) {
+            mixer_.StopInstrument(channel);
+          }
+          mixer_.StartInstrument(channel, instrument, note, shouldRetrigger);
           int instrTable = instrument->GetTable();
 
           // If an instrument number has been specified && instrument has table,
           // we trigger the table.
 
-          if ((instrTable != VAR_OFF) && (newInstrument)) {
+          if ((instrTable != VAR_OFF) && (shouldRetrigger)) {
             Table &table = th->GetTable(instrTable);
             bool automated = instrument->GetTableAutomation();
-            tpb.Start(instrument, table, automated);
+            if (automated) {
+              atp.Start(instrument, table, true);
+              tpb.Stop();
+            } else {
+              atp.Stop();
+              tpb.Start(instrument, table, false);
+            }
           } else {
             // if there was an instrument number, we stop the table
-            if (newInstrument) {
+            if (shouldRetrigger) {
+              atp.Stop();
               tpb.Stop();
             }
           }
@@ -906,23 +1252,19 @@ void Player::playCursorPosition(int channel) {
         if (instrument->GetTableAutomation()) {
           TablePlayerChange tpc;
           tpc.timeToLive_ = timeToLive_[channel];
+          tpc.timeToRelease_ = timeToRelease_[channel];
           tpc.instrRetrigger_ = -1;
-          tpb.ProcessStep(tpc);
+          tpc.noteRetrigger_ = -1;
+          atp.ProcessStep(tpc, mixer_.GetChannelNote(channel),
+                          lastActiveCommands_[channel]);
           timeToLive_[channel] = tpc.timeToLive_;
-          if (tpc.instrRetrigger_ >= 0) {
-            int note = mixer_.GetChannelNote(channel);
-            I_Instrument *instr = mixer_.GetInstrument(channel);
-            if ((note <= HIGHEST_NOTE) && (instr != 0)) {
-              // TODO: should we instead allow for transposing notes *down* with
-              // values over 64?
-              note += (tpc.instrRetrigger_ > 80) ? 80 : tpc.instrRetrigger_;
-              while (note > 127) {
-                note -= 12;
-              };
-              mixer_.StopInstrument(channel);
-              // NOTE: 'newIntrument' bool flag is really the "retrigger" flag
-              mixer_.StartInstrument(channel, instr, note, false);
-            };
+          timeToRelease_[channel] = tpc.timeToRelease_;
+          if (tpc.noteRetrigger_ >= 0) {
+            RetriggerChannelInstrumentAtNote(channel, tpc.noteRetrigger_,
+                                             false);
+          } else if (tpc.instrRetrigger_ >= 0) {
+            RetriggerChannelInstrument(
+                channel, DecodeRetriggerOffset(tpc.instrRetrigger_), false);
           };
         }
       }
@@ -930,18 +1272,82 @@ void Player::playCursorPosition(int channel) {
   }
 }
 
+void Player::StepAutomationTableForRetrigger(int channel,
+                                             I_Instrument *instrument) {
+  if ((instrument == 0) || (!instrument->GetTableAutomation())) {
+    return;
+  }
+
+  int instrTable = instrument->GetTable();
+  if (instrTable == VAR_OFF) {
+    return;
+  }
+
+  TableHolder *th = TableHolder::GetInstance();
+  TablePlayback &automationPlayback =
+      TablePlayback::GetAutomationPlayback(channel);
+  TablePlayerChange tpc;
+
+  Table &table = th->GetTable(instrTable);
+  if (automationPlayback.GetTable() != &table) {
+    automationPlayback.Start(instrument, table, true);
+  }
+
+  tpc.timeToLive_ = timeToLive_[channel];
+  tpc.timeToRelease_ = timeToRelease_[channel];
+  tpc.instrRetrigger_ = -1;
+  tpc.noteRetrigger_ = -1;
+
+  automationPlayback.ProcessStep(tpc, mixer_.GetChannelNote(channel),
+                                 lastActiveCommands_[channel]);
+
+  timeToLive_[channel] = tpc.timeToLive_;
+  timeToRelease_[channel] = tpc.timeToRelease_;
+  // Ignore IRT generated by this follow-up automation step to keep retrigger
+  // handling strictly non-recursive.
+}
+
+void Player::RetriggerChannelInstrument(int channel, int semitoneOffset,
+                                        bool stepAutomationTable) {
+  int baseNote = mixer_.GetChannelNote(channel);
+  if (baseNote > HIGHEST_NOTE) {
+    return;
+  }
+  RetriggerChannelInstrumentAtNote(channel, baseNote + semitoneOffset,
+                                   stepAutomationTable);
+}
+
+void Player::RetriggerChannelInstrumentAtNote(int channel, int note,
+                                              bool stepAutomationTable) {
+  I_Instrument *instrument = mixer_.GetInstrument(channel);
+
+  if (instrument == 0) {
+    return;
+  }
+
+  while (note > 127) {
+    note -= 12;
+  }
+  while (note < 0) {
+    note += 12;
+  }
+  // clear pending release before stopping
+  timeToRelease_[channel] = 0;
+  mixer_.StopInstrument(channel);
+  mixer_.StartInstrument(channel, instrument, note, false);
+
+  if (stepAutomationTable) {
+    StepAutomationTableForRetrigger(channel, instrument);
+  }
+}
+
 int Player::getChannelHop(int channel, int pos) {
 
   int phrase = viewData_->currentPlayPhrase_[channel];
-  FourCC cc = viewData_->song_->phrase_.cmd1_[phrase * 16 + pos];
-  if (cc == FourCC::InstrumentCommandHop) {
-    return (viewData_->song_->phrase_.param1_[phrase * 16 + pos]) & 0xF;
-  }
-  cc = viewData_->song_->phrase_.cmd2_[phrase * 16 + pos];
-  if (cc == FourCC::InstrumentCommandHop) {
-    return (viewData_->song_->phrase_.param2_[phrase * 16 + pos]) & 0xF;
-  }
-  return -1;
+  return ResolveRowHop(viewData_->song_->phrase_.cmd1_[phrase * 16 + pos],
+                       viewData_->song_->phrase_.param1_[phrase * 16 + pos],
+                       viewData_->song_->phrase_.cmd2_[phrase * 16 + pos],
+                       viewData_->song_->phrase_.param2_[phrase * 16 + pos]);
 }
 
 /********************************************************
@@ -954,8 +1360,13 @@ void Player::moveToNextStep() {
   // we'll need to know if any channel is playing
 
   bool playingChannel = false;
+  if (selectionRender_.active &&
+      selectionRender_.sourceKind == SelectionResampleSourceKind::Song) {
+    selectionRenderSongRowAdvanced_ = false;
+  }
 
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+  const int channelCount = GetSongChannelCount(viewData_);
+  for (int i = 0; i < channelCount; i++) {
     bool liveTriggered = false;
 
     switch (liveQueueingMode_[i]) {
@@ -984,6 +1395,10 @@ void Player::moveToNextStep() {
       if (gs->TriggerChannel(i)) { // If groove says it is time to play
         if (viewData_->currentPlayPhrase_[i] != 0xFF) {
           int pos = (viewData_->phrasePlayPos_[i]) + 1;
+          if (shouldStopSelectionRenderAtPhraseRow(i, pos)) {
+            stopLocked(PSM_RELEASE);
+            return;
+          }
           if (pos != 16) {
             int hop = getChannelHop(i, pos);
             if (hop >= 0) {
@@ -1007,6 +1422,17 @@ void Player::moveToNextStep() {
       }
     }
   }
+  if (selectionRender_.active &&
+      selectionRender_.sourceKind == SelectionResampleSourceKind::Song &&
+      selectionRenderSongRowAdvanced_) {
+    if (selectionRender_.currentSongRow < selectionRender_.endSongRow) {
+      selectionRender_.currentSongRow++;
+    } else {
+      stopLocked(PSM_RELEASE);
+      return;
+    }
+  }
+
   // if no channel is playing we allow straight
   // queueing of chains
   if (!playingChannel) {
@@ -1056,6 +1482,10 @@ void Player::moveToNextPhrase(int channel, int hop) {
 
   int chain = viewData_->currentPlayChain_[channel];
   int pos = (viewData_->chainPlayPos_[channel]) + 1;
+  if (shouldStopSelectionRenderAtChainRow(channel, pos)) {
+    stopLocked(PSM_RELEASE);
+    return;
+  }
 
   // Look if there' any data at current position
   // which means we continue in the current chain
@@ -1071,6 +1501,12 @@ void Player::moveToNextPhrase(int channel, int hop) {
   if (canContinue) {
     updateChainPos(pos, channel, hop);
   } else { // Should move to next chain
+    if (selectionRender_.active &&
+        selectionRender_.sourceKind == SelectionResampleSourceKind::Chain &&
+        channel == selectionRender_.trackerChannel) {
+      stopLocked(PSM_RELEASE);
+      return;
+    }
     if ((mode_ == PM_SONG) || (mode_ == PM_LIVE)) {
       moveToNextChain(channel, hop); // HOP. here
     } else {
@@ -1134,37 +1570,46 @@ void Player::moveToNextChain(int channel, int hop) {
   // if live mode didn't queue anything, we find the next to play
 
   if (searchNext) {
+    const int channelCount = GetSongChannelCount(viewData_);
     int pos = (viewData_->songPlayPos_[channel]) + 1;
-    unsigned char *data =
-        viewData_->song_->data_ + channel + SONG_CHANNEL_COUNT * pos;
-    bool loopBack = (*data == 0xFF);
-    // Check if first step of chain contains somethin, if not we loop back
-    if (!loopBack) {
-      unsigned char step = viewData_->song_->chain_.data_[*data * 16];
-      loopBack = (step == 0xFF);
-    };
-    if (loopBack) {
-      // If stopAtEnd is enabled and we need to loop back, stop playback instead
-      if (stopAtEnd_) {
-        // Stop all channels
-        for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
-          mixer_.StopChannel(i);
-        }
-        MidiService::GetInstance()->OnPlayerStop();
-        mixer_.OnPlayerStop();
+    if (selectionRender_.active &&
+        selectionRender_.sourceKind == SelectionResampleSourceKind::Song) {
+      if (selectionRender_.currentSongRow >= selectionRender_.endSongRow) {
+        stopLocked(PSM_RELEASE);
+        return;
+      }
+      selectionRenderSongRowAdvanced_ = true;
+    }
 
-        isRunning_ = false;
-        SetChanged();
-        PlayerEvent pe(PET_STOP);
-        NotifyObservers(&pe);
-        // We're already inside a locked context, so we don't need to call
-        // Stop() as that will cause a deadlock
+    bool loopBack = pos >= SONG_ROW_COUNT;
+    unsigned char *data = nullptr;
+    if (!loopBack) {
+      data = viewData_->song_->data_ + channel + channelCount * pos;
+      loopBack = (*data == 0xFF);
+      // Check if first step of chain contains somethin, if not we loop back
+      if (!loopBack) {
+        unsigned char step = viewData_->song_->chain_.data_[*data * 16];
+        loopBack = (step == 0xFF);
+      };
+    }
+    if (loopBack) {
+      if (stopAtEnd_) {
+        // If stopAtEnd is enabled and we need to loop back, stop playback
+        // instead.
+        // Use the same graceful stop path as the public sequencer stop, but
+        // stay in the locked context to avoid deadlocking the audio thread.
+        stopLocked(PSM_RELEASE);
         return;
       }
 
       // Otherwise proceed with normal loop back behavior
-      data -= SONG_CHANNEL_COUNT;
-      pos--;
+      if (data == nullptr) {
+        pos = SONG_ROW_COUNT - 1;
+        data = viewData_->song_->data_ + channel + channelCount * pos;
+      } else {
+        data -= channelCount;
+        pos--;
+      }
       while (pos >= 0) {
         if (*data == 0xFF) { // we stop searching if there's a blank
           break;
@@ -1174,7 +1619,7 @@ void Player::moveToNextChain(int channel, int hop) {
           }
         }
         if (pos != 0)
-          data -= SONG_CHANNEL_COUNT;
+          data -= channelCount;
         pos--;
       };
       pos++;
@@ -1235,6 +1680,8 @@ void Player::StopStreaming() {
     SetAudioActive(false);
   }
 }
+
+bool Player::IsStreamingActive() { return mixer_.IsStreamingActive(); }
 
 void Player::StartRecordStreaming(uint16_t *srcBuffer, uint32_t size,
                                   bool stereo) {
@@ -1297,6 +1744,8 @@ void Player::PlayNote(unsigned short instrumentIndex, unsigned short channel,
   if (instrument) {
     // Use the channel modulo SONG_CHANNEL_COUNT to ensure it's within range
     int playerChannel = channel % SONG_CHANNEL_COUNT;
+    // clear pending release before new note
+    timeToRelease_[channel] = 0;
     mixer_.StartInstrument(playerChannel, instrument, note, true);
     if (!isRunning_) {
       SetAudioActive(true);

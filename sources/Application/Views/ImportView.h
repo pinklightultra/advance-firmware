@@ -1,18 +1,23 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _IMPORT_VIEW_H_
 #define _IMPORT_VIEW_H_
 
+#include "Application/Views/BaseClasses/BrowserListingStorage.h"
 #include "Application/Views/ScreenView.h"
-#include "Externals/etl/include/etl/vector.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/FileSystem/PathUtils.h"
 #include "ViewData.h"
 #include <string>
 
@@ -36,14 +41,16 @@ protected:
   void setCurrentFolder(FileSystem *fs, const char *name);
   void warpToNextSample(bool goUp);
   void import();
-  void preview(char *name);
+  void preview();
   void adjustPreviewVolume(int offset);
-  void showSampleEditor(etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> filename,
+  void showSampleEditor(etl::string<PFILENAME_SIZE> filename,
                         bool isProjectSample);
-  void removeProjectSample(uint8_t fileIndex, FileSystem *fs);
+  void renameSample(const FileSystemEntry &entry, FileSystem *fs);
+  void removeProjectSample(const FileSystemEntry &entry, FileSystem *fs);
   void refreshFileIndexList(FileSystem *fs);
 
 private:
+  void onConfirmRenameSample(View &view, ModalView &dialog);
   void onConfirmRemoveProjectSample(View &view, ModalView &dialog);
 
   size_t topIndex_ = 0;
@@ -59,8 +66,9 @@ private:
   bool pendingDirEnterOnRelease_ = false; // Open dir on ENTER release
   bool inProjectSampleDir_ =
       false; // Flag to track if we're in the project's sample directory
-  FileSystem *pendingDeleteFs_ = nullptr;
-  char pendingDeleteFilename_[PFILENAME_SIZE] = {};
-  etl::vector<int, MAX_FILE_INDEX_SIZE> fileIndexList_;
+  FileSystemPath::PathString currentDir_;
+  char pendingRenamePath_[PFILENAME_SIZE] = {};
+  char pendingDeletePath_[PFILENAME_SIZE] = {};
+  BrowserFileEntries &fileEntries_;
 };
 #endif

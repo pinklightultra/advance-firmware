@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advSystem.h"
@@ -16,6 +20,8 @@
 #include "Application/Model/Config.h"
 #include "Application/Player/SyncMaster.h"
 #include "BatteryGauge.h"
+#include "advUsbRoleManager.h"
+#include "assets/error_bitmaps.h"
 #include "charger.h"
 #include "critical_error_message.h"
 #include "input.h"
@@ -94,10 +100,9 @@ void advSystem::Boot() {
 
   // First check for SDCard
   auto fs = FileSystem::GetInstance();
-  if (!fs->chdir("/")) {
+  if (!fs->exists("/")) {
     Trace::Log("PICOTRACKERSYSTEM", "SDCARD MISSING!!\n");
-    critical_error_message("SDCARD MISSING", 0x01,
-                           DEFAULT_ERROR_MESSAGE_DELAY_SEC, false);
+    critical_sdcard_missing_message(DEFAULT_ERROR_MESSAGE_DELAY_SEC);
   }
 
   // Install MIDI
@@ -130,6 +135,13 @@ void advSystem::Boot() {
   // Configure the battery fuel gauge - will only update if ITPOR bit is set
   configureBatteryGauge();
   configureCharger();
+  if (!advUsbRoleManagerInit()) {
+    Trace::Error("USBROLE: detector init failed");
+    (void)setHostPowerEnabled(false);
+  } else {
+    (void)setHostPowerEnabled(
+        advUsbStatusRequestsHostPower(advUsbRoleManagerGetStatus()));
+  }
 
   eventManager_ = I_GUIWindowFactory::GetInstance()->GetEventManager();
   eventManager_->Init();
@@ -174,13 +186,19 @@ void advSystem::SystemPutChar(int c) {
 }
 
 uint32_t advSystem::GetRandomNumber() {
-  uint32_t random32;
-  if (HAL_RNG_GenerateRandomNumber(&hrng, &random32) == HAL_OK) {
-    return (int32_t)random32;
-  } else {
-    Trace::Error("Error generating random number");
-    return 0;
+  if (!randomSeeded_) {
+    if (HAL_RNG_GenerateRandomNumber(&hrng, &randomState_) != HAL_OK ||
+        randomState_ == 0) {
+      Trace::Error("Error seeding random number generator");
+      randomState_ = 0x6D2B79F5U;
+    }
+    randomSeeded_ = true;
   }
+
+  randomState_ ^= randomState_ << 13;
+  randomState_ ^= randomState_ >> 17;
+  randomState_ ^= randomState_ << 5;
+  return randomState_;
 }
 
 void advSystem::SystemBootloader() { platform_bootloader(); }

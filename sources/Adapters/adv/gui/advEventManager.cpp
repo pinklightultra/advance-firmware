@@ -1,20 +1,28 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advEventManager.h"
 #include "Adapters/adv/audio/record.h"
 #include "Adapters/adv/midi/advMidiService.h"
+#include "Adapters/adv/system/advUsbRoleManager.h"
+#include "Adapters/adv/system/assets/error_bitmaps.h"
 #include "Adapters/adv/system/charger.h"
+#include "Adapters/adv/system/critical_error_message.h"
 #include "Adapters/adv/system/input.h"
-#include "Adapters/adv/utils/utils.h"
+#include "Adapters/adv/usb/usb_utils.h"
 #include "Application/Application.h"
 #include "Application/Model/Config.h"
 #include "Services/Midi/MidiService.h"
+#include "System/Console/nanoprintf.h"
 #include "advGUIWindowImp.h"
 #include "etl/map.h"
 #include "platform.h"
@@ -53,6 +61,257 @@ char advEventManager::inBuffer[INPUT_BUFFER_SIZE] = {0};
 #endif
 
 QueueHandle_t eventQueue;
+static uint8_t g_eventQueueStorage[EVENT_QUEUE_LENGTH * EVENT_QUEUE_ITEM_SIZE];
+
+namespace {
+constexpr TickType_t kUsbRoleSwitchDebounceTicks = pdMS_TO_TICKS(150);
+constexpr TickType_t kUsbRoleSwitchRetryTicks = pdMS_TO_TICKS(250);
+constexpr TickType_t kUsbHostPowerRetryTicks = pdMS_TO_TICKS(1500);
+constexpr uint8_t kUsbRhport = 0u;
+constexpr uint32_t kUsbOtgFsResetHoldDelayMs = 1u;
+constexpr uint32_t kUsbOtgFsResetReleaseDelayMs = 1u;
+
+enum class UsbStackMode : uint8_t {
+  disconnected = 0,
+  device = 1,
+  host = 2,
+};
+
+struct UsbRoleSwitchController {
+  UsbStackMode activeMode;
+  UsbStackMode pendingDesiredMode;
+  TickType_t desiredChangedAtTick;
+  TickType_t lastTransitionAttemptTick;
+  TickType_t lastHostPowerAttemptTick;
+  bool hostPowerEnabled;
+  bool hostPowerStartupFailed;
+  bool desiredModePending;
+};
+
+const char *usbStackModeToString(UsbStackMode mode) {
+  switch (mode) {
+  case UsbStackMode::device:
+    return "device";
+  case UsbStackMode::host:
+    return "host";
+  case UsbStackMode::disconnected:
+  default:
+    return "disconnected";
+  }
+}
+
+UsbStackMode detectActiveUsbStackMode() {
+  if (usbHostModeActive()) {
+    return UsbStackMode::host;
+  }
+  if (tud_inited()) {
+    return UsbStackMode::device;
+  }
+  return UsbStackMode::disconnected;
+}
+
+UsbStackMode desiredUsbStackMode() {
+  const AdvUsbTypeCStatus *status = advUsbRoleManagerGetStatus();
+  if (advUsbStatusRequestsHostPower(status)) {
+    return UsbStackMode::host;
+  }
+  return UsbStackMode::device;
+}
+
+UsbRoleSwitchController makeUsbRoleSwitchController() {
+  const UsbStackMode activeMode = detectActiveUsbStackMode();
+  return UsbRoleSwitchController{
+      .activeMode = activeMode,
+      .pendingDesiredMode = activeMode,
+      .desiredChangedAtTick = xTaskGetTickCount(),
+      .lastTransitionAttemptTick = 0,
+      .lastHostPowerAttemptTick = 0,
+      .hostPowerEnabled = false,
+      .hostPowerStartupFailed = false,
+      .desiredModePending = false,
+  };
+}
+
+void hardResetUsbOtgFsController() {
+  __HAL_RCC_USB_OTG_FS_FORCE_RESET();
+  HAL_Delay(kUsbOtgFsResetHoldDelayMs);
+  __HAL_RCC_USB_OTG_FS_RELEASE_RESET();
+  HAL_Delay(kUsbOtgFsResetReleaseDelayMs);
+}
+
+bool transitionUsbStackToHost() {
+  if (tud_inited() && !tud_deinit(kUsbRhport)) {
+    Trace::Error("USBROLE: failed to deinit TinyUSB device stack");
+    return false;
+  }
+
+  resetUSBMidiSoftwareState();
+  hardResetUsbOtgFsController();
+
+  const tusb_rhport_init_t hostInit = {
+      .role = TUSB_ROLE_HOST,
+      .speed = TUSB_SPEED_AUTO,
+  };
+  if (!tusb_init(kUsbRhport, &hostInit)) {
+    Trace::Error("USBROLE: failed to init TinyUSB host stack");
+    return false;
+  }
+
+  suppressDwc2OtgInt();
+  return true;
+}
+
+bool transitionUsbStackToDisconnected() {
+  if (tuh_inited() && !tuh_deinit(kUsbRhport)) {
+    Trace::Error("USBROLE: failed to deinit TinyUSB host stack");
+    return false;
+  }
+
+  if (tud_inited() && !tud_deinit(kUsbRhport)) {
+    Trace::Error("USBROLE: failed to deinit TinyUSB device stack");
+    return false;
+  }
+
+  resetUSBMidiSoftwareState();
+  hardResetUsbOtgFsController();
+  return true;
+}
+
+bool transitionUsbStackToDevice() {
+  if (tuh_inited() && !tuh_deinit(kUsbRhport)) {
+    Trace::Error("USBROLE: failed to deinit TinyUSB host stack");
+    return false;
+  }
+
+  resetUSBMidiSoftwareState();
+  hardResetUsbOtgFsController();
+
+  const tusb_rhport_init_t deviceInit = {
+      .role = TUSB_ROLE_DEVICE,
+      .speed = TUSB_SPEED_AUTO,
+  };
+  if (!tusb_init(kUsbRhport, &deviceInit)) {
+    Trace::Error("USBROLE: failed to init TinyUSB device stack");
+    return false;
+  }
+
+  return true;
+}
+
+void serviceUsbRoleSwitchController(UsbRoleSwitchController &controller) {
+  const auto applyHostPowerForDesiredMode =
+      [&controller](UsbStackMode desiredMode,
+                    bool clearFailureStateOnNoop) -> bool {
+    const bool shouldEnableHostPower = desiredMode == UsbStackMode::host;
+    if (controller.hostPowerEnabled == shouldEnableHostPower) {
+      if (clearFailureStateOnNoop) {
+        controller.hostPowerStartupFailed = false;
+        usbHostSetStartupFailed(false);
+      }
+      return true;
+    }
+
+    const TickType_t now = xTaskGetTickCount();
+    if (shouldEnableHostPower && (controller.lastHostPowerAttemptTick != 0) &&
+        ((now - controller.lastHostPowerAttemptTick) <
+         kUsbHostPowerRetryTicks)) {
+      return false;
+    }
+
+    if (!setHostPowerEnabled(shouldEnableHostPower)) {
+      controller.lastHostPowerAttemptTick = xTaskGetTickCount();
+      controller.hostPowerStartupFailed = shouldEnableHostPower;
+      usbHostSetStartupFailed(shouldEnableHostPower);
+      Trace::Error("USBROLE: failed to set host power enabled=%u",
+                   shouldEnableHostPower ? 1u : 0u);
+      return false;
+    }
+
+    controller.hostPowerEnabled = shouldEnableHostPower;
+    controller.lastHostPowerAttemptTick = 0;
+    controller.hostPowerStartupFailed = false;
+    usbHostSetStartupFailed(false);
+    Trace::Log("USBROLE", "host power %s",
+               shouldEnableHostPower ? "enabled" : "disabled");
+    logHostPowerDiagnostics(shouldEnableHostPower ? "host-enable"
+                                                  : "host-disable");
+    return true;
+  };
+
+  controller.activeMode = detectActiveUsbStackMode();
+  const UsbStackMode desiredMode = desiredUsbStackMode();
+  const TickType_t now = xTaskGetTickCount();
+
+  if ((desiredMode == UsbStackMode::host) && !controller.hostPowerEnabled &&
+      (controller.activeMode != UsbStackMode::disconnected) &&
+      !controller.desiredModePending) {
+    Trace::Log("USBROLE", "usb_task prepare host active=%s",
+               usbStackModeToString(controller.activeMode));
+    if (!transitionUsbStackToDisconnected()) {
+      return;
+    }
+    controller.activeMode = detectActiveUsbStackMode();
+    controller.lastTransitionAttemptTick = 0;
+    return;
+  }
+
+  if (desiredMode == controller.activeMode) {
+    if (!applyHostPowerForDesiredMode(desiredMode, true)) {
+      return;
+    }
+    controller.desiredModePending = false;
+    controller.lastTransitionAttemptTick = 0;
+    return;
+  }
+
+  if (!controller.desiredModePending ||
+      (controller.pendingDesiredMode != desiredMode)) {
+    if (!applyHostPowerForDesiredMode(desiredMode,
+                                      desiredMode != UsbStackMode::host)) {
+      return;
+    }
+    controller.pendingDesiredMode = desiredMode;
+    controller.desiredChangedAtTick = now;
+    controller.lastTransitionAttemptTick = 0;
+    controller.desiredModePending = true;
+    Trace::Log("USBROLE", "usb_task debounce start active=%s desired=%s",
+               usbStackModeToString(controller.activeMode),
+               usbStackModeToString(desiredMode));
+    return;
+  }
+
+  if ((now - controller.desiredChangedAtTick) < kUsbRoleSwitchDebounceTicks) {
+    return;
+  }
+
+  if ((controller.lastTransitionAttemptTick != 0) &&
+      ((now - controller.lastTransitionAttemptTick) <
+       kUsbRoleSwitchRetryTicks)) {
+    return;
+  }
+
+  controller.lastTransitionAttemptTick = now;
+  Trace::Log("USBROLE", "usb_task transition active=%s desired=%s",
+             usbStackModeToString(controller.activeMode),
+             usbStackModeToString(desiredMode));
+
+  const bool switched = (desiredMode == UsbStackMode::host)
+                            ? transitionUsbStackToHost()
+                            : transitionUsbStackToDevice();
+  if (!switched) {
+    return;
+  }
+
+  controller.activeMode = detectActiveUsbStackMode();
+  Trace::Log("USBROLE", "usb_task transition result active=%s desired=%s",
+             usbStackModeToString(controller.activeMode),
+             usbStackModeToString(desiredMode));
+  if (controller.activeMode == desiredMode) {
+    controller.desiredModePending = false;
+    controller.lastTransitionAttemptTick = 0;
+  }
+}
+} // namespace
 
 #ifdef SERIAL_REPL
 #define INPUT_BUFFER_SIZE 80
@@ -149,6 +408,29 @@ extern "C" void vApplicationIdleHook(void) {
   }
 }
 
+extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask,
+                                              char *pcTaskName) {
+  UNUSED(xTask);
+  Trace::Error("RTOS stack overflow in task: %s", pcTaskName);
+
+  // Use static buffers to avoid using the actively overflowing stack
+  static char detailLine[33];
+  static const char *detailLines[1];
+
+  detailLines[0] = detailLine;
+
+  // pcTaskName itself might be pointing to corrupted memory because of the
+  // overflow
+  npf_snprintf(detailLine, sizeof(detailLine), "Task: %.25s", pcTaskName);
+
+  critical_error_message(&g_deadBitmap, "Stack Overflow", detailLines, 1,
+                         DEFAULT_ERROR_MESSAGE_DELAY_SEC);
+
+  taskDISABLE_INTERRUPTS();
+  for (;;) {
+  }
+}
+
 #ifdef RTOS_STATS
 // Declared in FreeRTOSConfig.h
 uint32_t GetRuntimeCounterValue(void) { return __HAL_TIM_GET_COUNTER(&htim2); }
@@ -161,7 +443,7 @@ void timerStatsHandler(TimerHandle_t xTimer) {
   UNUSED(xTimer);
 
   volatile UBaseType_t uxArraySize, x;
-  unsigned long ulTotalRunTime, ulStatsAsPercentage, deltaPercentage;
+  unsigned long ulTotalRunTime, ulStatsAsPercentage, deltaPercentage = 0;
 
   //   Take a snapshot of the number of tasks in case it changes while this
   //     function is executing.
@@ -181,9 +463,16 @@ void timerStatsHandler(TimerHandle_t xTimer) {
     // format the raw data as human readable ASCII data.
     for (uint32_t x = 0; x < uxArraySize; x++) {
       if (stats.contains(pxTaskStatusArray[x].pcTaskName)) {
-        deltaPercentage = (pxTaskStatusArray[x].ulRunTimeCounter -
-                           stats[pxTaskStatusArray[x].pcTaskName]) /
-                          (ulTotalRunTime - prevRuntime);
+        unsigned long runtimeDelta = ulTotalRunTime - prevRuntime;
+        if (runtimeDelta > 0) {
+          deltaPercentage = (pxTaskStatusArray[x].ulRunTimeCounter -
+                             stats[pxTaskStatusArray[x].pcTaskName]) /
+                            runtimeDelta;
+        } else {
+          deltaPercentage = 0;
+        }
+      } else {
+        deltaPercentage = 0;
       };
       stats[pxTaskStatusArray[x].pcTaskName] =
           pxTaskStatusArray[x].ulRunTimeCounter;
@@ -216,19 +505,15 @@ void timerHandler(TimerHandle_t xTimer) {
   xQueueSend(eventQueue, &ev, 0);
 }
 
-uint32_t readFromUSBCDC(char *buf, int len) {
-  int count = 0;
-  if (tud_cdc_available()) {
-    count = tud_cdc_read(buf, (uint32_t)len);
+uint32_t readFromUSBCDC(char *buf, uint32_t len) {
+  uint32_t count = 0;
+  if (tud_inited() && tud_cdc_available()) {
+    count = tud_cdc_read(buf, len);
   }
   return count;
 }
 
 void ProcessEvent(void *) {
-  uint8_t eventQueueStorage[EVENT_QUEUE_LENGTH * EVENT_QUEUE_ITEM_SIZE];
-  eventQueue = xQueueCreateStatic(EVENT_QUEUE_LENGTH, EVENT_QUEUE_ITEM_SIZE,
-                                  eventQueueStorage, &eventQueueBuffer);
-
   Event event(EventType::LAST);
   for (;;) {
     if (xQueueReceive(eventQueue, &event, portMAX_DELAY) == pdTRUE) {
@@ -238,8 +523,11 @@ void ProcessEvent(void *) {
 }
 
 void USBDevice(void *) {
+  UsbRoleSwitchController controller = makeUsbRoleSwitchController();
   for (;;) {
-    tud_task(); // Blocks on TinyUSB event queue until there is work to do
+    serviceUsbRoleSwitchController(controller);
+    handleUSBInterrupts();
+    pumpUSBMidiTxQueue();
   }
 }
 
@@ -249,6 +537,13 @@ advEventManager::~advEventManager() {}
 
 bool advEventManager::Init() {
   EventManager::Init();
+
+  eventQueue = xQueueCreateStatic(EVENT_QUEUE_LENGTH, EVENT_QUEUE_ITEM_SIZE,
+                                  g_eventQueueStorage, &eventQueueBuffer);
+  if (eventQueue == nullptr) {
+    Trace::Error("Failed to create event queue");
+    return false;
+  }
 
 #ifdef RTOS_STATS
   timerStats =
@@ -296,34 +591,28 @@ bool advEventManager::Init() {
 int advEventManager::MainLoop() {
   int loops = 0;
   int events = 0;
-#ifdef SDIO_BENCH
-  // Perform a benchmark of SD card on startup
-  sd_bench();
-#endif
 
   static StackType_t InputEventsStack[2000];
   static StaticTask_t InputEventsTCB;
   xTaskCreateStatic(ProcessInputEvent, "InEvent", 2000, NULL, 2,
                     InputEventsStack, &InputEventsTCB);
 
-#ifdef SERIAL_REPL
-  static StackType_t SerialDebugInputStack[1000];
-  static StaticTask_t SerialDebugInputTCB;
+  static StackType_t SerialInputStack[1000];
+  static StaticTask_t SerialInputTCB;
   xTaskCreateStatic(ProcessSerialInputEvent, "SerialInEvent", 1000, NULL, 2,
-                    SerialDebugInputStack, &SerialDebugInputTCB);
-#endif
+                    SerialInputStack, &SerialInputTCB);
 
-  static StackType_t ProcessEventStack[1000];
+  static StackType_t ProcessEventStack[2048];
   static StaticTask_t ProcessEventTCB;
-  xTaskCreateStatic(ProcessEvent, "ProcEvent", 1000, NULL, 1, ProcessEventStack,
+  xTaskCreateStatic(ProcessEvent, "ProcEvent", 2048, NULL, 1, ProcessEventStack,
                     &ProcessEventTCB);
 
   RecordHandle = xTaskCreateStatic(Record, "Record", 1000, NULL, 1, RecordStack,
                                    &RecordTCB);
 
-  static StackType_t USBDeviceStack[512];
+  static StackType_t USBDeviceStack[2048];
   static StaticTask_t USBDeviceTCB;
-  xTaskCreateStatic(USBDevice, "USB Device", 512, NULL, tskIDLE_PRIORITY + 2,
+  xTaskCreateStatic(USBDevice, "USB Device", 2048, NULL, tskIDLE_PRIORITY + 2,
                     USBDeviceStack, &USBDeviceTCB);
 
   vTaskStartScheduler();
@@ -342,17 +631,26 @@ int advEventManager::GetKeyCode(const char *name) { return -1; }
 
 void advEventManager::ProcessSerialInputEvent(void *) {
   MidiService *midiService = MidiService::GetInstance();
+  bool remoteUIConnected = false;
   for (;;) {
 #ifdef SERIAL_REPL
     // Process serial debug input
     serialDebugUI_.readSerialIn(inBuffer, INPUT_BUFFER_SIZE);
 #endif
 
+    bool newRemoteUIConnected = tud_cdc_connected();
+    if (newRemoteUIConnected && !remoteUIConnected) {
+      Event ev(REDRAW);
+      xQueueSend(eventQueue, &ev, 0);
+    }
+    remoteUIConnected = newRemoteUIConnected;
+
     // Process UART input for remote UI if enabled
     char uartBuffer[16];
-    int readBytes = readFromUSBCDC(uartBuffer, 16);
+    uint32_t readBytes = readFromUSBCDC(uartBuffer, sizeof(uartBuffer));
     if (readBytes > 0) {
-      Trace::Debug("Received %d bytes from UART", sizeof(uartBuffer));
+      Trace::Debug("Received %lu bytes from UART",
+                   static_cast<unsigned long>(readBytes));
       // For now, we'll just trigger a redraw when any data is received
       // You can add more sophisticated command handling here as needed
       Event ev(REDRAW);
@@ -406,8 +704,8 @@ void advEventManager::ProcessInputEvent(void *) {
       // Get time here so delay is independant of processing speed
       time_ = millis();
 
-      //                Trace::Debug("Pe") ;
-      advGUIWindowImp::ProcessButtonChange(sendMask, newMask);
+      Event ev(BUTTON_CHANGE, sendMask, newMask);
+      xQueueSend(eventQueue, &ev, 0);
       buttonMask_ = newMask;
       //            Trace::Debug("%d: mask=%x",gTime_,sendMask) ;
       //                Trace::Debug("~Pe") ;
@@ -424,6 +722,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   switch (GPIO_Pin) {
   case SD_DET_Pin: {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (eventQueue == nullptr) {
+      return;
+    }
     if (HAL_GPIO_ReadPin(SD_DET_GPIO_Port, SD_DET_Pin) == GPIO_PIN_RESET) {
       // SD card inserted
       Event ev(SD_DET_INSERT);
@@ -436,30 +737,21 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
   } break;
   case CHARGER_INT_Pin: {
-    auto reason = chargerIntReason();
-    switch (reason) {
-    case VBUS_OK: {
-      // start charging (if not 100% already?)
-      startCharging();
-    } break;
-    case VBUS_KO: {
-      // stop charging?
-      stopCharging();
-    } break;
-    case CHARGE_END: {
-      // stop charging
-      stopCharging();
-    } break;
-    case CHARGE_FAULT: {
-      // What do? under this condition BATFET is disconnected
-      // maybe bat indicator is [-!-]
-      stopCharging();
-    } break;
-
-    case UNKNOWN: {
-      // do nothing for now, we know we have unhandled cases
-    } break;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    Event ev(CHARGER_INT_EVENT);
+    if (eventQueue != nullptr) {
+      xQueueSendFromISR(eventQueue, &ev, &xHigherPriorityTaskWoken);
     }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    break;
+  }
+  case USB_INT_Pin: {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    Event ev(USB_ROLE_INT_EVENT);
+    if (eventQueue != nullptr) {
+      xQueueSendFromISR(eventQueue, &ev, &xHigherPriorityTaskWoken);
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     break;
   }
   }

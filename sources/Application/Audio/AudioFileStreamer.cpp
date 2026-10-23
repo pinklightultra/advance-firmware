@@ -1,15 +1,18 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "AudioFileStreamer.h"
 #include "Application/Model/Config.h"
-#include "Application/Utils/fixed.h"
 #include "Services/Audio/Audio.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
@@ -26,12 +29,9 @@ AudioFileStreamer::AudioFileStreamer() {
   position_ = 0;
   fileSampleRate_ = 44100;   // Default
   systemSampleRate_ = 44100; // Default
-  fpSpeed_ = FP_ONE;         // Default 1.0 in fixed point
+  speed_ = 1.0f;
   project_ = NULL;
   singleCycleData_ = NULL;
-#ifndef ADV
-  stopRequested_ = false;
-#endif
   referencePitch_ = 261.63f; // C4 = 261.63 Hz (using C4 to compensate for how
                              // its actually what we call C3 in pT)
 };
@@ -48,9 +48,6 @@ bool AudioFileStreamer::Start(const char *name, int startSample, bool looping) {
 
   name_ = name;
   position_ = (startSample > 0) ? float(startSample) : 0.0f;
-#ifndef ADV
-  stopRequested_ = false;
-#endif
 
   wav_.Close();
   Trace::Log("", "wave open:%s", name_.c_str());
@@ -92,11 +89,11 @@ bool AudioFileStreamer::Start(const char *name, int startSample, bool looping) {
         ratio);
   }
 
-  fpSpeed_ = fl2fp(ratio);
+  speed_ = ratio;
   Trace::Debug("AudioFileStreamer: File '%s' - Sample Rate: %d Hz, Channels: "
                "%d",
                name_.c_str(), fileSampleRate_, channels);
-  Trace::Debug("Size: %ld samples, Speed: %d", size, fp2i(fpSpeed_));
+  Trace::Debug("Size: %ld samples, Speed: %d", size, (int)speed_);
 
   // Load the entire buffer for single cycle waveforms
   if (looping) {
@@ -104,6 +101,14 @@ bool AudioFileStreamer::Start(const char *name, int startSample, bool looping) {
 
     // Get channel count before using it
     int channels = wav_.GetChannelCount(-1);
+    if (channels != 1 || size > SINGLE_CYCLE_MAX_SAMPLE_SIZE) {
+      Trace::Error("AudioFileStreamer: Invalid single cycle source (%ld "
+                   "frames, %d channels)",
+                   size, channels);
+      wav_.Close();
+      mode_ = AFSM_STOPPED;
+      return false;
+    }
 
     // For safety, load the waveform in smaller chunks to avoid buffer
     // overflow FLASH_PAGE_SIZE  and the assertion in  WavFile::GetBuffer
@@ -168,35 +173,16 @@ bool AudioFileStreamer::Start(const char *name, int startSample, bool looping) {
 };
 
 void AudioFileStreamer::Stop() {
-#ifndef ADV
-  // Because Stop() is called from the "ui thread"" (Core0 on pico) while
-  // rendering is on "audio thread" (Core1 on pico), can get a race if the wav
-  // file is closed in Stop() while rendering is still reading from the file to
-  // stream the audio data so instead just set flag to request the stop happen
-  // in Render()
-  stopRequested_ = true;
-  mode_ = AFSM_STOPPED;
-  Trace::Debug("Streaming stopped");
-#else
   mode_ = AFSM_STOPPED;
   wav_.Close();
   Trace::Debug("Streaming stopped");
-#endif
 };
 
 bool AudioFileStreamer::IsPlaying() {
   return (mode_ == AFSM_PLAYING || mode_ == AFSM_LOOPING);
 }
 
-bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
-#ifndef ADV
-  if (stopRequested_) {
-    wav_.Close();
-    stopRequested_ = false;
-    mode_ = AFSM_STOPPED;
-    return false;
-  }
-#endif
+bool AudioFileStreamer::Render(AudioSample *buffer, int samplecount) {
   // See if we're playing
   if (mode_ == AFSM_STOPPED) {
     return false;
@@ -212,7 +198,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
   int channelCount = wav_.GetChannelCount(-1);
 
   // Clear the output buffer
-  memset(buffer, 0, samplecount * 2 * sizeof(fixed));
+  memset(buffer, 0, samplecount * 2 * sizeof(AudioSample));
 
   // Get preview volume from project
   Variable *v = project_->FindVariable(FourCC::VarPreviewVolume);
@@ -225,16 +211,16 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
   float logVol = normalizedVol * normalizedVol; // Quadratic curve
 
   // Convert to fixed point
-  fixed volume = fl2fp(logVol);
+  AudioSample volume = logVol;
 
-  fixed *dst = buffer;
+  AudioSample *dst = buffer;
 
   // Special handling for single cycle waveforms in looping mode
   if (mode_ == AFSM_LOOPING) {
     // Use our static buffer that we've already loaded with the entire waveform
     if (!singleCycleData_) {
       Trace::Error("AudioFileStreamer: Single cycle buffer is null");
-      mode_ = AFSM_STOPPED;
+      Stop();
       return false;
     }
 
@@ -258,8 +244,6 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
       // Use linear interpolation between samples for smoother playback
       // Calculate the fractional part for interpolation
       float frac = pos - (float)sourcePos;
-      fixed fpFrac = fl2fp(frac);
-
       // Get the next sample position for interpolation, with proper wrapping
       int nextPos = sourcePos + 1;
       if (nextPos >= size) {
@@ -270,31 +254,37 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
 
       if (channelCount == 2) {
         // Stereo sample with interpolation
-        fixed s1 = i2fp(currentSample[0]);
-        fixed s2 = i2fp(nextSample[0]);
-        fixed leftSample = s1 + fp_mul(fpFrac, s2 - s1);
+        AudioSample left1 =
+            static_cast<AudioSample>(currentSample[0]) / kAudioPcmScale;
+        AudioSample left2 =
+            static_cast<AudioSample>(nextSample[0]) / kAudioPcmScale;
+        AudioSample leftSample = left1 + (frac * (left2 - left1));
 
-        fixed s3 = i2fp(currentSample[1]);
-        fixed s4 = i2fp(nextSample[1]);
-        fixed rightSample = s3 + fp_mul(fpFrac, s4 - s3);
+        AudioSample right1 =
+            static_cast<AudioSample>(currentSample[1]) / kAudioPcmScale;
+        AudioSample right2 =
+            static_cast<AudioSample>(nextSample[1]) / kAudioPcmScale;
+        AudioSample rightSample = right1 + (frac * (right2 - right1));
 
         // Apply volume and swap to match reversed hardware wiring
-        *dst++ = fp_mul(rightSample, volume);
-        *dst++ = fp_mul(leftSample, volume);
+        *dst++ = rightSample * volume;
+        *dst++ = leftSample * volume;
       } else {
         // Mono sample with interpolation
-        fixed s1 = i2fp(currentSample[0]);
-        fixed s2 = i2fp(nextSample[0]);
-        fixed sample = s1 + fp_mul(fpFrac, s2 - s1);
+        AudioSample sample1 =
+            static_cast<AudioSample>(currentSample[0]) / kAudioPcmScale;
+        AudioSample sample2 =
+            static_cast<AudioSample>(nextSample[0]) / kAudioPcmScale;
+        AudioSample sample = sample1 + (frac * (sample2 - sample1));
 
         // Apply volume and duplicate to both channels
-        fixed v = fp_mul(sample, volume);
+        AudioSample v = sample * volume;
         *dst++ = v;
         *dst++ = v;
       }
 
       // Move to the next position and wrap around if needed
-      pos += fp2fl(fpSpeed_);
+      pos += speed_;
       while (pos >= cycleSize) {
         pos -= cycleSize;
       }
@@ -309,11 +299,11 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
   int bufferSize = 64; // Small, safe buffer size
 
   // Check if we're near the end of the file
-  if (position_ + (samplecount * fp2fl(fpSpeed_)) >= size) {
+  if (position_ + (samplecount * speed_) >= size) {
     // We'll reach the end during this render call
     int remainingSamples = size - position_;
     if (remainingSamples <= 0) {
-      mode_ = AFSM_STOPPED;
+      Stop();
       return false;
     }
   }
@@ -322,7 +312,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
   if (!wav_.GetBuffer((int)position_, bufferSize)) {
     Trace::Error("AudioFileStreamer: Failed to get buffer at position %d",
                  (int)position_);
-    mode_ = AFSM_STOPPED;
+    Stop();
     return false;
   }
 
@@ -330,7 +320,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
   short *src = (short *)wav_.GetSampleBuffer(-1);
   if (!src) {
     Trace::Error("AudioFileStreamer: GetSampleBuffer returned null");
-    mode_ = AFSM_STOPPED;
+    Stop();
     return false;
   }
 
@@ -345,7 +335,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
 
       // Check if we've reached the end of the file
       if (position_ >= size - 1) {
-        mode_ = AFSM_STOPPED;
+        Stop();
         return false;
       }
 
@@ -353,7 +343,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
       if (!wav_.GetBuffer((int)position_, bufferSize)) {
         Trace::Error("AudioFileStreamer: Failed to get buffer at position %d",
                      (int)position_);
-        mode_ = AFSM_STOPPED;
+        Stop();
         return false;
       }
 
@@ -361,7 +351,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
       src = (short *)wav_.GetSampleBuffer(-1);
       if (!src) {
         Trace::Error("AudioFileStreamer: GetSampleBuffer returned null");
-        mode_ = AFSM_STOPPED;
+        Stop();
         return false;
       }
 
@@ -378,25 +368,28 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
     short *nextSample = currentSample + channelCount;
 
     // Linear interpolation between samples
-    fixed fpFrac = fl2fp(frac);
-    fixed s1 = i2fp(currentSample[0]);
-    fixed s2 = i2fp(nextSample[0]);
-    fixed leftSample = s1 + fp_mul(fpFrac, s2 - s1);
-    fixed rightSample;
+    AudioSample left1 =
+        static_cast<AudioSample>(currentSample[0]) / kAudioPcmScale;
+    AudioSample left2 =
+        static_cast<AudioSample>(nextSample[0]) / kAudioPcmScale;
+    AudioSample leftSample = left1 + (frac * (left2 - left1));
+    AudioSample rightSample;
 
     if (channelCount == 2) {
-      fixed s3 = i2fp(currentSample[1]);
-      fixed s4 = i2fp(nextSample[1]);
-      rightSample = s3 + fp_mul(fpFrac, s4 - s3);
+      AudioSample right1 =
+          static_cast<AudioSample>(currentSample[1]) / kAudioPcmScale;
+      AudioSample right2 =
+          static_cast<AudioSample>(nextSample[1]) / kAudioPcmScale;
+      rightSample = right1 + (frac * (right2 - right1));
     } else {
       rightSample = leftSample;
     }
     // Apply volume and swap to match reversed hardware wiring
-    *dst++ = fp_mul(rightSample, volume);
-    *dst++ = fp_mul(leftSample, volume);
+    *dst++ = rightSample * volume;
+    *dst++ = leftSample * volume;
 
     // Move to the next source position based on the sample rate ratio
-    pos += fp2fl(fpSpeed_);
+    pos += speed_;
   }
 
   // Update the position for the next render call
@@ -404,7 +397,7 @@ bool AudioFileStreamer::Render(fixed *buffer, int samplecount) {
 
   // If we've reached the end of the file, stop playback
   if (position_ >= size) {
-    mode_ = AFSM_STOPPED;
+    Stop();
   }
 
   return true;

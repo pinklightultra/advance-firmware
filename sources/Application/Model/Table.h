@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _TABLE_H_
@@ -14,11 +18,7 @@
 #include "Foundation/T_Singleton.h"
 #include "Foundation/Types/Types.h"
 
-#ifdef ADV
 #define TABLE_COUNT 0x80
-#else
-#define TABLE_COUNT 0x20
-#endif
 #define TABLE_STEPS 16
 #define TABLE_COLUMNS 3
 
@@ -32,11 +32,11 @@ public:
   void Copy(const Table &other);
 
 public:
-  FourCC cmd1_[TABLE_STEPS];
+  TrackerCommand cmd1_[TABLE_STEPS];
   ushort param1_[TABLE_STEPS];
-  FourCC cmd2_[TABLE_STEPS];
+  TrackerCommand cmd2_[TABLE_STEPS];
   ushort param2_[TABLE_STEPS];
-  FourCC cmd3_[TABLE_STEPS];
+  TrackerCommand cmd3_[TABLE_STEPS];
   ushort param3_[TABLE_STEPS];
 };
 

@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "GraphField.h"
@@ -44,6 +48,11 @@ void GraphField::Draw(GUIWindow &w, int offset) {
   w.DrawRect(left);
   w.DrawRect(rightLine);
   w.SetCurrentRectColor(AppWindow::GetColor(CD_NORMAL));
+}
+
+GUIPoint GraphField::GetPosition() {
+  return GUIPoint(static_cast<int32_t>(x_) / CHAR_WIDTH,
+                  static_cast<int32_t>(y_) / CHAR_HEIGHT);
 }
 
 void GraphField::Reset() {
@@ -238,13 +247,14 @@ void GraphField::SetMarkerCount(size_t count) {
 }
 
 void GraphField::SetMarker(size_t index, uint32_t sample, ColorDefinition color,
-                           bool visible) {
+                           bool visible, MarkerStyle style) {
   if (index >= MaxMarkers) {
     return;
   }
   markers_[index].sample = sample;
   markers_[index].color = color;
   markers_[index].visible = visible;
+  markers_[index].style = style;
 }
 
 int32_t GraphField::SampleToPixel(uint32_t sample) const {
@@ -306,6 +316,7 @@ void GraphField::DrawGraph(View &view) {
           markerPixelCache_[i] = -1;
           markerColorCache_[i] = markers_[i].color;
           markerVisibleCache_[i] = false;
+          markerStyleCache_[i] = markers_[i].style;
           continue;
         }
         int32_t markerX = SampleToPixel(markers_[i].sample);
@@ -313,14 +324,14 @@ void GraphField::DrawGraph(View &view) {
           markerPixelCache_[i] = -1;
           markerColorCache_[i] = markers_[i].color;
           markerVisibleCache_[i] = false;
+          markerStyleCache_[i] = markers_[i].style;
           continue;
         }
-        GUIRect marker(markerX, static_cast<int32_t>(y_) + 2, markerX + 1,
-                       static_cast<int32_t>(y_) + height_ - 2);
-        view.DrawRect(marker, markers_[i].color);
+        drawMarker(view, markerX, markers_[i].color, markers_[i].style);
         markerPixelCache_[i] = static_cast<int16_t>(markerX);
         markerColorCache_[i] = markers_[i].color;
         markerVisibleCache_[i] = true;
+        markerStyleCache_[i] = markers_[i].style;
       }
     } else {
       resetMarkerCache();
@@ -364,13 +375,15 @@ void GraphField::DrawGraph(View &view) {
 
     int16_t previousX = markerPixelCache_[i];
     bool colorChanged = markerColorCache_[i] != markers_[i].color;
+    bool styleChanged = markerStyleCache_[i] != markers_[i].style;
     bool visChanged = markerVisibleCache_[i] != visible;
-    if (currentX != previousX || colorChanged || visChanged) {
+    if (currentX != previousX || colorChanged || styleChanged || visChanged) {
       addRedrawX(previousX);
       addRedrawX(currentX);
       markerPixelCache_[i] = currentX;
       markerColorCache_[i] = markers_[i].color;
       markerVisibleCache_[i] = visible;
+      markerStyleCache_[i] = markers_[i].style;
     }
   }
 
@@ -420,6 +433,25 @@ void GraphField::redrawWaveformColumn(View &view, int32_t x) {
   view.DrawRect(column, CD_NORMAL);
 }
 
+void GraphField::drawMarker(View &view, int32_t x, ColorDefinition color,
+                            MarkerStyle style) {
+  int32_t top = static_cast<int32_t>(y_) + 2;
+  int32_t bottom = static_cast<int32_t>(y_) + height_ - 2;
+  if (style == MarkerStyle::Solid) {
+    GUIRect marker(x, top, x + 1, bottom);
+    view.DrawRect(marker, color);
+    return;
+  }
+
+  constexpr int32_t DashHeight = 4;
+  constexpr int32_t DashGap = 3;
+  for (int32_t y = top; y < bottom; y += DashHeight + DashGap) {
+    int32_t dashBottom = std::min(y + DashHeight, bottom);
+    GUIRect marker(x, y, x + 1, dashBottom);
+    view.DrawRect(marker, color);
+  }
+}
+
 void GraphField::drawMarkersAt(View &view, int32_t x) {
   if (!hasValidWindow()) {
     return;
@@ -433,9 +465,7 @@ void GraphField::drawMarkersAt(View &view, int32_t x) {
     if (markerX != x) {
       continue;
     }
-    GUIRect marker(x, static_cast<int32_t>(y_) + 2, x + 1,
-                   static_cast<int32_t>(y_) + height_ - 2);
-    view.DrawRect(marker, markers_[i].color);
+    drawMarker(view, x, markers_[i].color, markers_[i].style);
   }
 }
 
@@ -444,9 +474,11 @@ void GraphField::resetMarkerCache() {
     markerPixelCache_[i] = -1;
     markerColorCache_[i] = CD_NORMAL;
     markerVisibleCache_[i] = false;
+    markerStyleCache_[i] = MarkerStyle::Solid;
     markers_[i].sample = 0;
     markers_[i].color = CD_NORMAL;
     markers_[i].visible = false;
+    markers_[i].style = MarkerStyle::Solid;
   }
 }
 

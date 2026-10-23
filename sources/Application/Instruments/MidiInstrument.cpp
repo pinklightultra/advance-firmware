@@ -1,14 +1,17 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "MidiInstrument.h"
-#include "Application/Model/Scale.h"
 #include "Application/Player/Player.h"
 #include "Application/Utils/char.h"
 #include "CommandList.h"
@@ -44,6 +47,14 @@ MidiInstrument::MidiInstrument()
   variables_.insert(variables_.end(), &table_);
   variables_.insert(variables_.end(), &tableAuto_);
   variables_.insert(variables_.end(), &program_);
+
+  for (int i = 0; i < SONG_CHANNEL_COUNT; ++i) {
+    first_[i] = false;
+    lastNoteCount_[i] = 0;
+    pendingNoteOffCount_[i] = 0;
+    lastNotes_[i].fill(0);
+    pendingNoteOffs_[i].fill(0);
+  }
 }
 
 MidiInstrument::~MidiInstrument(){};
@@ -79,17 +90,42 @@ void MidiInstrument::OnStart() {
 };
 
 bool MidiInstrument::Start(int c, unsigned char note, bool retrigger) {
+  const bool hasActiveNotes = lastNoteCount_[c] > 0;
+  const bool continueNote = !retrigger && hasActiveNotes;
+  const bool sameNoteContinue = continueNote && (lastNotes_[c][0] == note);
+
+  if (sameNoteContinue) {
+    return true;
+  }
+
+  if (continueNote) {
+    pendingNoteOffCount_[c] = lastNoteCount_[c];
+    for (int i = 0; i < lastNoteCount_[c]; ++i) {
+      pendingNoteOffs_[c][i] = lastNotes_[c][i];
+    }
+  } else {
+    pendingNoteOffCount_[c] = 0;
+  }
 
   first_[c] = true;
+  lastNoteCount_[c] = 1;
   lastNotes_[c][0] = note;
+  for (int i = 1; i < MAX_MIDI_CHORD_NOTES + 1; ++i) {
+    lastNotes_[c][i] = 0;
+    pendingNoteOffs_[c][i] = 0;
+  }
 
   Variable *v = FindVariable(FourCC::MidiInstrumentChannel);
   int channel = v->GetInt();
 
-  v = FindVariable(FourCC::MidiInstrumentNoteLength);
-  remainingTicks_ = v->GetInt();
-  if (remainingTicks_ == 0) {
-    remainingTicks_ = -1;
+  if (retrigger) {
+    v = FindVariable(FourCC::MidiInstrumentNoteLength);
+    remainingTicks_ = noteLen_.GetInt();
+    if (remainingTicks_ > 0) {
+      remainingTicks_++;
+    } else {
+      remainingTicks_ = -1;
+    }
   }
 
   // set initial velocity (changed via InstrumentCommandVelocity)
@@ -109,10 +145,16 @@ void MidiInstrument::Stop(int c) {
   Variable *v = FindVariable(FourCC::MidiInstrumentChannel);
   int channel = v->GetInt();
 
-  for (int i = 0; i < MAX_MIDI_CHORD_NOTES + 1; i++) {
-    if (lastNotes_[c][i] == 0) {
-      continue;
-    }
+  for (int i = 0; i < pendingNoteOffCount_[c]; i++) {
+    MidiMessage msg;
+    msg.status_ = MidiMessage::MIDI_NOTE_OFF + channel;
+    msg.data1_ = pendingNoteOffs_[c][i];
+    msg.data2_ = 0x00;
+    svc_->QueueMessage(msg);
+    Trace::Debug("MIDI pending note OFF[%d]:%d", i, msg.data1_);
+  }
+
+  for (int i = 0; i < lastNoteCount_[c]; i++) {
     MidiMessage msg;
     msg.status_ = MidiMessage::MIDI_NOTE_OFF + channel;
     msg.data1_ = lastNotes_[c][i];
@@ -122,6 +164,10 @@ void MidiInstrument::Stop(int c) {
   }
   // clear last notes array
   lastNotes_[c].fill(0);
+  lastNoteCount_[c] = 0;
+  pendingNoteOffs_[c].fill(0);
+  pendingNoteOffCount_[c] = 0;
+  first_[c] = false;
   playing_ = false;
 };
 
@@ -130,8 +176,10 @@ void MidiInstrument::SetChannel(int channel) {
   v->SetInt(channel);
 };
 
-bool MidiInstrument::Render(int channel, fixed *buffer, int size,
+bool MidiInstrument::Render(int channel, AudioSample *buffer, int size,
                             bool updateTick) {
+  (void)buffer;
+  (void)size;
 
   // We do it here so we have the opportunity to send some command before
   Variable *v = FindVariable(FourCC::MidiInstrumentChannel);
@@ -145,6 +193,17 @@ bool MidiInstrument::Render(int channel, fixed *buffer, int size,
     svc_->QueueMessage(msg);
 
     first_[channel] = false;
+
+    // Continued MIDI notes replace the previous note after the new one is
+    // armed, so external synth envelopes can keep flowing without a gap.
+    for (int i = 0; i < pendingNoteOffCount_[channel]; ++i) {
+      msg.status_ = MidiMessage::MIDI_NOTE_OFF + mchannel;
+      msg.data1_ = pendingNoteOffs_[channel][i];
+      msg.data2_ = 0x00;
+      svc_->QueueMessage(msg);
+    }
+    pendingNoteOffs_[channel].fill(0);
+    pendingNoteOffCount_[channel] = 0;
   }
 
   // Update pitch bend logic if a pitch bend is active.
@@ -202,27 +261,27 @@ bool MidiInstrument::Render(int channel, fixed *buffer, int size,
         svc_->QueueMessage(msg);
       }
     }
-  }
 
-  if (remainingTicks_ > 0) {
-    remainingTicks_--;
-    if (remainingTicks_ == 0) {
-      if (!retrig_) {
-        Stop(channel);
-      } else {
-        MidiMessage msg;
-        remainingTicks_ = retrigLoop_;
-        msg.status_ = MidiMessage::MIDI_NOTE_OFF + mchannel;
-        msg.data1_ = lastNotes_[channel][0];
-        msg.data2_ = 0x00;
-        svc_->QueueMessage(msg);
-        msg.status_ = MidiMessage::MIDI_NOTE_ON + mchannel;
-        msg.data1_ = lastNotes_[channel][0];
-        msg.data2_ = velocity_;
-        svc_->QueueMessage(msg);
+    if (remainingTicks_ > 0) {
+      remainingTicks_--;
+      if (remainingTicks_ == 0) {
+        if (!retrig_) {
+          Stop(channel);
+        } else {
+          MidiMessage msg;
+          remainingTicks_ = retrigLoop_;
+          msg.status_ = MidiMessage::MIDI_NOTE_OFF + mchannel;
+          msg.data1_ = lastNotes_[channel][0];
+          msg.data2_ = 0x00;
+          svc_->QueueMessage(msg);
+          msg.status_ = MidiMessage::MIDI_NOTE_ON + mchannel;
+          msg.data1_ = lastNotes_[channel][0];
+          msg.data2_ = velocity_;
+          svc_->QueueMessage(msg);
+        };
       };
     };
-  };
+  }
   return false;
 };
 
@@ -230,14 +289,15 @@ bool MidiInstrument::IsInitialized() {
   return true; // Always initialised
 };
 
-void MidiInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
+void MidiInstrument::ProcessCommand(int channel, TrackerCommand cc,
+                                    ushort value) {
 
   Variable *v = FindVariable(FourCC::MidiInstrumentChannel);
   int mchannel = v->GetInt();
 
   switch (cc) {
 
-  case FourCC::InstrumentCommandRetrigger: {
+  case TrackerCommand::InstrumentCommandRetrigger: {
     unsigned char loop = (value & 0xFF); // number of ticks before repeat
     if (loop != 0) {
       retrig_ = true;
@@ -248,7 +308,7 @@ void MidiInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   } break;
 
-  case FourCC::InstrumentCommandLegato: {
+  case TrackerCommand::InstrumentCommandLegato: {
     pitchBendTarget_ = uint8_t(value & 0xFF);
     pitchBendSpeed_ = uint8_t(value >> 8);
     pitchBend_ = true;
@@ -262,7 +322,7 @@ void MidiInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     interpolationAlpha_ = powf(normalized, PB_CURVE_SHAPE) * PB_MAX_ALPHA;
   } break;
 
-  case FourCC::InstrumentCommandPitchSlide: {
+  case TrackerCommand::InstrumentCommandPitchSlide: {
     pitchBendTarget_ = uint8_t(value & 0xFF);
     pitchBendSpeed_ = uint8_t(value >> 8);
     pitchBend_ = true;
@@ -270,13 +330,13 @@ void MidiInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     useLogCurve_ = false;
   } break;
 
-  case FourCC::InstrumentCommandVelocity: {
+  case TrackerCommand::InstrumentCommandVelocity: {
     // VELM cmds set velocity for MIDI steps
     // Ensure velocity doesn't exceed 127 (MIDI spec maximum)
     velocity_ = value & 0x7F;
   }; break;
 
-  case FourCC::InstrumentCommandVolume: {
+  case TrackerCommand::InstrumentCommandVolume: {
     MidiMessage msg;
     msg.status_ = MidiMessage::MIDI_CONTROL_CHANGE + mchannel;
     msg.data1_ = MidiCC::CC_VOLUME;
@@ -284,7 +344,7 @@ void MidiInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     svc_->QueueMessage(msg);
   }; break;
 
-  case FourCC::InstrumentCommandMidiCC: {
+  case TrackerCommand::InstrumentCommandMidiCC: {
     MidiMessage msg;
     msg.status_ = MidiMessage::MIDI_CONTROL_CHANGE + mchannel;
     msg.data1_ = (value & 0x7F00) >> 8;
@@ -292,46 +352,45 @@ void MidiInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     svc_->QueueMessage(msg);
   }; break;
 
-  case FourCC::InstrumentCommandMidiPC: {
+  case TrackerCommand::InstrumentCommandMidiPC: {
     SendProgramChange(mchannel, value & 0x7F);
   }; break;
 
-  case FourCC::InstrumentCommandMidiChord: {
-    // split into 4 note offsets
+  case TrackerCommand::InstrumentCommandMidiChord: {
+    // split into 4 note offsets (raw semitones, not scale-aware)
     for (int i = 0; i < MAX_MIDI_CHORD_NOTES; i++) {
       uint8_t noteOffset = (value >> (i * 4)) & 0xF;
       if (noteOffset == 0) {
         continue;
       }
 
-      // fit the offset into nearest valid note of the currently selected scale
-      // Add/remove from offset to match selected scale
       uint8_t rootNote = lastNotes_[channel][0];
-      int scale = Player::GetInstance()->GetProject()->GetScale();
-      int scaleRoot = Player::GetInstance()->GetProject()->GetScaleRoot();
-      // apply current scale to offset, taking into account the scale root
-      uint8_t scaledOffset = getSemitonesOffset(scale, noteOffset, scaleRoot);
+      // use raw semitone offset (not scaled to current scale)
+      int16_t note = rootNote + noteOffset;
 
-      // use the existing steps note to calculate each notes offset
-      uint8_t note = rootNote + scaledOffset;
-      // Trace::Debug("MIDI SCALE note:%d root:%d offset: %d", note, rootNote,
-      //              noteOffset);
+      // clamp to valid MIDI note range (0-127) before queuing or storing
+      if (note > 127) {
+        continue;
+      }
 
       // save the chord note for sending a note off later
-      lastNotes_[channel][i + 1] = note;
-
-      if (noteOffset != 0) {
-        MidiMessage msg;
-        msg.status_ = MidiMessage::MIDI_NOTE_ON + mchannel;
-        msg.data1_ = note;
-        msg.data2_ = velocity_;
-        // Trace::Debug("MIDI chord note ON[%d]: %d", i, msg.data1_);
-        svc_->QueueMessage(msg);
+      lastNotes_[channel][i + 1] = static_cast<uint8_t>(note);
+      if (lastNoteCount_[channel] < (i + 2)) {
+        lastNoteCount_[channel] = i + 2;
       }
+
+      MidiMessage msg;
+      msg.status_ = MidiMessage::MIDI_NOTE_ON + mchannel;
+      msg.data1_ = static_cast<uint8_t>(note);
+      msg.data2_ = velocity_;
+      svc_->QueueMessage(msg);
     }
   }; break;
-  case FourCC::InstrumentCommandKill: {
+  case TrackerCommand::InstrumentCommandKill: {
     Stop(channel);
+  }; break;
+  case TrackerCommand::InstrumentCommandGateLength: {
+    remainingTicks_ = (value & 0xFF) + 1;
   }; break;
   }
 }
@@ -360,12 +419,14 @@ void MidiInstrument::GetTableState(TableSaveState &state) {
   memcpy(state.hopCount_, tableState_.hopCount_,
          sizeof(uchar) * TABLE_STEPS * 3);
   memcpy(state.position_, tableState_.position_, sizeof(int) * 3);
+  state.groove_ = tableState_.groove_;
 };
 
 void MidiInstrument::SetTableState(TableSaveState &state) {
   memcpy(tableState_.hopCount_, state.hopCount_,
          sizeof(uchar) * TABLE_STEPS * 3);
   memcpy(tableState_.position_, state.position_, sizeof(int) * 3);
+  tableState_.groove_ = state.groove_;
 };
 
 void MidiInstrument::SendProgramChange(int channel, int program) {

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _PERSISTENCE_CONSTANTS_H_
@@ -14,9 +18,10 @@
 // Sample filenames include the ".wav" extension.
 #define MAX_INSTRUMENT_FILENAME_LENGTH 24
 #define MAX_THEME_NAME_LENGTH 16
+#define THEMES_DIR_LENGTH (sizeof(THEMES_DIR) - 1)
+#define THEME_FILE_EXTENSION_LENGTH (sizeof(THEME_FILE_EXTENSION) - 1)
 #define MAX_THEME_EXPORT_PATH_LENGTH                                           \
-  (MAX_THEME_NAME_LENGTH + strlen(THEMES_DIR) + 1 +                            \
-   strlen(THEME_FILE_EXTENSION))
+  (MAX_THEME_NAME_LENGTH + THEMES_DIR_LENGTH + 1 + THEME_FILE_EXTENSION_LENGTH)
 // accounts for .pti extension so they are 4 chars shorter.
 #define MAX_INSTRUMENT_NAME_LENGTH (MAX_INSTRUMENT_FILENAME_LENGTH - 4)
 

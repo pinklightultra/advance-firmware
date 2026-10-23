@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SAMPLE_POOL_H_
@@ -19,7 +23,7 @@
 
 #define MAX_SAMPLES MAX_SAMPLEINSTRUMENT_COUNT * 4
 
-enum SamplePoolEventType { SPET_INSERT, SPET_DELETE };
+enum SamplePoolEventType { SPET_INSERT, SPET_DELETE, SPET_RENAME };
 
 struct SamplePoolEvent : public I_ObservableData {
   SamplePoolEventType type_;
@@ -37,7 +41,16 @@ public:
   int GetNameListSize();
   uint32_t FindSampleIndexByName(
       const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &name);
-  int ImportSample(const char *name, const char *projectName);
+  bool RenameLoadedSample(
+      const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &oldName,
+      const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &newName);
+  // Import a sample into the project, then append it to the pool only after
+  // the backing sample data has been fully loaded. Returns the new sample
+  // index or -1 on error.
+  int ImportSample(const char *name, const char *projectName,
+                   int targetChannelCount);
+
+  int LoadProjectSample(const char *path);
   void PurgeSample(int i, const char *projectName);
   virtual bool CheckSampleFits(int sampleSize) = 0;
   virtual uint32_t GetAvailableSampleStorageSpace() = 0;

@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef DISPLAY_H
 #define DISPLAY_H
@@ -54,6 +58,15 @@ void display_draw_changed();
 void display_draw_screen();
 void display_fill_rect(uint8_t color_index, uint16_t x, uint16_t y,
                        uint16_t width, uint16_t height);
+void display_draw_mono_bitmap(uint16_t x, uint16_t y, const uint8_t *bitmap,
+                              uint16_t width, uint16_t height,
+                              uint16_t row_bytes, uint8_t fg_color_index,
+                              uint8_t bg_color_index);
+void display_draw_mono_bitmap_rgb565(uint16_t x, uint16_t y,
+                                     const uint8_t *bitmap, uint16_t width,
+                                     uint16_t height, uint16_t row_bytes,
+                                     uint16_t fg_color565,
+                                     uint16_t bg_color565);
 void display_draw_region(uint8_t x, uint8_t y, uint8_t width, uint8_t height);
 void display_draw_sub_region(uint8_t x, uint8_t y, uint8_t width,
                              uint8_t height);

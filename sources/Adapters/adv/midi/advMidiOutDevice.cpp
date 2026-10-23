@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advMidiOutDevice.h"
@@ -35,4 +39,11 @@ void advMidiOutDevice::SendMessage(MidiMessage &msg) {
       HAL_UART_Transmit(&MIDI_UART, &data2, 1, 1);
     }
   }
+}
+
+void advMidiOutDevice::SendRawBytes(const uint8_t *data, uint8_t len) {
+  if ((data == nullptr) || (len == 0)) {
+    return;
+  }
+  HAL_UART_Transmit(&MIDI_UART, const_cast<uint8_t *>(data), len, 1);
 }

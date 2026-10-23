@@ -1,21 +1,35 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _VIEW_DATA_
 #define _VIEW_DATA_
 
 #include "Application/Model/Project.h"
+#include "Externals/etl/include/etl/string.h"
+#include "Externals/etl/include/etl/vector.h"
+#include "Foundation/Observable.h"
 #include "System/Console/Trace.h"
+#include "System/FileSystem/FileSystem.h"
+#include <cstdint>
 
 enum PlayMode { PM_SONG, PM_CHAIN, PM_PHRASE, PM_LIVE, PM_AUDITION };
 
-class ViewData {
+struct SongViewportEvent : public I_ObservableData {
+  uint32_t previousOffset_;
+  uint32_t offset_;
+};
+
+class ViewData : public Observable {
 
 public:
   ViewData(Project *project);
@@ -23,8 +37,11 @@ public:
   void Load(Project *project);
 
   unsigned char UpdateSongChain(int offset);
-  void UpdateSongOffset(int offset);
+  uint32_t GetSongOffset() const;
+  void SetSongOffset(uint32_t offset);
+  void UpdateSongOffset(int32_t offset);
   void UpdateSongCursor(int dx, int dy);
+  void RefreshSongViewport();
   void SetSongChain(unsigned char);
   unsigned char *GetCurrentSongPointer();
 
@@ -35,6 +52,7 @@ public:
 
 protected:
   void checkSongBoundaries();
+  void NotifySongOffsetChanged(uint32_t previousOffset);
 
   inline void updateData(unsigned char *c, int offset, unsigned char limit,
                          bool wrap) {
@@ -55,6 +73,7 @@ public:
 
   Project *project_;
   Song *song_;
+  etl::vector<I_Observer *, 8> observers_;
 
   // Editor settings
 
@@ -90,10 +109,10 @@ public:
   int phraseCurPos_;                      // current UI cursor row position
 
   // Sample Editor
-  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> sampleEditorFilename;
+  etl::string<PFILENAME_SIZE> sampleEditorFilename;
   bool isShowingSampleEditorProjectPool = false;
 
   // Import File browser
-  const char *importViewStartDir = nullptr;
+  etl::string<PFILENAME_SIZE> importViewStartDir;
 };
 #endif

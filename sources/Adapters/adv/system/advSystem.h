@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef _ADVSYSTEM_H_
 #define _ADVSYSTEM_H_
@@ -42,5 +46,7 @@ private:
   static int lastBattLevel_;
   static unsigned int lastBeatCount_;
   static EventManager *eventManager_;
+  bool randomSeeded_ = false;
+  uint32_t randomState_ = 0;
 };
 #endif

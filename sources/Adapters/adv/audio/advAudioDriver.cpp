@@ -1,16 +1,21 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advAudioDriver.h"
-#include "Adapters/adv/utils/utils.h"
 #include "Application/Mixer/MixerService.h"
 #include "Application/Model/Config.h"
 #include "Services/Midi/MidiService.h"
+#include "System/Profiler/DWTProfiler.h"
+#include "System/Profiler/Profiler.h"
 #include "System/System/System.h"
 #include "main.h" // has to come before FreeRTOS.h due to linkage of SystemCoreClock
 #include "sai.h"
@@ -68,6 +73,8 @@ void AudioThread(void *) {
 
 void AudioOutput(void *) {
   while (true) {
+    // Profiling logs are intentionally emitted from this low-priority task so
+    // blocking UART writes cannot stall buffer preparation.
     tlv320_select_output();
     vTaskDelay(pdMS_TO_TICKS(500));
   }
@@ -99,7 +106,6 @@ bool advAudioDriver::InitDriver() {
   // Configure codec
   tlv320_init();
   tlv320_set_volume(initialVolume);
-  tlv320_set_audio_output_active(false);
   // Takes some time between configuring HP detect and actually detecting
   vTaskDelay(pdMS_TO_TICKS(250));
 
@@ -130,14 +136,13 @@ void advAudioDriver::SetVolume(int v) {
 int advAudioDriver::GetVolume() { return tlv320_get_volume(); };
 
 void advAudioDriver::OnAudioActive(bool active) {
-  // Keep codec output truly silent when audio is marked inactive (e.g. stem
-  // rendering), not just speaker-amp gated.
+  // Keep codec output silent when audio is marked inactive, such as during
+  // stem rendering. This does not change the speaker amplifier state.
   if (active) {
     tlv320_unmute();
   } else {
     tlv320_mute();
   }
-  tlv320_set_audio_output_active(active);
 }
 
 void advAudioDriver::CloseDriver(){
@@ -166,7 +171,6 @@ bool advAudioDriver::StartDriver() {
 void advAudioDriver::StopDriver() {
   adv_sound_pause(1);
   isPlaying_ = false;
-  tlv320_set_audio_output_active(false);
 };
 
 void advAudioDriver::OnChunkDone() {

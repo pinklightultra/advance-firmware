@@ -1,18 +1,22 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "PlayerMixer.h"
 #include "Application/Instruments/SampleInstrument.h"
+#include "Application/Instruments/SampleSourceInstrument.h"
 #include "Application/Mixer/MixerService.h"
 #include "Application/Model/Mixer.h"
 #include "Application/Utils/char.h"
-#include "Application/Utils/fixed.h"
 #include "Services/Midi/MidiService.h"
 #include "SyncMaster.h"
 #include "System/Console/Trace.h"
@@ -25,6 +29,8 @@ PlayerMixer::PlayerMixer() {
 
   for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
     lastInstrument_[i] = 0;
+    isChannelPlaying_[i] = false;
+    notes_[i] = 0xFF;
   };
 
   alignas(PlayerChannel) static char
@@ -115,10 +121,6 @@ void PlayerMixer::StopChannel(int channel) {
   isChannelPlaying_[channel] = false;
 };
 
-bool PlayerMixer::IsChannelPlaying(int channel) {
-  return isChannelPlaying_[channel];
-};
-
 I_Instrument *PlayerMixer::GetLastInstrument(int channel) {
   return lastInstrument_[channel];
 };
@@ -132,7 +134,7 @@ etl::array<stereosample, SONG_CHANNEL_COUNT> *PlayerMixer::GetMixerLevels() {
   MixerService *ms = MixerService::GetInstance();
 
   // Get the current mixer levels from each bus
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
     AudioMixer *audioMixer = ms->GetMixBus(i);
     mixerLevels_[i] = audioMixer->GetMixerLevels();
   }
@@ -148,23 +150,69 @@ void PlayerMixer::Update(Observable &o, I_ObservableData *d) {
   NotifyObservers();
 
   MixerService *ms = MixerService::GetInstance();
-  ms->SetMasterVolume(project_->GetMasterVolume());
+  ms->PrepareRenderPass(project_);
 };
 
 void PlayerMixer::StartInstrument(int channel, I_Instrument *instrument,
-                                  unsigned char note, bool newInstrument) {
-  channel_[channel]->StartInstrument(instrument, note, newInstrument);
+                                  unsigned char note, bool retrigger) {
+  channel_[channel]->StartInstrument(instrument, note, retrigger);
   lastInstrument_[channel] = instrument;
   notes_[channel] = note;
 };
+
+void PlayerMixer::ReleaseChannel(int channel) {
+  channel_[channel]->ReleaseChannel();
+  isChannelPlaying_[channel] = false;
+  notes_[channel] = NO_NOTE;
+}
 
 void PlayerMixer::StopInstrument(int channel) {
   channel_[channel]->StopInstrument();
   notes_[channel] = NO_NOTE;
 }
 
+void PlayerMixer::ReleaseInstrument(int channel) {
+  channel_[channel]->ReleaseInstrument();
+}
+
+bool PlayerMixer::ProcessVoiceCommand(int channel, TrackerCommand command,
+                                      ushort value) {
+  return channel_[channel]->ProcessCommand(command, value);
+}
+
 I_Instrument *PlayerMixer::GetInstrument(int channel) {
   return channel_[channel]->GetInstrument();
+}
+
+bool PlayerMixer::GetInstrumentPlaybackPosition(I_Instrument *instrument,
+                                                int channelCount,
+                                                uint32_t &position) {
+  position = 0;
+  if (!instrument) {
+    return false;
+  }
+
+  if (channelCount < 0) {
+    channelCount = 0;
+  }
+  if (channelCount > SONG_CHANNEL_COUNT) {
+    channelCount = SONG_CHANNEL_COUNT;
+  }
+
+  for (int i = 0; i < channelCount; ++i) {
+    if (channel_[i]->GetInstrument() == instrument &&
+        instrument->GetPlaybackPosition(i, position)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void PlayerMixer::Panic() {
+  for (int i = 0; i < SONG_CHANNEL_COUNT; ++i) {
+    StopChannel(i);
+  }
+  MixerService::GetInstance()->ClearOutputEffectTailsLocked();
 }
 
 int PlayerMixer::GetPlayedBufferPercentage() {
@@ -174,10 +222,6 @@ int PlayerMixer::GetPlayedBufferPercentage() {
 
 void PlayerMixer::SetChannelMute(int channel, bool mode) {
   channel_[channel]->SetMute(mode);
-}
-
-bool PlayerMixer::IsChannelMuted(int channel) {
-  return channel_[channel]->IsMuted();
 }
 
 void PlayerMixer::StartStreaming(const char *name, int startSample) {
@@ -190,6 +234,8 @@ void PlayerMixer::StartLoopingStreaming(const char *name) {
 
 void PlayerMixer::StopStreaming() { fileStreamer_.Stop(); };
 
+bool PlayerMixer::IsStreamingActive() { return fileStreamer_.IsPlaying(); };
+
 void PlayerMixer::StartRecordStreaming(uint16_t *srcBuffer, uint32_t size,
                                        bool stereo) {
   recordStreamer_.Start(srcBuffer, size, stereo);
@@ -197,7 +243,19 @@ void PlayerMixer::StartRecordStreaming(uint16_t *srcBuffer, uint32_t size,
 
 void PlayerMixer::StopRecordStreaming() { recordStreamer_.Stop(); };
 
-bool PlayerMixer::IsPlaying() { return fileStreamer_.IsPlaying(); }
+bool PlayerMixer::IsPlaying() {
+  if (fileStreamer_.IsPlaying() || recordStreamer_.IsPlaying()) {
+    return true;
+  }
+
+  for (int i = 0; i < SONG_CHANNEL_COUNT; ++i) {
+    if (isChannelPlaying_[i] || channel_[i]->GetInstrument() != nullptr) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 void PlayerMixer::OnPlayerStart(MixerServiceMode msmMode) {
   MixerService *ms = MixerService::GetInstance();
@@ -214,19 +272,35 @@ static char noteBuffer[5];
 static bool shouldShowSlice(int channel, uint8_t &sliceIndex,
                             I_Instrument *instrument,
                             const unsigned char *notes) {
-  if (!instrument || instrument->GetType() != IT_SAMPLE) {
+  if (!instrument) {
     return false;
   }
   if (notes[channel] == 0xFF) {
     return false;
   }
-  SampleInstrument *sampleInstr = static_cast<SampleInstrument *>(instrument);
-  if (!sampleInstr->ShouldDisplaySliceForNote(notes[channel])) {
-    return false;
+
+  if (instrument->GetType() == IT_SAMPLE) {
+    SampleInstrument *sampleInstr = static_cast<SampleInstrument *>(instrument);
+    if (!sampleInstr->ShouldDisplaySliceForNote(notes[channel])) {
+      return false;
+    }
+    sliceIndex =
+        static_cast<uint8_t>(notes[channel] - SampleInstrument::SliceNoteBase);
+    return true;
   }
-  sliceIndex =
-      static_cast<uint8_t>(notes[channel] - SampleInstrument::SliceNoteBase);
-  return true;
+
+  if (instrument->GetType() == IT_SAMPLE_SOURCE) {
+    SampleSourceInstrument *sampleSourceInstr =
+        static_cast<SampleSourceInstrument *>(instrument);
+    if (!sampleSourceInstr->ShouldDisplaySliceForNote(notes[channel])) {
+      return false;
+    }
+    sliceIndex = static_cast<uint8_t>(notes[channel] -
+                                      SampleSourceInstrument::SliceNoteBase);
+    return true;
+  }
+
+  return false;
 }
 
 int PlayerMixer::GetChannelNote(int channel) { return notes_[channel]; }

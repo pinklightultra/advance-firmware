@@ -1,24 +1,34 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "ImportView.h"
 #include "Application/Audio/AudioFileStreamer.h"
 #include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
+#include "Application/Instruments/SampleSourceInstrument.h"
+#include "Application/Views/BaseClasses/BrowserEntrySort.h"
+#include "Application/Views/BaseClasses/BrowserPathUtils.h"
+#include "Application/Views/ModalDialogs/TextInputModalView.h"
 #include "Application/Views/SampleEditorView.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Externals/etl/include/etl/to_string.h"
 #include "ModalDialogs/MessageBox.h"
 #include "System/FileSystem/FileSystem.h"
-#include "ViewUtils.h"
+#include "System/FileSystem/PathUtils.h"
+#include <cstring>
 #include <memory>
 #include <nanoprintf.h>
+#include <strings.h>
 
 #define LIST_WIDTH SCREEN_WIDTH - 2
 // -4 to allow for title, filesize & spacers
@@ -35,20 +45,140 @@ namespace {
 enum ImportButton : uint8_t {
   kImportButtonImport = 0,
   kImportButtonEdit,
+  kImportButtonRename,
   kImportButtonVolume,
   kImportButtonCount,
 };
 
 enum ProjectPoolButton : uint8_t {
   kProjectButtonEdit = 0,
+  kProjectButtonRename,
   kProjectButtonRemove,
   kProjectButtonVolume,
   kProjectPoolButtonCount,
 };
+
+template <size_t Capacity>
+etl::string<Capacity> makeBoundedSampleName(const char *name) {
+  etl::string<Capacity> boundedName;
+  if (name == nullptr) {
+    return boundedName;
+  }
+
+  const size_t nameLength = std::strlen(name);
+  if (nameLength <= boundedName.capacity()) {
+    boundedName = name;
+    return boundedName;
+  }
+
+  constexpr const char *extension = ".wav";
+  constexpr size_t extensionLength = 4;
+  if (nameLength > extensionLength &&
+      strcasecmp(name + nameLength - extensionLength, extension) == 0 &&
+      boundedName.capacity() > extensionLength) {
+    boundedName.assign(name, boundedName.capacity() - extensionLength);
+    boundedName.append(extension);
+    return boundedName;
+  }
+
+  boundedName.assign(name, boundedName.capacity());
+  return boundedName;
+}
+
+bool extractLeafName(const char *path,
+                     etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &leafName) {
+  FileSystemPath::PathString baseName;
+  if (!FileSystemPath::BaseName(path, baseName)) {
+    leafName.clear();
+    return false;
+  }
+
+  leafName =
+      makeBoundedSampleName<MAX_INSTRUMENT_FILENAME_LENGTH>(baseName.c_str());
+  return !leafName.empty();
+}
+
+const FileSystemEntry *
+getCurrentEntry(const etl::ivector<FileSystemEntry> &entries,
+                const size_t currentIndex) {
+  if (currentIndex >= entries.size()) {
+    return nullptr;
+  }
+  return &entries[currentIndex];
+}
+
+bool resolveEntryPath(const FileSystemPath::PathString &currentDir,
+                      const FileSystemEntry &entry, const char *rootDir,
+                      FileSystemPath::PathString &resolvedPath) {
+  if (entry.name == "..") {
+    return BrowserPathUtils::ResolveParentDirectory(currentDir.c_str(), rootDir,
+                                                    resolvedPath);
+  }
+
+  return FileSystemPath::JoinPath(currentDir.c_str(), entry.name.c_str(),
+                                  resolvedPath);
+}
+
+bool isDirectoryListTruncated(FileSystem *fs) {
+  return fs != nullptr &&
+         fs->GetLastListDirectoryStatus() == DirectoryListStatus::Truncated;
+}
+
+void showDirectoryListTruncatedDialog(View &view) {
+  etl::string<24> line("Showing first ");
+  etl::to_string(MAX_FILE_INDEX_SIZE, line, true);
+  MessageBox *mb =
+      MessageBox::Create(view, "Directory too large", line.c_str(), MBBF_OK);
+  view.DoModal(mb);
+}
+
+bool hasPathSeparator(const char *name) {
+  return name != nullptr && (std::strchr(name, '/') != nullptr ||
+                             std::strchr(name, '\\') != nullptr);
+}
+
+// Strip the ".wav" extension from a filename (case-insensitive).
+// Returns the name without the extension so the user only edits the basename.
+template <size_t Capacity>
+etl::string<Capacity> stripWavExtension(const char *name) {
+  etl::string<Capacity> result;
+  if (name == nullptr) {
+    return result;
+  }
+
+  constexpr const char *extension = ".wav";
+  constexpr size_t extensionLength = 4;
+  const size_t nameLength = std::strlen(name);
+
+  if (nameLength > extensionLength &&
+      strcasecmp(name + nameLength - extensionLength, extension) == 0) {
+    result.assign(name, nameLength - extensionLength);
+    return result;
+  }
+
+  result = name;
+  return result;
+}
+
+bool ensureWavExtension(etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &name) {
+  constexpr const char *extension = ".wav";
+  constexpr size_t extensionLength = 4;
+  if (name.size() >= extensionLength &&
+      strcasecmp(name.c_str() + name.size() - extensionLength, extension) ==
+          0) {
+    return true;
+  }
+  if (name.size() + extensionLength > name.capacity()) {
+    return false;
+  }
+  name.append(extension);
+  return true;
+}
+
 } // namespace
 
 ImportView::ImportView(GUIWindow &w, ViewData *viewData)
-    : ScreenView(w, viewData) {}
+    : ScreenView(w, viewData), fileEntries_(GetImportBrowserFileEntries()) {}
 
 ImportView::~ImportView() {}
 
@@ -63,7 +193,9 @@ void ImportView::Reset() {
   enterKeyHeld_ = false;
   pendingDirEnterOnRelease_ = false;
   inProjectSampleDir_ = false;
-  fileIndexList_.clear();
+  currentDir_.clear();
+  pendingRenamePath_[0] = '\0';
+  fileEntries_.clear();
 }
 
 // Static method to set the source view type before opening ImportView
@@ -76,13 +208,13 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
     // consumed by another action (e.g. volume edit).
     if (enterKeyHeld_ && !(mask & EPBM_ENTER)) {
       enterKeyHeld_ = false;
-      if (pendingDirEnterOnRelease_ && !fileIndexList_.empty()) {
+      if (pendingDirEnterOnRelease_ && !fileEntries_.empty()) {
         auto fs = FileSystem::GetInstance();
-        unsigned fileIndex = fileIndexList_[currentIndex_];
-        if (fs->getFileType(fileIndex) == PFT_DIR) {
-          char name[PFILENAME_SIZE];
-          fs->getFileName(fileIndex, name, PFILENAME_SIZE);
-          setCurrentFolder(fs, name);
+        const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+        FileSystemPath::PathString selectedPath;
+        if (entry != nullptr && entry->type == PFT_DIR &&
+            resolveEntryPath(currentDir_, *entry, "/", selectedPath)) {
+          setCurrentFolder(fs, selectedPath.c_str());
           isDirty_ = true;
           topIndex_ = 0;
         }
@@ -93,9 +225,10 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
 
     // Check if play key was released
     if (playKeyHeld_ && !(mask & EPBM_PLAY)) {
-      // Play key no longer pressed so should stop playback
+      // Play key no longer pressed so should stop preview playback.
+      // Only stop the file streamer, not sequencer channels.
       playKeyHeld_ = false;
-      if (Player::GetInstance()->IsPlaying()) {
+      if (Player::GetInstance()->IsStreamingActive()) {
         Player::GetInstance()->StopStreaming();
         previewPlayingIndex_ = (size_t)-1;
       }
@@ -114,7 +247,7 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
   // Handle key press events
   if (pressed) {
     auto fs = FileSystem::GetInstance();
-    const bool hasFiles = !fileIndexList_.empty();
+    const bool hasFiles = !fileEntries_.empty();
 
     // EDIT+LEFT: go to parent directory within the import file browser.
     // NAV+LEFT remains reserved for leaving the ImportView entirely.
@@ -135,9 +268,10 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
       if (!hasFiles) {
         return;
       }
-      unsigned fileIndex = fileIndexList_[currentIndex_];
-      char name[PFILENAME_SIZE];
-      fs->getFileName(fileIndex, name, PFILENAME_SIZE);
+      const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+      if (entry == nullptr) {
+        return;
+      }
 
       // Set flag to track that play key is being held
       playKeyHeld_ = true;
@@ -147,7 +281,7 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
         import();
       } else {
         Trace::Log("PICOIMPORT", "play key pressed - start preview");
-        preview(name);
+        preview();
       }
       return; // We've handled the play button, so return
     }
@@ -158,8 +292,16 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
         inProjectSampleDir_ = false;
         setCurrentFolder(fs, SAMPLES_LIB_DIR);
       } else {
+        FileSystemPath::PathString projectSamplesDir;
+        char projectName[MAX_PROJECT_NAME_LENGTH + 1] = {};
+        viewData_->project_->GetProjectName(projectName);
+        if (!BrowserPathUtils::BuildProjectSamplesDirectory(
+                projectName, projectSamplesDir)) {
+          Trace::Error("PICOIMPORT: Failed to build project samples dir");
+          return;
+        }
         inProjectSampleDir_ = true;
-        setCurrentFolder(fs, PROJECT_SAMPLES_DIR);
+        setCurrentFolder(fs, projectSamplesDir.c_str());
       }
       selectedButton_ = 0;
     }
@@ -198,15 +340,29 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
           return; // Do nothing if the list is empty
         }
         if (selectedButton_ == kProjectButtonEdit) {
-          unsigned fileIndex = fileIndexList_[currentIndex_];
-          char name[PFILENAME_SIZE];
-          fs->getFileName(fileIndex, name, PFILENAME_SIZE);
-          showSampleEditor(name, true);
+          const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+          FileSystemPath::PathString samplePath;
+          if (entry == nullptr ||
+              !resolveEntryPath(currentDir_, *entry, currentDir_.c_str(),
+                                samplePath)) {
+            return;
+          }
+          showSampleEditor(samplePath, true);
+        } else if (selectedButton_ == kProjectButtonRename) {
+          const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+          if (entry == nullptr) {
+            return;
+          }
+          renameSample(*entry, fs);
         } else if (selectedButton_ == kProjectButtonRemove) {
-#ifdef ADV
-          unsigned fileIndex = fileIndexList_[currentIndex_];
-          removeProjectSample(fileIndex, fs);
-#endif
+          const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+          FileSystemPath::PathString samplePath;
+          if (entry == nullptr ||
+              !resolveEntryPath(currentDir_, *entry, currentDir_.c_str(),
+                                samplePath)) {
+            return;
+          }
+          removeProjectSample(*entry, fs);
         }
         return;
       }
@@ -233,15 +389,23 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
         pendingDirEnterOnRelease_ = false;
         return;
       }
-      unsigned fileIndex = fileIndexList_[currentIndex_];
+      const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+      if (entry == nullptr) {
+        pendingDirEnterOnRelease_ = false;
+        return;
+      }
       // we can't import or edit dirs!
-      if (fs->getFileType(fileIndex) != PFT_DIR) {
+      if (entry->type != PFT_DIR) {
         if (selectedButton_ == kImportButtonImport) {
           import();
         } else if (selectedButton_ == kImportButtonEdit) {
-          char name[PFILENAME_SIZE];
-          fs->getFileName(fileIndex, name, PFILENAME_SIZE);
-          showSampleEditor(name, false);
+          FileSystemPath::PathString samplePath;
+          if (!resolveEntryPath(currentDir_, *entry, "/", samplePath)) {
+            return;
+          }
+          showSampleEditor(samplePath, false);
+        } else if (selectedButton_ == kImportButtonRename) {
+          renameSample(*entry, fs);
         }
       }
     }
@@ -249,7 +413,7 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
     // handle changing selected "bottom button", note: ignore if this is a
     // nav+arrow combo
     if ((mask & EPBM_LEFT || mask & EPBM_RIGHT) && !(mask & EPBM_NAV)) {
-      if (inProjectSampleDir_ && fileIndexList_.empty()) {
+      if (inProjectSampleDir_ && fileEntries_.empty()) {
         return; // Do nothing if the list is empty
       }
       uint8_t buttonCount = inProjectSampleDir_
@@ -270,12 +434,12 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
 
   // handle moving up and down the file list
   if (mask & EPBM_UP) {
-    if (inProjectSampleDir_ && fileIndexList_.empty()) {
+    if (inProjectSampleDir_ && fileEntries_.empty()) {
       return; // Do nothing if the list is empty
     }
     warpToNextSample(true);
   } else if (mask & EPBM_DOWN) {
-    if (inProjectSampleDir_ && fileIndexList_.empty()) {
+    if (inProjectSampleDir_ && fileEntries_.empty()) {
       return; // Do nothing if the list is empty
     }
     warpToNextSample(false);
@@ -294,15 +458,14 @@ void ImportView::ProcessButtonMask(unsigned short mask, bool pressed) {
 };
 
 void ImportView::DrawView() {
-  if (fileIndexList_.empty()) {
-    return;
-  }
   // ensure selected item is in visible range
   const size_t pageSize = LIST_PAGE_SIZE;
-  if (currentIndex_ < topIndex_) {
-    topIndex_ = currentIndex_;
-  } else if (currentIndex_ >= topIndex_ + pageSize) {
-    topIndex_ = currentIndex_ - pageSize + 1;
+  if (!fileEntries_.empty()) {
+    if (currentIndex_ < topIndex_) {
+      topIndex_ = currentIndex_;
+    } else if (currentIndex_ >= topIndex_ + pageSize) {
+      topIndex_ = currentIndex_ - pageSize + 1;
+    }
   }
 
   Clear();
@@ -316,12 +479,7 @@ void ImportView::DrawView() {
   const char *baseTitle =
       inProjectSampleDir_ ? "Project Pool" : "Import Sample";
 
-  // Create title with storage info
-  char titleBuffer[40];
-  npf_snprintf(titleBuffer, sizeof(titleBuffer), "%s", baseTitle);
-
-  SetColor(CD_NORMAL);
-  DrawString(pos._x + 1, pos._y, titleBuffer, props);
+  setTitle(etl::string<23>(baseTitle));
 
   // Draw samples
   int x = 1;
@@ -332,27 +490,25 @@ void ImportView::DrawView() {
 
   // Loop through visible files in the list
   for (size_t i = topIndex_;
-       i < topIndex_ + LIST_PAGE_SIZE && (i < fileIndexList_.size()); i++) {
+       i < topIndex_ + LIST_PAGE_SIZE && (i < fileEntries_.size()); i++) {
     props.invert_ = false;
 
-    unsigned fileIndex = fileIndexList_[i];
+    const auto &entry = fileEntries_[i];
     etl::string<PFILENAME_SIZE> displayName;
 
-    if (fs->getFileType(fileIndex) != PFT_DIR) {
+    if (entry.type != PFT_DIR) {
       SetColor(CD_NORMAL);
-      // Handle regular files
-      char tempBuffer[PFILENAME_SIZE];
-      fs->getFileName(fileIndex, tempBuffer, PFILENAME_SIZE);
 
       // Check if it's a single cycle waveform
-      int filesize = fs->getFileSize(fileIndex);
+      const uint64_t filesize = entry.size;
       bool isSingleCycle = IS_SINGLE_CYCLE(filesize);
 
-      displayName += tempBuffer;
+      displayName += entry.name.c_str();
       // Format the display name with appropriate prefix
       if (inProjectSampleDir_ &&
           viewData_->project_->SampleInUse(
-              etl::string<MAX_INSTRUMENT_FILENAME_LENGTH>(tempBuffer))) {
+              makeBoundedSampleName<MAX_INSTRUMENT_FILENAME_LENGTH>(
+                  entry.name.c_str())) > -1) {
         SetColor(CD_ACCENT);
         DrawString(x, y, "*", props);
         SetColor(CD_NORMAL);
@@ -366,12 +522,8 @@ void ImportView::DrawView() {
     } else {
       SetColor(CD_ACCENT);
       // Handle directories
-      char tempBuffer[PFILENAME_SIZE];
       displayName = "/";
-      // clear temp buffer
-      memset(tempBuffer, 0, PFILENAME_SIZE);
-      fs->getFileName(fileIndex, tempBuffer, PFILENAME_SIZE);
-      displayName += tempBuffer;
+      displayName += entry.name.c_str();
     }
 
     // Truncate to fit display width
@@ -419,7 +571,16 @@ void ImportView::DrawView() {
       SetColor(CD_HILITE1);
       props.invert_ = false;
     }
-    DrawString(x + 10, y, "Edit", props);
+    DrawString(x + 8, y, "Edit", props);
+
+    if (selectedButton_ == kImportButtonRename) {
+      SetColor(CD_HILITE2);
+      props.invert_ = true;
+    } else {
+      SetColor(CD_HILITE1);
+      props.invert_ = false;
+    }
+    DrawString(x + 16, y, "Rename", props);
 
     if (selectedButton_ == kImportButtonVolume) {
       SetColor(CD_HILITE2);
@@ -430,9 +591,9 @@ void ImportView::DrawView() {
     }
     char volField[12];
     npf_snprintf(volField, sizeof(volField), "Vol:%2d", previewVolume);
-    DrawString(x + 23, y, volField, props);
+    DrawString(x + 24, y, volField, props);
   } else {
-    if (fileIndexList_.empty()) {
+    if (fileEntries_.empty()) {
       // draw this a few lines down from *top* of screen
       SetColor(CD_NORMAL);
       props.invert_ = false;
@@ -456,11 +617,16 @@ void ImportView::DrawView() {
         SetColor(CD_HILITE1);
         props.invert_ = false;
       }
-#ifdef ADV
-      DrawString(x + 9, y, "Remove", props);
-#else
-      DrawString(x + 9, y, "N/A", props);
-#endif
+      DrawString(x + 7, y, "Rename", props);
+
+      if (selectedButton_ == kProjectButtonRemove) {
+        SetColor(CD_HILITE2);
+        props.invert_ = true;
+      } else {
+        SetColor(CD_HILITE1);
+        props.invert_ = false;
+      }
+      DrawString(x + 16, y, "Remove", props);
 
       if (selectedButton_ == kProjectButtonVolume) {
         SetColor(CD_HILITE2);
@@ -470,8 +636,8 @@ void ImportView::DrawView() {
         props.invert_ = false;
       }
       char volField[12];
-      npf_snprintf(volField, sizeof(volField), "vol:%2d", previewVolume);
-      DrawString(x + 23, y, volField, props);
+      npf_snprintf(volField, sizeof(volField), "Vol:%2d", previewVolume);
+      DrawString(x + 24, y, volField, props);
     }
   }
   props.invert_ = false;
@@ -482,11 +648,11 @@ void ImportView::DrawView() {
   props.invert_ = true;
   y = 0;
   uint32_t filesize = 0;
-  if (!fileIndexList_.empty()) {
-    auto currentFileIndex = fileIndexList_[currentIndex_];
+  if (!fileEntries_.empty()) {
+    const auto &currentEntry = fileEntries_[currentIndex_];
     // only get file size if it's a file not a dir
-    if (fs->getFileType(currentFileIndex) == PFT_FILE) {
-      filesize = fs->getFileSize(currentFileIndex);
+    if (currentEntry.type == PFT_FILE) {
+      filesize = currentEntry.size;
       // if file size is larger than available space, set color to warning
       if (filesize > availableSpace) {
         SetColor(CD_WARN);
@@ -498,7 +664,7 @@ void ImportView::DrawView() {
   char tempBuffer[SCREEN_WIDTH];
   tempBuffer[SCREEN_WIDTH - 1] = '\0';
 
-  npf_snprintf(tempBuffer, sizeof(tempBuffer), "size:%i/%i", filesize,
+  npf_snprintf(tempBuffer, sizeof(tempBuffer), "Size:%i/%i", filesize,
                availableSpace);
 
   // pad status line buffer with trailing space chars to ensure the invert
@@ -534,10 +700,20 @@ void ImportView::OnFocus() {
   inProjectSampleDir_ = viewData_->isShowingSampleEditorProjectPool;
 
   if (inProjectSampleDir_) {
-    goProjectSamplesDir(viewData_);
-    setCurrentFolder(fs, ".");
+    FileSystemPath::PathString projectSamplesDir;
+    char projectName[MAX_PROJECT_NAME_LENGTH + 1] = {};
+    viewData_->project_->GetProjectName(projectName);
+    if (!BrowserPathUtils::BuildProjectSamplesDirectory(projectName,
+                                                        projectSamplesDir)) {
+      Trace::Error("PICOIMPORT: Failed to build project samples dir");
+      return;
+    }
+    setCurrentFolder(fs, projectSamplesDir.c_str());
   } else {
-    setCurrentFolder(fs, viewData_->importViewStartDir);
+    const char *startDir = viewData_->importViewStartDir.empty()
+                               ? SAMPLES_LIB_DIR
+                               : viewData_->importViewStartDir.c_str();
+    setCurrentFolder(fs, startDir);
   }
 };
 
@@ -552,7 +728,7 @@ void ImportView::warpToNextSample(bool goUp) {
       }
     }
   } else {
-    if (currentIndex_ < fileIndexList_.size() - 1) {
+    if (currentIndex_ < fileEntries_.size() - 1) {
       currentIndex_++;
       // if we have scrolled off the bottom, page the file list down if not
       // at end of the list
@@ -564,28 +740,31 @@ void ImportView::warpToNextSample(bool goUp) {
   isDirty_ = true;
 }
 
-void ImportView::preview(char *name) {
-  auto fs = FileSystem::GetInstance();
-  unsigned fileIndex = fileIndexList_[currentIndex_];
+void ImportView::preview() {
+  const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+  if (entry == nullptr || entry->type == PFT_DIR) {
+    return;
+  }
 
-  // do not preview directories
-  if (fs->getFileType(fileIndex) == PFT_DIR) {
+  FileSystemPath::PathString samplePath;
+  if (!resolveEntryPath(currentDir_, *entry, "/", samplePath)) {
     return;
   }
 
   // Get file size to check if it's a single cycle waveform
-  int fileSize = fs->getFileSize(fileIndex);
+  const int32_t fileSize = static_cast<int32_t>(entry->size);
 
   // check for LGPT or AKWF standard file sizes
   bool isSingleCycle = IS_SINGLE_CYCLE(fileSize);
 
-  // If something is already playing, stop it first
-  if (Player::GetInstance()->IsPlaying()) {
+  // If a preview is already playing, stop it first.
+  // Only stop the file streamer, not sequencer channels.
+  if (Player::GetInstance()->IsStreamingActive()) {
     Player::GetInstance()->StopStreaming();
   }
 
   WavFile wav;
-  auto wavRes = wav.Open(name);
+  auto wavRes = wav.Open(samplePath.c_str());
   MessageBox *mb = nullptr;
   if (!wavRes) {
     auto error = wavRes.error();
@@ -616,33 +795,42 @@ void ImportView::preview(char *name) {
   }
 
   // Start playing the selected sample
-  Trace::Debug("Starting preview of %s (single cycle: %d)", name,
+  Trace::Debug("Starting preview of %s (single cycle: %d)", samplePath.c_str(),
                isSingleCycle);
   previewPlayingIndex_ = currentIndex_;
 
   // Use looping for single cycle waveforms
   if (isSingleCycle) {
-    Trace::Debug("Looping single cycle waveform: %s (size: %d bytes)", name,
-                 fileSize);
-    Player::GetInstance()->StartLoopingStreaming(name);
+    Trace::Debug("Looping single cycle waveform: %s (size: %d bytes)",
+                 samplePath.c_str(), fileSize);
+    Player::GetInstance()->StartLoopingStreaming(samplePath.c_str());
   } else {
-    Player::GetInstance()->StartStreaming(name);
+    Player::GetInstance()->StartStreaming(samplePath.c_str());
   }
 }
 
 void ImportView::import() {
-  // stop playing before trying to import
-  if (Player::GetInstance()->IsPlaying()) {
-    MessageBox *mb =
-        MessageBox::Create(*this, "Can't import while previewing", MBBF_OK);
-    DoModal(mb);
+  // Stop any active preview/streamer so we can claim the file. The sequencer
+  // may keep running — the new import path is audio-thread safe.
+  Player::GetInstance()->StopStreaming();
+
+  auto fs = FileSystem::GetInstance();
+  const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
+  if (entry == nullptr || entry->type != PFT_FILE) {
     return;
   }
 
-  auto fs = FileSystem::GetInstance();
-  char name[PFILENAME_SIZE];
-  unsigned fileIndex = fileIndexList_[currentIndex_];
-  fs->getFileName(fileIndex, name, PFILENAME_SIZE);
+  FileSystemPath::PathString samplePath;
+  if (!resolveEntryPath(currentDir_, *entry, "/", samplePath)) {
+    return;
+  }
+
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> sampleFilename;
+  if (!extractLeafName(samplePath.c_str(), sampleFilename)) {
+    Trace::Error("PICOIMPORT: Failed to extract leaf name from %s",
+                 samplePath.c_str());
+    return;
+  }
 
   // Get current project name
   char projName[MAX_PROJECT_NAME_LENGTH + 1];
@@ -673,7 +861,7 @@ void ImportView::import() {
   }
 
   // Check if the sample would exceed available flash storage
-  int fileSize = fs->getFileSize(fileIndex);
+  const int32_t fileSize = static_cast<int32_t>(entry->size);
 
   // Check if the sample would fit in available storage
   if (!pool->CheckSampleFits(fileSize)) {
@@ -695,7 +883,7 @@ void ImportView::import() {
 
   // Check if wave file is in a supported format
   WavFile wav;
-  auto wavRes = wav.Open(name);
+  auto wavRes = wav.Open(samplePath.c_str());
   MessageBox *mb = nullptr;
   if (!wavRes) {
     auto error = wavRes.error();
@@ -725,24 +913,42 @@ void ImportView::import() {
     return;
   }
 
-  int sampleID = pool->ImportSample(name, projName);
+  const int targetChannelCount =
+      viewData_->project_->GetAudioMode() == kProjectAudioModeMono ? 1 : 2;
+  int sampleID =
+      pool->ImportSample(samplePath.c_str(), projName, targetChannelCount);
 
   if (sampleID >= 0) {
+    etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> importedFilename;
+    const char *storedName = pool->GetNameList()[sampleID];
+    if (storedName != nullptr) {
+      importedFilename = storedName;
+    }
+
     I_Instrument *instr =
         viewData_->project_->GetInstrumentBank()->GetInstrument(toInstr_);
     if (instr->GetType() == IT_SAMPLE) {
-      SampleInstrument *sinstr = (SampleInstrument *)instr;
+      SampleInstrument *sinstr = static_cast<SampleInstrument *>(instr);
       sinstr->AssignSample(sampleID);
       sinstr->ClearSlices();
-    };
+    } else if (instr->GetType() == IT_SAMPLE_SOURCE) {
+      SampleSourceInstrument *ssinstr =
+          static_cast<SampleSourceInstrument *>(instr);
+      ssinstr->AssignSample(sampleID);
+      ssinstr->ClearSlices();
+    }
 
-    // check if we had to truncate filename
-    size_t nameLength = strlen(name);
-    if (nameLength > MAX_INSTRUMENT_FILENAME_LENGTH) {
-      Trace::Log("PICOIMPORT", "Filename too long: %s (%zu chars, max is %d)",
-                 name, nameLength, MAX_INSTRUMENT_FILENAME_LENGTH);
+    if (importedFilename.empty()) {
+      importedFilename = sampleFilename;
+    }
+
+    // If the imported filename differs from the original basename, the sample
+    // pool truncated it to a valid project filename.
+    if (importedFilename != entry->name.c_str()) {
+      Trace::Log("PICOIMPORT", "Sample filename truncated on import: %s -> %s",
+                 entry->name.c_str(), importedFilename.c_str());
       MessageBox *mb = MessageBox::Create(*this, "Sample name Truncated!",
-                                          "Max filename length:24", MBBF_OK);
+                                          importedFilename.c_str(), MBBF_OK);
       DoModal(mb);
     }
   } else {
@@ -781,44 +987,50 @@ void ImportView::adjustPreviewVolume(int offset) {
 }
 
 void ImportView::setCurrentFolder(FileSystem *fs, const char *name) {
-  // Special case: if we're trying to go up (..) from a top-level directory
+  if (fs == nullptr || name == nullptr) {
+    Trace::Error("FAILED to set current folder: invalid args");
+    return;
+  }
+
+  FileSystemPath::PathString nextDir;
   if (strcmp(name, "..") == 0) {
-    // Check if we're in a top-level directory (parent is root)
-    if (fs->isParentRoot()) {
+    const char *rootDir = inProjectSampleDir_ ? currentDir_.c_str() : "/";
+    if (!BrowserPathUtils::ResolveParentDirectory(currentDir_.c_str(), rootDir,
+                                                  nextDir)) {
+      return;
+    }
+  } else if (FileSystemPath::IsAbsolutePath(name)) {
+    if (!FileSystemPath::NormalizePath(name, nextDir)) {
+      Trace::Error("FAILED to normalize folder %s", name);
+      return;
+    }
+  } else if (!FileSystemPath::JoinPath(currentDir_.c_str(), name, nextDir)) {
+    Trace::Error("FAILED to resolve folder %s from %s", name,
+                 currentDir_.c_str());
+    return;
+  }
+
+  if (!inProjectSampleDir_) {
+    char projName[MAX_PROJECT_NAME_LENGTH + 1] = {};
+    viewData_->project_->GetProjectName(projName);
+    if (BrowserPathUtils::IsCurrentProjectImportDirectory(nextDir.c_str(),
+                                                          projName)) {
       Trace::Log("PICOIMPORT",
-                 "Detected top-level directory, navigating to root");
-      // Navigate directly to root instead of using ".."
-      fs->chdir("/");
+                 "NOT allowed to browse into current project directory");
+      return;
     }
   }
 
-  // Normal directory navigation
-  if (!fs->chdir(name)) {
-    Trace::Error("FAILED to chdir to %s", name);
+  currentDir_ = nextDir;
+  if (!inProjectSampleDir_) {
+    viewData_->importViewStartDir = currentDir_.c_str();
   }
   currentIndex_ = 0;
   refreshFileIndexList(fs);
-
-  // Check if we're in the projects directory
-  // and if trying to go into the same dir as current project and if so dont
-  // allow it
-  char projName[MAX_PROJECT_NAME_LENGTH + 1];
-  viewData_->project_->GetProjectName(projName);
-
-  if (strcmp(projName, name) == 0) {
-    // We just navigated to a current project directory, not allowed!
-    etl::string<MAX_PROJECT_SAMPLE_PATH_LENGTH> expectedPath(PROJECTS_DIR);
-    // so instead go back out into the projects dir
-    setCurrentFolder(fs, PROJECTS_DIR);
-
-    Trace::Log("PICOIMPORT",
-               "NOT allowed to browse into current project sample directory");
-  }
 }
 
-void ImportView::showSampleEditor(
-    etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> filename,
-    bool isProjectSample) {
+void ImportView::showSampleEditor(etl::string<PFILENAME_SIZE> filename,
+                                  bool isProjectSample) {
 
   viewData_->sampleEditorFilename = filename;
   viewData_->isShowingSampleEditorProjectPool = isProjectSample;
@@ -833,28 +1045,126 @@ void ImportView::showSampleEditor(
   NotifyObservers(&ve);
 }
 
-void ImportView::removeProjectSample(uint8_t fileIndex, FileSystem *fs) {
-  char filename[PFILENAME_SIZE];
-  fs->getFileName(fileIndex, filename, PFILENAME_SIZE);
+void ImportView::renameSample(const FileSystemEntry &entry, FileSystem *fs) {
+  if (fs == nullptr || entry.type != PFT_FILE) {
+    return;
+  }
+
+  FileSystemPath::PathString samplePath;
+  if (!resolveEntryPath(currentDir_, entry, currentDir_.c_str(), samplePath)) {
+    return;
+  }
+
+  // Show only the basename without the .wav extension so the user edits
+  // just the filename. The extension is appended back on confirm.
+  etl::string<MAX_TEXT_INPUT_LENGTH> defaultName =
+      stripWavExtension<MAX_TEXT_INPUT_LENGTH>(entry.name.c_str());
+  TextInputModalView *renameModal = TextInputModalView::Create(
+      *this, "Rename sample", "Name:", MBBF_OK | MBBF_CANCEL, defaultName);
+  strncpy(pendingRenamePath_, samplePath.c_str(), PFILENAME_SIZE - 1);
+  pendingRenamePath_[PFILENAME_SIZE - 1] = '\0';
+  DoModal(
+      renameModal,
+      ModalViewCallback::create<ImportView, &ImportView::onConfirmRenameSample>(
+          *this));
+}
+
+void ImportView::onConfirmRenameSample(View &, ModalView &dialog) {
+  FileSystem *fs = FileSystem::GetInstance();
+  char oldPath[PFILENAME_SIZE];
+  strncpy(oldPath, pendingRenamePath_, PFILENAME_SIZE - 1);
+  oldPath[PFILENAME_SIZE - 1] = '\0';
+  pendingRenamePath_[0] = '\0';
+
+  if (dialog.GetReturnCode() != MBL_OK || fs == nullptr || oldPath[0] == '\0') {
+    return;
+  }
+
+  auto *renameModal = static_cast<TextInputModalView *>(&dialog);
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> newName =
+      renameModal->GetTextField()->GetString().c_str();
+  if (newName.empty() || hasPathSeparator(newName.c_str()) ||
+      !ensureWavExtension(newName)) {
+    MessageBox *mb = MessageBox::Create(*this, "Invalid filename", MBBF_OK);
+    DoModal(mb);
+    return;
+  }
+
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> oldName;
+  if (!extractLeafName(oldPath, oldName)) {
+    Trace::Error("PICOIMPORT: Failed to extract leaf name from %s", oldPath);
+    return;
+  }
+  if (oldName == newName) {
+    return;
+  }
+
+  FileSystemPath::PathString newPath;
+  if (!FileSystemPath::JoinPath(currentDir_.c_str(), newName.c_str(),
+                                newPath)) {
+    MessageBox *mb = MessageBox::Create(*this, "Invalid filename", MBBF_OK);
+    DoModal(mb);
+    return;
+  }
+  if (fs->exists(newPath.c_str())) {
+    MessageBox *mb = MessageBox::Create(*this, "File exists", MBBF_OK);
+    DoModal(mb);
+    return;
+  }
+
+  Player::GetInstance()->StopStreaming();
+  if (!fs->MoveFile(oldPath, newPath.c_str())) {
+    Trace::Error("PICOIMPORT: Failed to rename sample %s -> %s", oldPath,
+                 newPath.c_str());
+    MessageBox *mb = MessageBox::Create(*this, "Rename failed", MBBF_OK);
+    DoModal(mb);
+    return;
+  }
+
+  if (inProjectSampleDir_) {
+    auto *pool = SamplePool::GetInstance();
+    if (pool->FindSampleIndexByName(oldName) != static_cast<uint32_t>(-1)) {
+      pool->RenameLoadedSample(oldName, newName);
+    }
+  }
+
+  refreshFileIndexList(fs);
+  isDirty_ = true;
+}
+
+void ImportView::removeProjectSample(const FileSystemEntry &entry,
+                                     FileSystem *fs) {
+  FileSystemPath::PathString samplePath;
+  if (!resolveEntryPath(currentDir_, entry, currentDir_.c_str(), samplePath)) {
+    return;
+  }
 
   // first check if a instrument uses this sample
-  bool inUse = viewData_->project_->SampleInUse(
-      etl::string<MAX_INSTRUMENT_FILENAME_LENGTH>(filename));
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> leafName;
+  if (!extractLeafName(samplePath.c_str(), leafName)) {
+    Trace::Error("PICOIMPORT: Failed to extract leaf name from %s",
+                 samplePath.c_str());
+    return;
+  }
 
-  if (inUse) {
-    MessageBox *mb =
-        MessageBox::Create(*this, "Cannot remove", "Sample in use!", MBBF_OK);
+  auto sampleIndexInUse = viewData_->project_->SampleInUse(leafName);
+
+  if (sampleIndexInUse > -1) {
+    etl::string<40> inUseByInstrument("Sample in use by I");
+    etl::to_string(sampleIndexInUse, inUseByInstrument, true);
+    MessageBox *mb = MessageBox::Create(*this, "Cannot delete",
+                                        inUseByInstrument.c_str(), MBBF_OK);
     DoModal(mb);
     return;
   }
 
   // add spacing for basic way to size dialog wider to give Ok/cancel
   // buttons between space
-  MessageBox *mb = MessageBox::Create(*this, "    Remove sample?    ", filename,
-                                      MBBF_OK | MBBF_CANCEL);
-  pendingDeleteFs_ = fs;
-  strncpy(pendingDeleteFilename_, filename, PFILENAME_SIZE - 1);
-  pendingDeleteFilename_[PFILENAME_SIZE - 1] = '\0';
+  MessageBox *mb =
+      MessageBox::Create(*this, "    Remove sample?    ", entry.name.c_str(),
+                         MBBF_OK | MBBF_CANCEL);
+  strncpy(pendingDeletePath_, samplePath.c_str(), PFILENAME_SIZE - 1);
+  pendingDeletePath_[PFILENAME_SIZE - 1] = '\0';
   DoModal(mb,
           ModalViewCallback::create<ImportView,
                                     &ImportView::onConfirmRemoveProjectSample>(
@@ -862,30 +1172,45 @@ void ImportView::removeProjectSample(uint8_t fileIndex, FileSystem *fs) {
 }
 
 void ImportView::onConfirmRemoveProjectSample(View &, ModalView &dialog) {
-  FileSystem *fs = pendingDeleteFs_;
-  pendingDeleteFs_ = nullptr;
+  FileSystem *fs = FileSystem::GetInstance();
 
-  char filename[PFILENAME_SIZE];
-  strncpy(filename, pendingDeleteFilename_, PFILENAME_SIZE - 1);
-  filename[PFILENAME_SIZE - 1] = '\0';
-  pendingDeleteFilename_[0] = '\0';
+  char path[PFILENAME_SIZE];
+  strncpy(path, pendingDeletePath_, PFILENAME_SIZE - 1);
+  path[PFILENAME_SIZE - 1] = '\0';
+  pendingDeletePath_[0] = '\0';
 
-  if (dialog.GetReturnCode() != MBL_OK || !fs) {
+  if (dialog.GetReturnCode() != MBL_OK || fs == nullptr) {
     return;
   }
 
-  int sampleIndex = SamplePool::GetInstance()->FindSampleIndexByName(filename);
+  // Ensure preview playback cannot keep the project-pool file locked.
+  Player::GetInstance()->StopStreaming();
+
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> leafName;
+  if (!extractLeafName(path, leafName)) {
+    Trace::Error("Failed to extract leaf name for %s", path);
+    return;
+  }
+
+  auto *pool = SamplePool::GetInstance();
+  const int32_t sampleIndex =
+      static_cast<int32_t>(pool->FindSampleIndexByName(leafName));
   if (sampleIndex < 0) {
-    Trace::Error("Failed to map sample %s to pool index", filename);
+    Trace::Error("ImportView: Sample %s could not be deleted because it is "
+                 "still in use or not safely removable",
+                 leafName.c_str());
+    MessageBox *mb =
+        MessageBox::Create(*this, "Cannot delete", "sample playing", MBBF_OK);
+    DoModal(mb);
     return;
   }
 
-  if (!fs->DeleteFile(filename)) {
-    Trace::Error("Failed to delete sample %s", filename);
+  if (!fs->DeleteFile(path)) {
+    Trace::Error("Failed to delete sample %s", path);
     return;
   }
 
-  SamplePool::GetInstance()->unloadSample(sampleIndex);
+  pool->unloadSample(static_cast<uint32_t>(sampleIndex));
 
   if (currentIndex_ > 0) {
     --currentIndex_;
@@ -896,23 +1221,39 @@ void ImportView::onConfirmRemoveProjectSample(View &, ModalView &dialog) {
 }
 
 void ImportView::refreshFileIndexList(FileSystem *fs) {
-  fs->list(&fileIndexList_, ".wav", false);
-
-  if (fs->isCurrentRoot() || inProjectSampleDir_) {
-    for (auto it = fileIndexList_.begin(); it != fileIndexList_.end(); ++it) {
-      char entryName[PFILENAME_SIZE];
-      fs->getFileName(*it, entryName, PFILENAME_SIZE);
-      if (strcmp(entryName, "..") == 0) {
-        fileIndexList_.erase(it);
-        break;
-      }
-    }
+  if (fs == nullptr || currentDir_.empty()) {
+    fileEntries_.clear();
+    topIndex_ = 0;
+    currentIndex_ = 0;
+    return;
   }
 
-  if (currentIndex_ >= fileIndexList_.size()) {
-    currentIndex_ = fileIndexList_.size() - 1;
+  fileEntries_.clear();
+  const bool listed =
+      fs->ListDirectory(currentDir_.c_str(), &fileEntries_, ".wav", false);
+  const bool truncated = isDirectoryListTruncated(fs);
+  if (!listed && !truncated) {
+    Trace::Error("PICOIMPORT: Failed to list %s", currentDir_.c_str());
+    topIndex_ = 0;
+    currentIndex_ = 0;
+    return;
   }
-  if (fileIndexList_.empty()) {
+  if (truncated) {
+    Trace::Error("PICOIMPORT: Truncated listing for %s", currentDir_.c_str());
+    showDirectoryListTruncatedDialog(*this);
+  }
+
+  SortBrowserEntries(fileEntries_);
+
+  if (!inProjectSampleDir_) {
+    BrowserPathUtils::PrependParentEntry(currentDir_.c_str(), "/",
+                                         &fileEntries_);
+  }
+
+  if (currentIndex_ >= fileEntries_.size() && !fileEntries_.empty()) {
+    currentIndex_ = fileEntries_.size() - 1;
+  }
+  if (fileEntries_.empty()) {
     topIndex_ = 0;
     currentIndex_ = 0;
   }

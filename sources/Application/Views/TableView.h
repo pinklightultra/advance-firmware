@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _TABLE_VIEW_H_
@@ -40,13 +44,20 @@ protected:
   void extendSelection();
 
   void updateCursor(int dx, int dy);
-  void updateCursorValue(int offset);
+  void updateCursorValue(int offset, int xOffset = 0, int yOffset = 0);
+  void updateSelectionValue(int offset);
   void setTextProps(GUITextProperties &props, int row, int col, bool restore);
   void warpToNeighbour(int dir);
 
   GUIRect getSelectionRect();
 
 private:
+  enum class TableClipboardColumnType : uint8_t {
+    Command,
+    Parameter,
+    Invalid,
+  };
+
   int8_t row_;
   int8_t col_;
   uchar lastVol_;
@@ -58,7 +69,6 @@ private:
   Variable cmdEdit_;
   GUIPoint cmdEditPos_;
   UIBigHexVarField cmdEditField_;
-  void printHelpLegend(FourCC command, GUITextProperties props);
 
   struct clipboard {
     bool active_;
@@ -72,6 +82,7 @@ private:
     ushort param2_[16];
     uchar cmd3_[16];
     ushort param3_[16];
+    TableClipboardColumnType columnTypes_[6];
   } clipboard_;
 
   int saveCol_;
@@ -85,27 +96,6 @@ private:
   // Keep these for backward compatibility
   bool needsPlayPositionUpdate_ = false;
   bool needsNotesUpdate_ = false;
-
-#ifdef PICO_DEOPTIMIZED_DEBUG
-  // These variables are specifically for thread synchronization in debug builds
-  // They create memory barriers between cores when manipulated in a specific
-  // pattern DO NOT REMOVE - they are critical for performance in debug builds
-  bool syncVar1_ = false;
-  bool syncVar2_ = false;
-  bool syncVar3_ = false;
-#endif
-
-  // Memory barrier function that uses the sync variables in debug DEOPTIMISED
-  // builds only
-  inline void createMemoryBarrier() {
-#ifdef PICO_DEOPTIMIZED_DEBUG
-    // This specific pattern of operations was found to be necessary
-    // for proper thread synchronization in debug builds
-    syncVar1_ = false;
-    syncVar2_ = true;
-    syncVar3_ = false;
-#endif
-  }
 
   uchar lastPosition_[3];
 };

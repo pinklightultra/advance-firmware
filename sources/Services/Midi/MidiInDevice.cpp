@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "MidiInDevice.h"
@@ -22,7 +26,8 @@ bool MidiInDevice::dumpEvents_ = false;
 int8_t MidiInDevice::channelToInstrument_[16] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 
-MidiInDevice::MidiInDevice(const char *name) : isRunning_(false) {
+MidiInDevice::MidiInDevice(const char *name)
+    : Observable(&observers_), isRunning_(false) {
   for (int channel = 0; channel < 16; channel++) {
     // Initialize the new channel-to-instrument mapping
     channelToInstrument_[channel] = -1; // -1 means no instrument assigned
@@ -117,7 +122,9 @@ void MidiInDevice::queueEvent(MidiEvent &event){
 void MidiInDevice::onDriverMessage(MidiMessage &message) {
   SetChanged();
   NotifyObservers(&message);
-  treatChannelEvent(message);
+  if (isRunning_ && !message.IsConsumed()) {
+    treatChannelEvent(message);
+  }
 };
 
 void MidiInDevice::Trigger(){

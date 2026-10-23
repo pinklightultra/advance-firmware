@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SIDInstrument.h"
@@ -211,15 +215,29 @@ bool SIDInstrument::Start(int c, unsigned char note, bool retrigger) {
 };
 
 void SIDInstrument::Stop(int c) {
+  (void)c;
   playing_ = false;
+  HardStopOscillator();
+};
+
+void SIDInstrument::Release(int channel) {
+  (void)channel;
   int osc = GetOsc();
   sid_->Register[4 + osc * 7] &= ~1; // Set gate bit off
   gate_ = false;
 };
 
+void SIDInstrument::HardStopOscillator() {
+  int osc = GetOsc();
+  sid_->Register[4 + osc * 7] = 0;
+  sid_->Register[23] &= ~(1 << osc);
+  sid_->cRSID_resetChannel(osc);
+  gate_ = false;
+}
+
 bool SIDInstrument::Render(int channel, fixed *buffer, int size,
                            bool updateTick) {
-  if (playing_ and render_) {
+  if (render_) {
 
     // clear the fixed point buffer
     memset(buffer, 0, size * 2 * sizeof(fixed));
@@ -235,14 +253,11 @@ bool SIDInstrument::IsInitialized() {
   return true; // Always initialised
 };
 
-void SIDInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
-  switch (cc) {
-  case FourCC::InstrumentCommandGateOff:
-    int osc = GetOsc();
-    sid_->Register[4 + osc * 7] &= ~1; // Set gate bit off
-    gate_ = false;
-    break;
-  }
+void SIDInstrument::ProcessCommand(int channel, TrackerCommand cc,
+                                   ushort value) {
+  (void)channel;
+  (void)cc;
+  (void)value;
 };
 
 etl::string<MAX_INSTRUMENT_NAME_LENGTH> SIDInstrument::GetName() {
@@ -264,6 +279,16 @@ bool SIDInstrument::GetTableAutomation() {
   return v->GetBool();
 };
 
-void SIDInstrument::GetTableState(TableSaveState &state){};
+void SIDInstrument::GetTableState(TableSaveState &state) {
+  memcpy(state.hopCount_, tableState_.hopCount_,
+         sizeof(uchar) * TABLE_STEPS * 3);
+  memcpy(state.position_, tableState_.position_, sizeof(int) * 3);
+  state.groove_ = tableState_.groove_;
+};
 
-void SIDInstrument::SetTableState(TableSaveState &state){};
+void SIDInstrument::SetTableState(TableSaveState &state) {
+  memcpy(tableState_.hopCount_, state.hopCount_,
+         sizeof(uchar) * TABLE_STEPS * 3);
+  memcpy(tableState_.position_, state.position_, sizeof(int) * 3);
+  tableState_.groove_ = state.groove_;
+};

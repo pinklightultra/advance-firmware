@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef _PICO_FILESYSTEM_H_
 #define _PICO_FILESYSTEM_H_
@@ -17,8 +21,6 @@
 #include "System/FileSystem/I_File.h"
 #include "ff_gen_drv.h"
 #include "sd_diskio.h"
-
-#define MAX_PROJECT_SAMPLE_PATH_LENGTH 146 // 17 + 128 + 1
 
 extern FATFS SDFatFS;
 extern char SDPath[4]; /* SD logical drive path */
@@ -49,20 +51,16 @@ public:
   advFileSystem(); // OK
   virtual ~advFileSystem(){};
   virtual FileHandle Open(const char *name, const char *mode) override;
-  virtual bool chdir(const char *path) override;
-  virtual void list(etl::ivector<int> *fileIndexes, const char *filter,
-                    bool subDirOnly, bool includeHidden = false) override;
-  virtual void getFileName(int index, char *name, int length) override;
-  virtual PicoFileType getFileType(int index) override;
-  virtual bool isParentRoot() override;
-  virtual bool isCurrentRoot() override;
+  virtual bool ListDirectory(const char *absoluteDir,
+                             etl::ivector<FileSystemEntry> *entries,
+                             const char *filter, bool directoriesOnly,
+                             bool includeHidden = false) override;
   virtual bool DeleteFile(const char *name) override;
   virtual bool DeleteDir(const char *name) override;
   virtual void BeginBatch() override;
   virtual void EndBatch() override;
   virtual bool exists(const char *path) override;
   virtual bool makeDir(const char *path, bool pFlag = false) override;
-  virtual uint64_t getFileSize(int index) override;
   virtual bool CopyFile(const char *srcFilename,
                         const char *destFilename) override;
   virtual bool MoveFile(const char *srcFilename,
@@ -70,16 +68,7 @@ public:
   virtual bool isExFat() { return false; }; // not used on the Advance
 
 private:
-  FILINFO fileFromIndex(int index);
-  void tolowercase(char *temp);
-  void updateCache();
-  TCHAR filepath[PFILENAME_SIZE];
   BYTE fileBuffer_[512];
-
-  // TODO: this is quite big! need move it out to external RAM
-  // cache for fileFromIndex
-  etl::vector<FILINFO, MAX_FILE_INDEX_SIZE> file_cache_;
-  bool batching_;
 };
 
 #endif

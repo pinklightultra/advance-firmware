@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _THEME_VIEW_H_
@@ -51,6 +55,8 @@ public:
 protected:
 private:
   void onConfirmThemeOverwrite(View &view, ModalView &dialog);
+  void onConfirmResetTheme(View &view, ModalView &dialog);
+  void resetThemeToDefaults();
 
   void addSwatchField(ColorDefinition color, GUIPoint position);
   void addColorField(const char *label, Variable *colorVar,
@@ -74,7 +80,7 @@ private:
   etl::vector<Variable, COLOR_SUB_FIELDS_COUNT> colorComponentVars_;
   etl::vector<ColorComponentField, COLOR_SUB_FIELDS_COUNT>
       colorComponentFields_;
-  etl::vector<UIActionField, 2> actionField_; // For Import/Export buttons
+  etl::vector<UIActionField, 3> actionField_; // For top-row action buttons
   etl::vector<UITextField<MAX_THEME_NAME_LENGTH>, 1>
       textFields_; // For theme name input
   StringVariable<MAX_THEME_NAME_LENGTH> themeNameVar_;

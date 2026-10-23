@@ -1,16 +1,107 @@
+# SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+#
+# Copyright (c) 2026 xiphonics, inc.
+#
+# Inherited BSD-licensed material remains BSD-3-Clause.
+# New original contributions by xiphonics, inc. are GPL-3.0-only.
+# Previously granted BSD permissions are preserved. See LICENSING.md.
+
 cmake_minimum_required(VERSION 3.13)
 
 project(picoTrackerHostTests C CXX)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(picoTracker_tests
-  test_main.cpp
+  adv_usb_host_power_policy_tests.cpp
+  audio_voice_tests.cpp
+  midi_in_device_tests.cpp
+  midi_instrument_tests.cpp
+  sample_source_instrument_tests.cpp
+  dwt_profiler_tests.cpp
+  insert_effect_slot_tests.cpp
+  model_allocation_tests.cpp
+  project_audio_mode_tests.cpp
+  project_output_effect_type_tests.cpp
+  stubs/project_audio_mode_link_stubs.cpp
+  stubs/nanoprintf_impl.c
+  browser_entry_sort_tests.cpp
+  browser_path_tests.cpp
+  filesystem_api_contract_tests.cpp
+  filesystem_path_tests.cpp
   foundation_types_tests.cpp
+  charger_host_power_tests.cpp
+  charger_watchdog_tests.cpp
+  instrument_pool_tests.cpp
+  output_effect_slot_tests.cpp
+  play_button_behavior_tests.cpp
+  player_channel_wet_dry_tests.cpp
+  reverb_output_effect_tests.cpp
+  voice_filter_graph_tests.cpp
+  voice_envelope_graph_tests.cpp
+  voice_screen_utils_tests.cpp
+  sample_slicer_tests.cpp
+  row_fx_tests.cpp
+  sample_pool_path_tests.cpp
+  import_while_playing_tests.cpp
+  test_main.cpp
   wavheader_tests.cpp
+  stubs/System/FileSystem/FakeFileSystem.cpp
+  ../sources/Application/Instruments/CommandList.cpp
+  ../sources/Application/Instruments/Filters.cpp
+  ../sources/Application/Instruments/InstrumentBank.cpp
+  ../sources/Application/Instruments/InstrumentNameVariable.cpp
+  ../sources/Application/Instruments/MidiInstrument.cpp
+  ../sources/Application/Instruments/NoneInstrument.cpp
+  ../sources/Application/Instruments/SRPUpdaters.cpp
+  ../sources/Application/Instruments/SampleInstrument.cpp
+  ../sources/Application/Instruments/SampleSourceInstrument.cpp
+  ../sources/Application/Instruments/SamplePool.cpp
+  ../sources/Application/Instruments/SampleVariable.cpp
+  ../sources/Application/Instruments/SoundSource.cpp
+  ../sources/Application/Instruments/WavFile.cpp
+  ../sources/Application/Instruments/WavFileWriter.cpp
+  ../sources/Application/Mixer/OutputEffectSlot.cpp
+  ../sources/Application/Mixer/ReverbOutputEffect.cpp
+  ../sources/Application/Model/Chain.cpp
+  ../sources/Application/Model/Config.cpp
+  ../sources/Application/Model/Groove.cpp
+  ../sources/Application/Model/Phrase.cpp
+  ../sources/Application/Model/Project.cpp
+  ../sources/Application/Model/Scale.cpp
+  ../sources/Application/Model/Song.cpp
+  ../sources/Application/Model/Table.cpp
+  ../sources/Application/Persistency/PersistencyDocument.cpp
+  ../sources/Application/Utils/HexBuffers.cpp
+  ../sources/Application/Utils/char.cpp
+  ../sources/Application/Instruments/LFOSettings.cpp
+  ../sources/Application/Instruments/VoiceParameters.cpp
+  ../sources/Application/Player/AudioVoice.cpp
+  ../sources/Application/Player/InsertEffectSlot.cpp
+  ../sources/Application/Player/LFOProcessor.cpp
+  ../sources/Application/Player/RowFx.cpp
+  ../sources/Application/Player/SyncMaster.cpp
+  ../sources/Application/Player/VoiceADSR.cpp
+  ../sources/Services/Midi/MidiInDevice.cpp
+  ../sources/Services/Midi/MidiNoteTracker.cpp
+  ../sources/Application/Views/VoiceFilterGraph.cpp
+  ../sources/Application/Views/VoiceEnvelopeGraph.cpp
+  ../sources/Foundation/Observable.cpp
+  ../sources/Foundation/Services/Service.cpp
+  ../sources/Foundation/Services/ServiceRegistry.cpp
+  ../sources/Foundation/Variables/Variable.cpp
+  ../sources/Foundation/Variables/VariableContainer.cpp
+  ../sources/Foundation/Variables/WatchedVariable.cpp
   ../sources/Application/Instruments/WavHeader.cpp
+  ../sources/Externals/SRC/samplerate.c
+  ../sources/Externals/SRC/src_linear.c
+  ../sources/Externals/SRC/src_sinc_stub.c
+  ../sources/Externals/TinyXML2/tinyxml2_printer_only.cpp
+  ../sources/Externals/TinyXML2/tinyxml2adapter.cpp
+  ../sources/Externals/yxml/yxml.c
+  ../sources/System/io/Status.cpp
 )
 
 target_include_directories(picoTracker_tests PRIVATE
@@ -18,8 +109,96 @@ target_include_directories(picoTracker_tests PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals
   ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals/SRC/include
   ${CMAKE_CURRENT_LIST_DIR}/../sources
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Model
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Persistency
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation/Variables
 )
 
 target_compile_definitions(picoTracker_tests PRIVATE
   HOST_TEST
+  REVERB_OUTPUT_EFFECT_ALGORITHM=1
+  HAVE_STDBOOL_H
+  PACKAGE="picoTrackerHostTests"
+  VERSION="test"
+)
+
+add_executable(picoTracker_launchpad_tests
+  test_main.cpp
+  launchpad_usb_passthrough_tests.cpp
+  stubs/launchpad_control_surface_link_stubs.cpp
+  ../sources/Services/Midi/MidiInDevice.cpp
+  ../sources/Services/Midi/MidiNoteTracker.cpp
+  ../sources/Services/Midi/ControlSurface/ControlSurfaceDevice.cpp
+  ../sources/Services/Midi/ControlSurface/LaunchpadMiniMk3Surface.cpp
+  ../sources/Foundation/Observable.cpp
+)
+
+target_include_directories(picoTracker_launchpad_tests PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/stubs
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals/SRC/include
+  ${CMAKE_CURRENT_LIST_DIR}/../sources
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Services/Midi
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Model
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Persistency
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation/Variables
+)
+
+target_compile_definitions(picoTracker_launchpad_tests PRIVATE
+  HOST_TEST
+  HAVE_STDBOOL_H
+  PACKAGE="picoTrackerHostTests"
+  VERSION="test"
+)
+
+add_executable(picoTracker_boundary_tests
+  test_main.cpp
+  instrument_import_path_tests.cpp
+  persistency_project_path_tests.cpp
+  select_project_view_tests.cpp
+  theme_import_path_tests.cpp
+  boundary_stubs/System/Console/nanoprintf.cpp
+  stubs/System/FileSystem/FakeFileSystem.cpp
+  ../sources/Application/Instruments/WavHeader.cpp
+  ../sources/Application/Mixer/OutputEffectSlot.cpp
+  ../sources/Application/Model/Config.cpp
+  ../sources/Application/Persistency/PersistencyDocument.cpp
+  ../sources/Application/Persistency/PersistencyService.cpp
+  ../sources/Application/Persistency/Persistent.cpp
+  ../sources/Externals/SRC/samplerate.c
+  ../sources/Externals/SRC/src_linear.c
+  ../sources/Externals/SRC/src_sinc_stub.c
+  ../sources/Externals/TinyXML2/tinyxml2_printer_only.cpp
+  ../sources/Externals/TinyXML2/tinyxml2adapter.cpp
+  ../sources/Externals/yxml/yxml.c
+  ../sources/Foundation/Observable.cpp
+  ../sources/Foundation/Services/Service.cpp
+  ../sources/Foundation/Services/ServiceRegistry.cpp
+  ../sources/Foundation/Services/SubService.cpp
+  ../sources/Foundation/Variables/Variable.cpp
+  ../sources/Foundation/Variables/VariableContainer.cpp
+  ../sources/Foundation/Variables/WatchedVariable.cpp
+  ../sources/System/io/Status.cpp
+)
+
+target_include_directories(picoTracker_boundary_tests PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/boundary_stubs
+  ${CMAKE_CURRENT_LIST_DIR}/stubs
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals/SRC/include
+  ${CMAKE_CURRENT_LIST_DIR}/../sources
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Model
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Persistency
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation/Services
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation/Variables
+)
+
+target_compile_definitions(picoTracker_boundary_tests PRIVATE
+  HOST_TEST
+  HAVE_STDBOOL_H
+  PACKAGE="picoTrackerHostTests"
+  VERSION="test"
 )

@@ -1,14 +1,19 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "DeviceView.h"
 #include "Application/AppWindow.h"
+#include "Application/Model/FirmwareVersion.h"
 #include "Application/Model/Scale.h"
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Utils/char.h"
@@ -40,27 +45,36 @@ DeviceView::DeviceView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
 
   Variable *v;
 
+  position._y += 1;
   v = config->FindVariable(FourCC::VarMidiDevice);
-  intVarField_.emplace_back(position, *v, "MIDI device: %s", 0, 3, 1, 1);
+  intVarField_.emplace_back(position, *v, "Output Device: %s", 0, 3, 1, 1);
+  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
+  (*intVarField_.rbegin()).AddObserver(*this);
+
+  position._y += 1;
+  v = config->FindVariable(FourCC::VarMidiControlSurface);
+  const int maxControlSurfaceValue =
+      (v->GetListSize() > 0) ? v->GetListSize() - 1 : 0;
+  intVarField_.emplace_back(position, *v, "Ctrl Surface: %s", 0,
+                            maxControlSurfaceValue, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 
   position._y += 1;
   v = config->FindVariable(FourCC::VarMidiSync);
   // just hardcode max of 1, as only settings are "off" & "send"
-  intVarField_.emplace_back(position, *v, "MIDI sync: %s", 0, 1, 1, 1);
+  intVarField_.emplace_back(position, *v, "Transport/Sync: %s", 0, 1, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 
-#ifndef ADV
   position._y += 1;
-  v = config->FindVariable(FourCC::VarLineOut);
-  intVarField_.emplace_back(position, *v, "Line Out Mode: %s", 0, 2, 1, 1);
+  v = config->FindVariable(FourCC::VarMidiInputDevice);
+  intVarField_.emplace_back(position, *v, "Input Device: %s", 0,
+                            v->GetListSize() - 1, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
-#endif
 
-  position._y += 1;
+  position._y += 2;
   v = config->FindVariable(FourCC::VarRemoteUI);
   intVarField_.emplace_back(position, *v, "Remote UI: %s", 0, 1, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
@@ -68,7 +82,7 @@ DeviceView::DeviceView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
 
   position._y += 1;
   v = config->FindVariable(FourCC::VarImportResampler);
-  intVarField_.emplace_back(position, *v, "Import resampler: %s", 0,
+  intVarField_.emplace_back(position, *v, "Import Resampler: %s", 1,
                             v->GetListSize() - 1, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
@@ -76,18 +90,16 @@ DeviceView::DeviceView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
   position._y += 1;
   v = config->FindVariable(FourCC::VarBacklightLevel);
   // MIN brightness is 0xF (15)
-  intVarField_.emplace_back(position, *v, "Display brightness: %2.2X", 0xF,
+  intVarField_.emplace_back(position, *v, "Display Brightness: %2.2X", 0xF,
                             0xFF, 1, 16);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 
-#ifdef ADV
   position._y += 1;
   v = config->FindVariable(FourCC::VarOutputVolume);
-  intVarField_.emplace_back(position, *v, "Output volume: %3d", 0, 100, 1, 5);
+  intVarField_.emplace_back(position, *v, "Output Volume: %3d", 0, 100, 1, 5);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
-#endif
 
   position._y += 2;
   actionField_.emplace_back("Theme settings", FourCC::ActionShowTheme,
@@ -138,16 +150,9 @@ void DeviceView::DrawView() {
   GUITextProperties props;
   GUIPoint pos = GetTitlePosition();
 
-  // Draw title
-  char projectString[SCREEN_WIDTH];
-  strcpy(projectString, "Device");
-
-  SetColor(CD_NORMAL);
-  DrawString(pos._x, pos._y, projectString, props);
-
+  drawSectionHeaders();
   FieldView::Redraw();
 
-#ifdef ADV
   // Draw battery health
   pos._x = SCREEN_MAP_WIDTH + 1;
   pos._y = 21;
@@ -161,7 +166,6 @@ void DeviceView::DrawView() {
             : npf_snprintf(sohText, sizeof(sohText), "%i%%", soh);
   SetColor(CD_NORMAL);
   DrawString(pos._x, pos._y, sohText, props);
-#endif
 
   SetColor(CD_NORMAL);
   drawMap();
@@ -169,10 +173,9 @@ void DeviceView::DrawView() {
   pos._x = SCREEN_MAP_WIDTH + 1;
   pos._y = SCREEN_HEIGHT - 1;
 
-  npf_snprintf(projectString, sizeof(projectString), "Build %s%s_%s",
-               PROJECT_NUMBER, PROJECT_RELEASE, BUILD_COUNT);
+  const FirmwareVersionString buildString = FormatFirmwareRelease();
   SetColor(CD_NORMAL);
-  DrawString(pos._x, pos._y, projectString, props);
+  DrawString(pos._x, pos._y, buildString.c_str(), props);
 };
 
 void DeviceView::Update(Observable &, I_ObservableData *data) {
@@ -236,6 +239,8 @@ void DeviceView::Update(Observable &, I_ObservableData *data) {
     break;
   }
   case FourCC::VarMidiDevice:
+  case FourCC::VarMidiInputDevice:
+  case FourCC::VarMidiControlSurface:
   case FourCC::VarMidiSync:
   case FourCC::VarRemoteUI:
   case FourCC::VarImportResampler: {
@@ -264,11 +269,21 @@ void DeviceView::Update(Observable &, I_ObservableData *data) {
   isDirty_ = true;
 };
 
+void DeviceView::drawSectionHeaders() {
+  GUITextProperties props;
+  const GUIPoint anchor = GetAnchor();
+
+  SetColor(CD_HILITE2);
+  DrawString(anchor._x, anchor._y, "MIDI", props);
+}
+
 void DeviceView::addSwatchField(ColorDefinition color, GUIPoint position) {
   position._x -= 5;
   swatchField_.emplace_back(position, color);
   fieldList_.insert(fieldList_.end(), &(*swatchField_.rbegin()));
 }
+
+void DeviceView::OnFocus() { setTitle(etl::string<23>("Device")); }
 
 void DeviceView::OnFocusLost() {
   if (configDirty_) {

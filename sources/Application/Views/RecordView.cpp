@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "RecordView.h"
@@ -12,15 +16,12 @@
 #include "Application/Views/SampleEditorView.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/FileSystem/PathUtils.h"
 #include "System/System/System.h"
 #include "UIController.h"
 #include "ViewData.h"
 
-#ifdef ADV
 #include "Adapters/adv/audio/record.h"
-#else
-#include "Adapters/picoTracker/audio/record.h"
-#endif
 
 static constexpr uint32_t kMaxRecordDurationMs = 30000;
 
@@ -42,26 +43,42 @@ RecordView::RecordView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
 
   // Audio source selection field (Line In = 1, Mic = 2)
   Variable *v = config->FindVariable(FourCC::VarRecordSource);
-  intVarField_.emplace_back(position, *v, "Audio source: %s", 1, 2, 1, 1);
+  intVarField_.emplace_back(position, *v, "Audio Source: %s", 1, 2, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 
   position._y += 1;
   v = config->FindVariable(FourCC::VarRecordLineGain);
-  intVarField_.emplace_back(position, *v, "Line gain: %d dB", LINEIN_GAIN_MINDB,
+  intVarField_.emplace_back(position, *v, "Line Gain: %d dB", LINEIN_GAIN_MINDB,
                             LINEIN_GAIN_MAXDB, 1, 2);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 
   position._y += 1;
   v = config->FindVariable(FourCC::VarRecordMicGain);
-  intVarField_.emplace_back(position, *v, "Mic gain: %d dB", MIC_GAIN_MINDB,
+  intVarField_.emplace_back(position, *v, "Mic Gain: %d dB", MIC_GAIN_MINDB,
                             MIC_GAIN_MAXDB, 1, 2);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
 }
 
 RecordView::~RecordView() {}
+
+bool RecordView::generateFullPath(const char *filename,
+                                  etl::string<PFILENAME_SIZE> *fullpath) {
+  if (fullpath == nullptr) {
+    return false;
+  }
+
+  fullpath->clear();
+  FileSystemPath::PathString resolvedPath;
+  if (!FileSystemPath::JoinPath(RECORDINGS_DIR, filename, resolvedPath)) {
+    return false;
+  }
+
+  *fullpath = resolvedPath.c_str();
+  return !fullpath->is_truncated();
+}
 
 void RecordView::Reset() {
   uiRecordingActive_ = false;
@@ -90,9 +107,7 @@ void RecordView::ProcessButtonMask(unsigned short mask, bool pressed) {
   // - NAV-LEFT: leave immediately and stop recording in background
   if (uiRecordingActive_) {
     if ((mask & EPBM_NAV) && (mask & EPBM_LEFT)) {
-#ifdef ADV
       RequestStopRecording();
-#endif
       uiRecordingActive_ = false;
       uiSavingActive_ = false;
       autoSwitchPending_ = false;
@@ -141,10 +156,7 @@ void RecordView::DrawView() {
   GUIPoint pos = GetTitlePosition();
 
   // Draw title
-  SetColor(CD_NORMAL);
-  props.invert_ = true;
-  DrawString(pos._x, pos._y, "Record", props);
-  props.invert_ = false;
+  setTitle(etl::string<23>("Record"));
 
   // Draw recording status and time
   pos = GetAnchor();
@@ -192,18 +204,24 @@ void RecordView::DrawView() {
   // Draw fields
   FieldView::Redraw();
 
+  Player *player = Player::GetInstance();
+  if (player) {
+    // DISABLED VU meter until v4
+    // drawMasterVuMeter(player, props, true);
+  }
+
   SetColor(CD_NORMAL);
 }
 
 void RecordView::OnFocus() {
+  setTitle(etl::string<23>("Record"));
+
   isDirty_ = true;
   recordingDuration_ = 0;
 
   auto config = Config::GetInstance();
-#ifdef ADV
   SetLineInGain(config->FindVariable(FourCC::VarRecordLineGain)->GetInt());
   SetMicGain(config->FindVariable(FourCC::VarRecordMicGain)->GetInt());
-#endif
 
   updateRecordingSource();
   StartMonitoring();
@@ -224,14 +242,12 @@ void RecordView::Update(Observable &o, I_ObservableData *data) {
     updateRecordingSource();
     StartMonitoring();
     break;
-#ifdef ADV
   case FourCC::VarRecordLineGain:
     SetLineInGain(config->FindVariable(FourCC::VarRecordLineGain)->GetInt());
     break;
   case FourCC::VarRecordMicGain:
     SetMicGain(config->FindVariable(FourCC::VarRecordMicGain)->GetInt());
     break;
-#endif
   }
 }
 
@@ -240,7 +256,6 @@ void RecordView::AnimationUpdate() {
   // off etc
   ScreenView::AnimationUpdate();
 
-#ifdef ADV
   const bool backendRecordingActive = IsRecordingActive();
   const bool backendSavingActive = IsSavingRecording();
 
@@ -272,17 +287,15 @@ void RecordView::AnimationUpdate() {
         return;
       }
 
-      // SampleEditor expects a relative filename for recordings; make sure the
-      // working directory points at the recordings folder before switching.
-      auto fs = FileSystem::GetInstance();
-      if (!fs || !fs->chdir(RECORDINGS_DIR)) {
-        Trace::Error("RECORDVIEW: failed to chdir to %s before editor switch",
-                     RECORDINGS_DIR);
+      etl::string<PFILENAME_SIZE> recordingPath;
+      if (!generateFullPath(RECORDING_FILENAME, &recordingPath)) {
+        Trace::Error("RECORDVIEW: failed to resolve recording path for %s",
+                     RECORDING_FILENAME);
+        return;
       }
 
       // set the current file for sample editor before switching view
-      etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> filename(RECORDING_FILENAME);
-      viewData_->sampleEditorFilename = filename;
+      viewData_->sampleEditorFilename = recordingPath;
       viewData_->isShowingSampleEditorProjectPool = false;
 
       // Automatically switch to SampleEditor view after recording stops
@@ -296,7 +309,6 @@ void RecordView::AnimationUpdate() {
   } else {
     uiSavingActive_ = backendSavingActive;
   }
-#endif
 
   if (uiRecordingActive_) {
     // Update recording duration
@@ -321,10 +333,10 @@ void RecordView::AnimationUpdate() {
     return;
   }
   GUITextProperties props;
+  drawMasterVuMeter(player, props);
 }
 
 void RecordView::record() {
-#ifdef ADV
   if (uiRecordingActive_) {
     return;
   }
@@ -333,12 +345,19 @@ void RecordView::record() {
   auto config = Config::GetInstance();
   Variable *v = config->FindVariable(FourCC::VarRecordSource);
   int audioSource = v->GetInt();
+  etl::string<PFILENAME_SIZE> recordingPath;
+  if (!generateFullPath(RECORDING_FILENAME, &recordingPath)) {
+    Trace::Error("RECORDVIEW: failed to resolve recording path for %s",
+                 RECORDING_FILENAME);
+    return;
+  }
+
   Trace::Log("RECORD", "Starting recording to %s, source: %s",
-             RECORDING_FILENAME, audioSource == 0 ? "Line In" : "Mic");
+             recordingPath.c_str(), audioSource == 0 ? "Line In" : "Mic");
 
   // Start recording with threshold and no duration set, ie. unlimited
   // recording time
-  bool success = StartRecording(RECORDING_FILENAME, 10, 0);
+  bool success = StartRecording(recordingPath.c_str(), 10, 0);
 
   if (success) {
     uiRecordingActive_ = true;
@@ -350,13 +369,9 @@ void RecordView::record() {
   } else {
     Trace::Error("RECORDVIEW: Failed to start recording");
   }
-#else
-  Trace::Log("RECORD", "Recording not supported on pico");
-#endif
 }
 
 void RecordView::stop() {
-#ifdef ADV
   const bool backendRecordingActive = IsRecordingActive();
   if (!uiRecordingActive_ && !backendRecordingActive) {
     return;
@@ -368,14 +383,9 @@ void RecordView::stop() {
   autoSwitchPending_ = true;
   isDirty_ = true;
   DrawView();
-#endif
 }
 
-void RecordView::stopAndSwitchToEditor() {
-#ifdef ADV
-  stop();
-#endif
-}
+void RecordView::stopAndSwitchToEditor() { stop(); }
 
 void RecordView::formatTime(uint32_t milliseconds, char *buffer,
                             size_t bufferSize) {

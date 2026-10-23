@@ -1,21 +1,28 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advGUIWindowImp.h"
 #include "Adapters/adv/audio/record.h"
 #include "Adapters/adv/filesystem/advFileSystem.h"
-#include "Adapters/adv/utils/utils.h"
+#include "Adapters/adv/system/advUsbRoleManager.h"
+#include "Adapters/adv/system/charger.h"
 #include "Application/Model/Config.h"
 #include "Application/Utils/char.h"
 #include "Player/Player.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
+#include "UIFramework/SimpleBaseClasses/EventManager.h"
 #include "UIFramework/SimpleBaseClasses/GUIWindow.h"
 #include "advRemoteUI.h"
 #include <string.h>
@@ -26,11 +33,31 @@
 // devices LCD
 static uint8_t lastRemoteColorIdx = 255;
 
+namespace {
+
+constexpr uint16_t kProfileOrderGraphicsBackend = 71;
+
+DWTProfileStats gGraphicsBackendProfile = {" gfx draw", true};
+
+void registerAdvGuiWindowProfiles() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+
+  gGraphicsBackendProfile.displayOrder_ = kProfileOrderGraphicsBackend;
+  RegisterDWTProfileStats(&gGraphicsBackendProfile);
+  registered = true;
+}
+
+} // namespace
+
 void appwindow_set_sdcard_present(bool present);
 
 advGUIWindowImp *instance_;
 
 advGUIWindowImp::advGUIWindowImp(GUICreateWindowParams &p) {
+  registerAdvGuiWindowProfiles();
 
   // stash ref to singleton for use in static methods
   instance_ = this;
@@ -143,6 +170,8 @@ void advGUIWindowImp::Lock(){};
 void advGUIWindowImp::Unlock(){};
 
 void advGUIWindowImp::Flush() {
+  ScopedDWTProfile graphicsBackendProfile(&gGraphicsBackendProfile, 1,
+                                          PICO_CLOCK_HZ, 1);
   display_draw_changed();
   // send buffered UI draw cmds out over USB
   if (remoteUIEnabled_) {
@@ -182,6 +211,9 @@ void advGUIWindowImp::ProcessEvent(Event &event) {
   case CLOCK:
     instance_->_window->ClockTick();
     break;
+  case BUTTON_CHANGE:
+    ProcessButtonChange(event.buttonChangeMask_, event.buttonMask_);
+    break;
   case SD_DET_INSERT: {
     Trace::Log("SDCARD", "Card inserted, reinitializing");
     FATFS_UnLinkDriver(SDPath);
@@ -194,7 +226,7 @@ void advGUIWindowImp::ProcessEvent(Event &event) {
         (f_mount(&SDFatFS, (TCHAR const *)SDPath, 0) == FR_OK) ? true : false;
     if (mounted) {
       auto fs = FileSystem::GetInstance();
-      if (!fs || !fs->chdir("/")) {
+      if (!fs || !fs->exists("/")) {
         mounted = false;
       }
     }
@@ -213,6 +245,25 @@ void advGUIWindowImp::ProcessEvent(Event &event) {
     HAL_SD_DeInit(&hsd1);
     appwindow_set_sdcard_present(false);
   } break;
+  case CHARGER_INT_EVENT: {
+    const ChargerInt reason = chargerIntReason();
+    switch (reason) {
+    case VBUS_OK:
+      startCharging();
+      break;
+    case VBUS_KO:
+    case CHARGE_END:
+    case CHARGE_FAULT:
+      stopCharging();
+      break;
+    case UNKNOWN:
+    default:
+      break;
+    }
+  } break;
+  case USB_ROLE_INT_EVENT:
+    advUsbRoleManagerService();
+    break;
   case LAST:
     break;
   }

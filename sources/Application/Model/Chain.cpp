@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Chain.h"
@@ -28,6 +32,16 @@ void Chain::Reset() {
 
 unsigned short Chain::GetNext() {
   for (int i = 0; i < CHAIN_COUNT; i++) {
+    if (!isUsed_[i]) {
+      isUsed_[i] = true;
+      return i;
+    }
+  }
+  return NO_MORE_CHAIN;
+};
+
+uint16_t Chain::GetNextFrom(uint8_t current) {
+  for (uint16_t i = current; i < CHAIN_COUNT; i++) {
     if (!isUsed_[i]) {
       isUsed_[i] = true;
       return i;

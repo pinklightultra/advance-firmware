@@ -1,27 +1,88 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "PersistencyService.h"
-#include "../Instruments/SamplePool.h"
 #include "Foundation/Services/ServiceRegistry.h"
 
+#include "Application/Utils/DrawUtils.h"
 #include "Foundation/Types/Types.h"
 #include "Persistent.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/FileSystem/PathUtils.h"
+#include "System/io/Status.h"
 #include <cstring>
+#include <new>
 
 #define PROJECT_STATE_FILE "/.current"
 #define MAX_DELETE_DEPTH 3
 
+namespace {
+
+using PersistencyFileEntries =
+    etl::vector<FileSystemEntry, MAX_FILE_INDEX_SIZE>;
+
+#if defined(HOST_TEST)
+#define PERSISTENCY_FILE_ENTRIES_ATTRIBUTES __attribute__((aligned(32)))
+#else
+#define PERSISTENCY_FILE_ENTRIES_ATTRIBUTES                                    \
+  __attribute__((section(".SDRAM1_NC"))) __attribute__((aligned(32)))
+#endif
+
+alignas(
+    PersistencyFileEntries) static unsigned char persistencyFileEntriesBuffer
+    [sizeof(PersistencyFileEntries)] PERSISTENCY_FILE_ENTRIES_ATTRIBUTES;
+
+PersistencyFileEntries &GetPersistencyFileEntries() {
+  static PersistencyFileEntries *entries = nullptr;
+  if (entries == nullptr) {
+    entries = new (persistencyFileEntriesBuffer) PersistencyFileEntries();
+  }
+  return *entries;
+}
+
+#undef PERSISTENCY_FILE_ENTRIES_ATTRIBUTES
+
+bool resolveInstrumentPath(const char *name,
+                           FileSystemPath::PathString &resolvedPath) {
+  if (name == nullptr || name[0] == '\0') {
+    return false;
+  }
+
+  if (FileSystemPath::IsAbsolutePath(name)) {
+    return FileSystemPath::NormalizePath(name, resolvedPath);
+  }
+
+  return FileSystemPath::JoinPath(INSTRUMENTS_DIR, name, resolvedPath);
+}
+
+bool extractInstrumentLeafName(
+    const char *path, etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &leafName) {
+  FileSystemPath::PathString baseName;
+  if (!FileSystemPath::BaseName(path, baseName)) {
+    leafName.clear();
+    return false;
+  }
+
+  leafName = baseName.c_str();
+  return !leafName.is_truncated() && !leafName.empty();
+}
+
+} // namespace
+
 PersistencyService::PersistencyService()
-    : Service(FourCC::ServicePersistency){};
+    : Service(FourCC::ServicePersistency),
+      fileEntries_(GetPersistencyFileEntries()) {}
 
 PersistencyResult PersistencyService::CreateProject() {
   Trace::Log("APPLICATION", "create new project");
@@ -37,40 +98,32 @@ bool PersistencyService::PurgeUnnamedProject() {
 
 bool PersistencyService::DeleteProject(const char *projectName) {
   auto fs = FileSystem::GetInstance();
+  FileSystemPath::PathString projectPath;
 
   Trace::Debug("PERSISTENCYSERVICE", "Deleting project: %s", projectName);
 
-  if (!fs->chdir(PROJECTS_DIR)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not change to projects dir");
+  if (!FileSystemPath::JoinPath(PROJECTS_DIR, projectName, projectPath)) {
+    Trace::Error("PERSISTENCYSERVICE: Could not resolve project path: %s",
+                 projectName);
     return false;
   }
 
-  if (!fs->chdir(projectName)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not change to project dir");
+  if (!fs->exists(projectPath.c_str())) {
+    Trace::Error("PERSISTENCYSERVICE: Project does not exist: %s",
+                 projectPath.c_str());
     return false;
   }
 
-  if (!DeleteDirectoryContents_(0)) {
+  if (!DeleteDirectoryTree_(projectPath.c_str(), 0)) {
     Trace::Error("PERSISTENCYSERVICE: Could not delete project contents");
-    // attempt to recover to /projects for caller consistency
-    fs->chdir("..");
-    return false;
-  }
-
-  if (!fs->chdir("..")) { // up to projects dir
-    Trace::Error("PERSISTENCYSERVICE: Could not change back to projects dir");
-    return false;
-  }
-
-  if (!fs->DeleteDir(projectName)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not delete the project dir");
     return false;
   }
 
   return true;
 }
 
-bool PersistencyService::DeleteDirectoryContents_(uint8_t depth) {
+bool PersistencyService::DeleteDirectoryContents_(const char *directoryPath,
+                                                  uint8_t depth) {
   auto fs = FileSystem::GetInstance();
   if (depth > MAX_DELETE_DEPTH) {
     Trace::Error("PERSISTENCYSERVICE: delete depth exceeded");
@@ -78,83 +131,65 @@ bool PersistencyService::DeleteDirectoryContents_(uint8_t depth) {
   }
 
   while (true) {
-    fileIndexes_.clear();
-    fs->list(&fileIndexes_, "", false, true);
-
-    bool foundEntry = false;
-    bool deletedEntry = false;
-    for (size_t i = 0; i < fileIndexes_.size(); ++i) {
-      fs->getFileName(fileIndexes_[i], deleteNameBuffer_,
-                      sizeof(deleteNameBuffer_));
-
-      if ((strcmp(deleteNameBuffer_, ".") == 0) ||
-          (strcmp(deleteNameBuffer_, "..") == 0)) {
-        continue;
-      }
-
-      foundEntry = true;
-
-      const PicoFileType type = fs->getFileType(fileIndexes_[i]);
-      if (type == PFT_FILE) {
-        if (!fs->DeleteFile(deleteNameBuffer_)) {
-          Trace::Error("PERSISTENCYSERVICE: Could not delete file: %s",
-                       deleteNameBuffer_);
-          return false;
-        }
-      } else if (type == PFT_DIR) {
-        if (!DeleteDirectoryTree_(deleteNameBuffer_, depth + 1)) {
-          return false;
-        }
-      } else {
-        Trace::Error("PERSISTENCYSERVICE: Unknown file type for %s",
-                     deleteNameBuffer_);
-        return false;
-      }
-
-      deletedEntry = true;
-      break;
+    fileEntries_.clear();
+    if (!fs->ListDirectory(directoryPath, &fileEntries_, "", false, true)) {
+      Trace::Error("PERSISTENCYSERVICE: Could not list directory: %s",
+                   directoryPath);
+      return false;
     }
 
-    if (!foundEntry) {
+    if (fileEntries_.empty()) {
       return true;
     }
 
-    if (!deletedEntry) {
-      Trace::Error("PERSISTENCYSERVICE: Unable to delete all entries");
+    // Recursive deletes reuse fileEntries_, so only keep a local copy of the
+    // next entry to process and refresh the directory listing afterwards.
+    const auto entry = fileEntries_[0];
+    FileSystemPath::PathString entryPath;
+    if (!FileSystemPath::JoinPath(directoryPath, entry.name.c_str(),
+                                  entryPath)) {
+      Trace::Error("PERSISTENCYSERVICE: Could not resolve path for %s in %s",
+                   entry.name.c_str(), directoryPath);
       return false;
     }
+
+    if (entry.type == PFT_FILE) {
+      if (!fs->DeleteFile(entryPath.c_str())) {
+        Trace::Error("PERSISTENCYSERVICE: Could not delete file: %s",
+                     entryPath.c_str());
+        return false;
+      }
+      continue;
+    }
+
+    if (entry.type == PFT_DIR) {
+      if (!DeleteDirectoryTree_(entryPath.c_str(), depth + 1)) {
+        return false;
+      }
+      continue;
+    }
+
+    Trace::Error("PERSISTENCYSERVICE: Unknown file type for %s",
+                 entryPath.c_str());
+    return false;
   }
 }
 
-bool PersistencyService::DeleteDirectoryTree_(const char *dirname,
+bool PersistencyService::DeleteDirectoryTree_(const char *directoryPath,
                                               uint8_t depth) {
   auto fs = FileSystem::GetInstance();
-  char dirnameCopy[PFILENAME_SIZE];
-  strncpy(dirnameCopy, dirname, sizeof(dirnameCopy));
-  dirnameCopy[sizeof(dirnameCopy) - 1] = '\0';
 
   if (depth > MAX_DELETE_DEPTH) {
     Trace::Error("PERSISTENCYSERVICE: delete depth exceeded");
     return false;
   }
 
-  if (!fs->chdir(dirnameCopy)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not chdir into dir: %s",
-                 dirnameCopy);
+  if (!DeleteDirectoryContents_(directoryPath, depth)) {
     return false;
   }
 
-  bool success = DeleteDirectoryContents_(depth);
-  if (!fs->chdir("..")) {
-    Trace::Error("PERSISTENCYSERVICE: Could not return to parent dir");
-    return false;
-  }
-  if (!success) {
-    return false;
-  }
-
-  if (!fs->DeleteDir(dirnameCopy)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not delete dir: %s", dirnameCopy);
+  if (!fs->DeleteDir(directoryPath)) {
+    Trace::Error("PERSISTENCYSERVICE: Could not delete dir: %s", directoryPath);
     return false;
   }
 
@@ -184,35 +219,69 @@ PersistencyResult PersistencyService::Save(const char *projectName,
   auto fs = FileSystem::GetInstance();
 
   if (saveAs && !Exists(projectName)) {
+    FileSystemPath::PathString oldProjectPath;
+    FileSystemPath::PathString oldSamplesPath;
     CreateProjectDirs_(projectName);
 
-    // copy across the samples from the old project
-    fs->chdir(PROJECTS_DIR);
-    fs->chdir(oldProjectName);
-    fs->chdir(PROJECT_SAMPLES_DIR);
+    if (!FileSystemPath::JoinPath(PROJECTS_DIR, oldProjectName,
+                                  oldProjectPath) ||
+        !FileSystemPath::JoinPath(oldProjectPath.c_str(), PROJECT_SAMPLES_DIR,
+                                  oldSamplesPath)) {
+      Trace::Error("PERSISTENCYSERVICE: Could not resolve samples path for %s",
+                   oldProjectName);
+      return PERSIST_ERROR;
+    }
 
     Trace::Debug("get list of samples to copy from old project: %s",
-                 oldProjectName);
+                 oldSamplesPath.c_str());
 
-    fs->list(&fileIndexes_, ".wav", false);
-    char filenameBuffer[PFILENAME_SIZE];
-    for (size_t i = 0; i < fileIndexes_.size(); i++) {
-      fs->getFileName(fileIndexes_[i], filenameBuffer, sizeof(filenameBuffer));
+    if (fs->exists(oldSamplesPath.c_str())) {
+      fileEntries_.clear();
+      if (!fs->ListDirectory(oldSamplesPath.c_str(), &fileEntries_, ".wav",
+                             false)) {
+        Trace::Error("PERSISTENCYSERVICE: Could not list samples dir: %s",
+                     oldSamplesPath.c_str());
+        return PERSIST_ERROR;
+      }
 
-      // ignore . and .. entries as using *.wav doesnt filter them out
-      if (strcmp(filenameBuffer, ".") == 0 || strcmp(filenameBuffer, "..") == 0)
-        continue;
+      uint32_t sampleCount = 0;
+      for (const auto &entry : fileEntries_) {
+        if (entry.type == PFT_FILE) {
+          sampleCount++;
+        }
+      }
 
-      etl::vector<const char *, 4> filePathSegments = {
-          PROJECTS_DIR, oldProjectName, PROJECT_SAMPLES_DIR, filenameBuffer};
-      CreatePath(pathBufferA, filePathSegments);
+      uint32_t sampleIndex = 0;
+      for (const auto &entry : fileEntries_) {
+        if (entry.type != PFT_FILE) {
+          continue;
+        }
+        sampleIndex++;
 
-      filePathSegments = {PROJECTS_DIR, projectName, PROJECT_SAMPLES_DIR,
-                          filenameBuffer};
-      CreatePath(pathBufferB, filePathSegments);
+        etl::vector<const char *, 4> filePathSegments = {
+            PROJECTS_DIR, oldProjectName, PROJECT_SAMPLES_DIR,
+            entry.name.c_str()};
+        CreatePath(pathBufferA, filePathSegments);
 
-      fs->CopyFile(pathBufferA.c_str(), pathBufferB.c_str());
-    };
+        filePathSegments = {PROJECTS_DIR, projectName, PROJECT_SAMPLES_DIR,
+                            entry.name.c_str()};
+        CreatePath(pathBufferB, filePathSegments);
+
+        progressBar_t progressBar;
+        fillProgressBar(sampleIndex, sampleCount, &progressBar);
+        Status::SetMultiLine("Saving project\nCopying sample\n%.19s\n%s",
+                             entry.name.c_str(), progressBar);
+
+        if (!fs->CopyFile(pathBufferA.c_str(), pathBufferB.c_str())) {
+          Trace::Error("PERSISTENCYSERVICE: Could not copy %s to %s",
+                       pathBufferA.c_str(), pathBufferB.c_str());
+          return PERSIST_ERROR;
+        }
+      }
+    }
+  }
+  if (saveAs) {
+    Status::SetMultiLine("Saving project\nWriting data");
   }
   return SaveProjectData(projectName, false);
 };
@@ -428,18 +497,18 @@ PersistencyResult PersistencyService::ExportInstrument(
 }
 
 InstrumentType PersistencyService::DetectInstrumentType(const char *name) {
-  auto fs = FileSystem::GetInstance();
-
-  if (!fs->chdir(INSTRUMENTS_DIR)) {
-    Trace::Error(
-        "PERSISTENCYSERVICE: Could not change to instruments directory");
+  FileSystemPath::PathString instrumentPath;
+  if (!resolveInstrumentPath(name, instrumentPath)) {
+    Trace::Error("PERSISTENCYSERVICE: Could not resolve instrument path: %s",
+                 name ? name : "(null)");
     return IT_NONE;
   }
 
   // Load the XML document
   PersistencyDocument doc;
-  if (!doc.Load(name)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not parse XML from file: %s", name);
+  if (!doc.Load(instrumentPath.c_str())) {
+    Trace::Error("PERSISTENCYSERVICE: Could not parse XML from file: %s",
+                 instrumentPath.c_str());
     return IT_NONE;
   }
 
@@ -447,7 +516,8 @@ InstrumentType PersistencyService::DetectInstrumentType(const char *name) {
   bool elem = doc.FirstChild();
   if (!elem || strcmp(doc.ElemName(), "INSTRUMENT")) {
     Trace::Error(
-        "PERSISTENCYSERVICE: Could not find INSTRUMENT node in file: %s", name);
+        "PERSISTENCYSERVICE: Could not find INSTRUMENT node in file: %s",
+        instrumentPath.c_str());
     return IT_NONE;
   }
 
@@ -476,18 +546,18 @@ InstrumentType PersistencyService::DetectInstrumentType(const char *name) {
 
 PersistencyResult PersistencyService::ImportInstrument(I_Instrument *instrument,
                                                        const char *name) {
-  auto fs = FileSystem::GetInstance();
-
-  if (!fs->chdir(INSTRUMENTS_DIR)) {
-    Trace::Error(
-        "PERSISTENCYSERVICE: Could not change to instruments directory");
+  FileSystemPath::PathString instrumentPath;
+  if (!resolveInstrumentPath(name, instrumentPath)) {
+    Trace::Error("PERSISTENCYSERVICE: Could not resolve instrument path: %s",
+                 name ? name : "(null)");
     return PERSIST_ERROR;
   }
 
   // Load the XML document
   PersistencyDocument doc;
-  if (!doc.Load(name)) {
-    Trace::Error("PERSISTENCYSERVICE: Could not parse XML from file: %s", name);
+  if (!doc.Load(instrumentPath.c_str())) {
+    Trace::Error("PERSISTENCYSERVICE: Could not parse XML from file: %s",
+                 instrumentPath.c_str());
     return PERSIST_ERROR;
   }
 
@@ -495,7 +565,8 @@ PersistencyResult PersistencyService::ImportInstrument(I_Instrument *instrument,
   bool elem = doc.FirstChild();
   if (!elem || strcmp(doc.ElemName(), "INSTRUMENT")) {
     Trace::Error(
-        "PERSISTENCYSERVICE: Could not find INSTRUMENT node in file: %s", name);
+        "PERSISTENCYSERVICE: Could not find INSTRUMENT node in file: %s",
+        instrumentPath.c_str());
     return PERSIST_ERROR;
   }
 
@@ -550,26 +621,35 @@ PersistencyResult PersistencyService::ImportInstrument(I_Instrument *instrument,
   // Restore the instrument content
   if (!instrument->Restore(&doc)) {
     Trace::Error(
-        "PERSISTENCYSERVICE: Failed to restore instrument from file: %s", name);
+        "PERSISTENCYSERVICE: Failed to restore instrument from file: %s",
+        instrumentPath.c_str());
     return PERSIST_ERROR;
   }
 
   // Extract instrument name from filename (minus .pti extension)
   etl::string<MAX_INSTRUMENT_NAME_LENGTH> instrumentName;
-  const char *dotPos = strrchr(name, '.');
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> leafName;
+  if (!extractInstrumentLeafName(instrumentPath.c_str(), leafName)) {
+    Trace::Error("PERSISTENCYSERVICE: Failed to extract filename from %s",
+                 instrumentPath.c_str());
+    return PERSIST_ERROR;
+  }
+
+  const char *dotPos = strrchr(leafName.c_str(), '.');
   if (dotPos) {
     // Calculate the length of the name without extension
-    size_t nameLength = dotPos - name;
+    size_t nameLength = dotPos - leafName.c_str();
     // Copy only up to MAX_INSTRUMENT_NAME_LENGTH characters
     nameLength = nameLength < MAX_INSTRUMENT_NAME_LENGTH
                      ? nameLength
                      : MAX_INSTRUMENT_NAME_LENGTH - 1;
-    instrumentName.assign(name, nameLength);
+    instrumentName.assign(leafName.c_str(), nameLength);
   } else {
     // No extension found, use the whole name (up to MAX_INSTRUMENT_NAME_LENGTH)
-    instrumentName.assign(name, strlen(name) < MAX_INSTRUMENT_NAME_LENGTH
-                                    ? strlen(name)
-                                    : MAX_INSTRUMENT_NAME_LENGTH - 1);
+    instrumentName.assign(leafName.c_str(),
+                          leafName.size() < MAX_INSTRUMENT_NAME_LENGTH
+                              ? leafName.size()
+                              : MAX_INSTRUMENT_NAME_LENGTH - 1);
   }
 
   // Set the instrument name

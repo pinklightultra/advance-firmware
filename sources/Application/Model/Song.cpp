@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "Song.h"
@@ -18,7 +22,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-Song::Song() : Persistent("SONG"), chain_(), phrase_() { Reset(); };
+Song::Song()
+    : Persistent("SONG"), chain_(), phrase_(),
+      channelCount_(SONG_CHANNEL_COUNT_STEREO) {
+  Reset();
+};
 
 Song::~Song(){};
 
@@ -30,8 +38,14 @@ void Song::Reset() {
   phrase_.Reset();
 }
 
+void Song::SetChannelCount(int channelCount) {
+  NAssert(channelCount > 0);
+  NAssert(channelCount <= SONG_CHANNEL_COUNT);
+  channelCount_ = channelCount;
+}
+
 void Song::SaveContent(tinyxml2::XMLPrinter *printer) {
-  saveHexBuffer(printer, "SONG", data_, SONG_ROW_COUNT * SONG_CHANNEL_COUNT);
+  saveHexBuffer(printer, "SONG", data_, SONG_ROW_COUNT * channelCount_);
   saveHexBuffer(printer, "CHAINS", chain_.data_,
                 CHAIN_COUNT * PHRASES_PER_CHAIN);
   saveHexBuffer(printer, "TRANSPOSES", chain_.transpose_,
@@ -89,7 +103,7 @@ void Song::RestoreContent(PersistencyDocument *doc) {
   // Restore chain & phrase allocation table
 
   unsigned char *data = data_;
-  for (int i = 0; i < SONG_ROW_COUNT * SONG_CHANNEL_COUNT; i++) {
+  for (int i = 0; i < SONG_ROW_COUNT * channelCount_; i++) {
     if (*data != 0xFF) {
       if (*data < 0x80) {
         chain_.SetUsed(*data);
@@ -112,8 +126,8 @@ void Song::RestoreContent(PersistencyDocument *doc) {
 
   data = phrase_.note_;
 
-  FourCC *table1 = phrase_.cmd1_;
-  FourCC *table2 = phrase_.cmd2_;
+  TrackerCommand *table1 = phrase_.cmd1_;
+  TrackerCommand *table2 = phrase_.cmd2_;
 
   ushort *param1 = phrase_.param1_;
   ushort *param2 = phrase_.param2_;
@@ -125,11 +139,11 @@ void Song::RestoreContent(PersistencyDocument *doc) {
       if (*data != 0xFF) {
         phrase_.SetUsed(i);
       }
-      if (*table1 == FourCC::InstrumentCommandTable) {
+      if (*table1 == TrackerCommand::InstrumentCommandTable) {
         *param1 &= 0x7F;
         th->SetUsed((*param1));
       };
-      if (*table2 == FourCC::InstrumentCommandTable) {
+      if (*table2 == TrackerCommand::InstrumentCommandTable) {
         *param2 &= 0x7F;
         th->SetUsed((*param2));
       };

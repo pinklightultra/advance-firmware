@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "RecordStreamer.h"
@@ -30,7 +34,7 @@ void RecordStreamer::Stop() {
 
 bool RecordStreamer::IsPlaying() { return (mode_ == RSM_PLAYING); }
 
-bool RecordStreamer::Render(fixed *buffer, int samplecount) {
+bool RecordStreamer::Render(AudioSample *buffer, int samplecount) {
 
   // See if we're playing
   if (mode_ == RSM_STOPPED) {
@@ -57,8 +61,10 @@ bool RecordStreamer::Render(fixed *buffer, int samplecount) {
     }
 
     // Write to output render buffer
-    buffer[2 * i] = i2fp(left);
-    buffer[2 * i + 1] = i2fp(right);
+    buffer[2 * i] =
+        static_cast<AudioSample>(static_cast<int16_t>(left)) / kAudioPcmScale;
+    buffer[2 * i + 1] =
+        static_cast<AudioSample>(static_cast<int16_t>(right)) / kAudioPcmScale;
   }
 
   return true;

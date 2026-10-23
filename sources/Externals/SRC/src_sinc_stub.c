@@ -2,6 +2,8 @@
 ** Stub sinc helpers for builds that exclude the sinc converters.
 */
 
+#include <stddef.h>
+
 #include "common.h"
 
 const char *sinc_get_name(int src_enum) {

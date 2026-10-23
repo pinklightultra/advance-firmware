@@ -1,15 +1,20 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _AUDIO_OUT_DRIVER_H_
 #define _AUDIO_OUT_DRIVER_H_
 
+#include "Application/Audio/AudioSample.h"
 #include "Application/Instruments/WavFileWriter.h"
 #include "AudioDriver.h"
 #include "AudioOut.h"
@@ -58,7 +63,7 @@ private:
   stereosample lastPeakVolume_ = 0;
 
   __attribute__((section(".DTCMRAM"))) __attribute__((
-      aligned(32))) static fixed primarySoundBuffer_[MIX_BUFFER_SIZE];
+      aligned(32))) static AudioSample primarySoundBuffer_[MIX_BUFFER_SIZE];
   __attribute__((section(".DTCMRAM")))
   __attribute__((aligned(32))) static short mixBuffer_[MIX_BUFFER_SIZE];
   int sampleCount_;

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _UI_BIG_HEX_VAR_FIELD_H_
@@ -22,6 +26,13 @@ public:
   virtual ~UIBigHexVarField(){};
   virtual void Draw(GUIWindow &w, int offset = 0);
   virtual void ProcessArrow(unsigned short mask);
+  void ResetDigitPosition();
+  // ApplyOffset is used for selection editing where callers need to directly
+  // change the value without moving the focused digit.
+  // ProcessArrow is not suitable because it treats LEFT/RIGHT as digit-
+  // position navigation (changing which hex digit UP/DOWN modifies) rather
+  // than value change, and when position_ is 0 UP/DOWN only changes by 1.
+  void ApplyOffset(int offset);
 
 private:
   unsigned int precision_;

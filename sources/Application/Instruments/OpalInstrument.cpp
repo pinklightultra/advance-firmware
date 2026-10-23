@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "OpalInstrument.h"
@@ -157,7 +161,10 @@ bool OpalInstrument::Start(int channel, unsigned char note, bool retrigger) {
   return true;
 };
 
-void OpalInstrument::Stop(int c) {
+void OpalInstrument::Stop(int c) { Release(c); };
+
+void OpalInstrument::Release(int channel) {
+  (void)channel;
   uint8_t stop = BitClr(breg, 5);
   opl_.Port(OCTAVE_BASE_REG, stop);
 };
@@ -176,13 +183,11 @@ bool OpalInstrument::IsInitialized() {
   return true; // Always initialised
 };
 
-void OpalInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
-  switch (cc) {
-  case FourCC::InstrumentCommandGateOff:
-    uint8_t stop = BitClr(breg, 5);
-    opl_.Port(OCTAVE_BASE_REG, stop);
-    break;
-  }
+void OpalInstrument::ProcessCommand(int channel, TrackerCommand cc,
+                                    ushort value) {
+  (void)channel;
+  (void)cc;
+  (void)value;
 };
 
 int OpalInstrument::GetTable() {

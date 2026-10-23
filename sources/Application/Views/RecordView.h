@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _RECORD_VIEW_H_
@@ -56,8 +60,8 @@ private:
   void stop();
   void stopAndSwitchToEditor();
   void updateTimeDisplay();
-  void generateFullPath(etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> filename,
-                        etl::string<MAX_PROJECT_SAMPLE_PATH_LENGTH> *fullpath);
+  bool generateFullPath(const char *filename,
+                        etl::string<PFILENAME_SIZE> *fullpath);
 
   // Time display helpers
   void formatTime(uint32_t milliseconds, char *buffer, size_t bufferSize);

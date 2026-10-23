@@ -1,22 +1,27 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _AUDIO_FILE_STREAMER_H_
 #define _AUDIO_FILE_STREAMER_H_
 
+#include "Application/Audio/AudioSample.h"
 #include "Application/Instruments/WavFile.h"
 #include "Application/Model/Project.h"
 #include "Externals/etl/include/etl/string.h"
 #include "Services/Audio/AudioModule.h"
 #include "System/FileSystem/FileSystem.h"
 
-#define SINGLE_CYCLE_MAX_SAMPLE_SIZE 600
+#define SINGLE_CYCLE_MAX_SAMPLE_SIZE 1024
 
 enum AudioFileStreamerMode { AFSM_STOPPED, AFSM_PLAYING, AFSM_LOOPING };
 
@@ -24,7 +29,7 @@ class AudioFileStreamer : public AudioModule {
 public:
   AudioFileStreamer();
   virtual ~AudioFileStreamer();
-  virtual bool Render(fixed *buffer, int samplecount);
+  virtual bool Render(AudioSample *buffer, int samplecount);
   // Automatically detects single cycle waveforms
   bool Start(const char *name, int startSample = 0, bool looping = false);
   void Stop();
@@ -40,18 +45,15 @@ protected:
   // Sample rate conversion
   int fileSampleRate_;
   int systemSampleRate_;
-  fixed fpSpeed_; // Fixed-point speed factor for sample rate conversion
+  float speed_; // Speed factor for sample rate conversion
 
-  // Static buffer for single cycle waveforms (max 600 samples in mono from AKWF
-  // single cycle format
+  // Static buffer for single cycle waveforms. Single-cycle playback is
+  // mono-only, so this stores up to SINGLE_CYCLE_MAX_SAMPLE_SIZE frames.
   static short singleCycleBuffer_[SINGLE_CYCLE_MAX_SAMPLE_SIZE];
   short *singleCycleData_; // Pointer to the current single cycle data
 
   // For matching oscillator mode in SampleInstrument
   float referencePitch_; // Reference pitch in Hz (C3 = 130.81 Hz)
-#ifndef ADV
-  volatile bool stopRequested_;
-#endif
 
 public:
   void SetProject(Project *project) { project_ = project; }

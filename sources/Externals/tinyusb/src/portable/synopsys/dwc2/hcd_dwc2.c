@@ -1,4 +1,14 @@
 /*
+ * SPDX-License-Identifier: MIT AND GPL-3.0-only
+ *
+ * Copyright (c) 2026 xiphonics, inc.
+ *
+ * Inherited material retains its MIT license.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Existing license grants are preserved. See LICENSING.md.
+ */
+
+/*
  * The MIT License (MIT)
  *
  * Copyright (c) 2024 Ha Thach (tinyusb.org)
@@ -814,9 +824,24 @@ static void handle_rxflvl_irq(uint8_t rhport) {
       // interrupt --> handle_channel_irq()
       break;
 
-    case GRXSTS_PKTSTS_HOST_DATATOGGLE_ERR:
-      TU_ASSERT(0, ); // maybe try to change DToggle
+    case GRXSTS_PKTSTS_HOST_DATATOGGLE_ERR: {
+      hcd_xfer_t* xfer = &_hcd_data.xfer[ch_id];
+      if (xfer->allocated && xfer->ep_id < CFG_TUH_DWC2_ENDPOINT_MAX) {
+        dwc2_channel_t* channel = &dwc2->channel[ch_id];
+        hcd_endpoint_t* edpt = &_hcd_data.edpt[xfer->ep_id];
+
+        xfer->err_count = 0;
+        if (edpt->hcsplt_bm.split_en) {
+          dwc2_channel_split_t hcsplt = {.value = channel->hcsplt};
+          hcsplt.split_compl = 0;
+          channel->hcsplt = hcsplt.value;
+        }
+
+        // Let the normal channel halted/NAK retry flow restart the transfer.
+        channel_disable(dwc2, channel);
+      }
       break;
+    }
 
     case GRXSTS_PKTSTS_HOST_CHANNEL_HALTED:
       // triggered when channel.hcchar_bm.disable is set
@@ -951,8 +976,16 @@ static bool handle_channel_in_slave(dwc2_regs_t* dwc2, uint8_t ch_id, uint32_t h
       channel_xfer_in_retry(dwc2, ch_id, hcint);
     }
   } else if (hcint & HCINT_DATATOGGLE_ERR) {
+    // A full-/low-speed device behind a high-speed hub can report a transient
+    // toggle mismatch during split IN traffic. Recover by restarting the
+    // transaction instead of breaking into the debugger.
     xfer->err_count = 0;
-    TU_ASSERT(false);
+    if (hcsplt.split_en) {
+      hcsplt.split_compl = 0;
+      channel->hcsplt = hcsplt.value;
+    }
+
+    channel_disable(dwc2, channel);
   }
   return is_done;
 }

@@ -1,14 +1,19 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "FieldView.h"
 #include "System/Console/Trace.h"
+#include "UIFieldInputDispatcher.h"
 #include "UIIntVarField.h"
 
 FieldView::FieldView(GUIWindow &w, ViewData *data) : ScreenView(w, data) {
@@ -62,247 +67,190 @@ void FieldView::ProcessButtonMask(unsigned short mask, bool pressed) {
     focus_->SetFocus();
   }
 
-  if (mask & EPBM_ENTER) { // ENTER or ENTER+ARROW is sent to the field
-    if (mask & EPBM_DOWN) {
-      focus_->ProcessArrow(EPBM_DOWN);
-      isDirty_ = true;
-    }
-    if (mask & EPBM_UP) {
-      focus_->ProcessArrow(EPBM_UP);
-      isDirty_ = true;
-    }
+  if (UIFieldInputDispatcher::ProcessButtonMask(*focus_, mask)) {
+    isDirty_ = true;
+  } else { // Nor ENTER or EDIT is pressed
 
-    if (mask & EPBM_LEFT) {
-      focus_->ProcessArrow(EPBM_LEFT);
-      isDirty_ = true;
-    }
-
-    if (mask & EPBM_RIGHT) {
-      focus_->ProcessArrow(EPBM_RIGHT);
-      isDirty_ = true;
-    }
-
-    if (mask & EPBM_EDIT) {
-      focus_->ProcessClear();
-      isDirty_ = true;
-    }
-
-    if (mask == EPBM_ENTER) {
-      focus_->OnClick();
-    };
-
-  } else {
-    if (mask & EPBM_EDIT) { // EDIT or EDIT+ARROW is sent to the field
-
-      if (mask == EPBM_EDIT) {
-        focus_->OnEditClick();
-        isDirty_ = true;
-      };
+    if (!(mask & (EPBM_ENTER | EPBM_EDIT | EPBM_ALT | EPBM_NAV | EPBM_SELECT |
+                  EPBM_PLAY))) {
 
       if (mask & EPBM_DOWN) {
-        focus_->ProcessEditArrow(EPBM_DOWN);
-        isDirty_ = true;
-      }
-      if (mask & EPBM_UP) {
-        focus_->ProcessEditArrow(EPBM_UP);
+        UIField *next = 0;
+        UIField *first = 0;
+
+        auto it = fieldList_.begin();
+        for (size_t i = 0; i < fieldList_.size(); i++) {
+          if (!(*it)->IsStatic()) {
+            if (first) {
+              if ((*it)->GetPosition()._y < first->GetPosition()._y) {
+                first = *it;
+              };
+            } else {
+              first = *it;
+            }
+            if ((*it)->GetPosition()._y > focus_->GetPosition()._y) {
+              if (next) {
+                if ((*it)->GetPosition()._y < next->GetPosition()._y) {
+                  next = *it;
+                } else if ((*it)->GetPosition()._y == next->GetPosition()._y) {
+                  // if both targets at same height, prefer the target with an
+                  // X value closest to the current focus
+
+                  // cast to signed ints
+                  int32_t itX = (*it)->GetPosition()._x;
+                  int32_t nextX = next->GetPosition()._x;
+                  int32_t focusX = focus_->GetPosition()._x;
+
+                  if (abs(itX - focusX) < abs(nextX - focusX)) {
+                    next = *it;
+                  }
+                };
+              } else {
+                next = *it;
+              };
+            };
+          }
+          it++;
+        }
+        if (next == 0) {
+          next = first;
+        }
+
+        focus_->ClearFocus();
+        focus_ = next;
+        focus_->SetFocus();
         isDirty_ = true;
       }
 
-      if (mask & EPBM_LEFT) {
-        focus_->ProcessEditArrow(EPBM_LEFT);
+      if (mask & EPBM_UP) {
+
+        UIField *prev = 0;
+        UIField *last = 0;
+
+        auto it = fieldList_.begin();
+        for (size_t i = 0; i < fieldList_.size(); i++) {
+
+          if (!(*it)->IsStatic()) {
+            if (last) {
+              if ((*it)->GetPosition()._y > last->GetPosition()._y) {
+                last = *it;
+              };
+            } else {
+              last = *it;
+            }
+            if ((*it)->GetPosition()._y < focus_->GetPosition()._y) {
+              if (prev) {
+                if ((*it)->GetPosition()._y > prev->GetPosition()._y) {
+                  prev = *it;
+                } else if ((*it)->GetPosition()._y == prev->GetPosition()._y) {
+                  // if both targets at same height, prefer the target with an
+                  // X value closest to the current focus
+
+                  // cast to signed ints
+                  int32_t itX = (*it)->GetPosition()._x;
+                  int32_t prevX = prev->GetPosition()._x;
+                  int32_t focusX = focus_->GetPosition()._x;
+
+                  if (abs(itX - focusX) < abs(prevX - focusX)) {
+                    prev = *it;
+                  }
+                };
+              } else {
+                prev = *it;
+              };
+            };
+          }
+          it++;
+        }
+        if (prev == 0) {
+          prev = last;
+        }
+
+        focus_->ClearFocus();
+        focus_ = prev;
+        focus_->SetFocus();
         isDirty_ = true;
       }
 
       if (mask & EPBM_RIGHT) {
-        focus_->ProcessEditArrow(EPBM_RIGHT);
+        UIField *next = 0;
+        UIField *first = 0;
+
+        auto it = fieldList_.begin();
+        for (size_t i = 0; i < fieldList_.size(); i++) {
+
+          if (!(*it)->IsStatic() &&
+              ((*it)->GetPosition()._y == focus_->GetPosition()._y)) {
+            if (first) {
+              if ((*it)->GetPosition()._x < first->GetPosition()._x) {
+                first = *it;
+              };
+            } else {
+              first = *it;
+            }
+            if ((*it)->GetPosition()._x > focus_->GetPosition()._x) {
+              if (next) {
+                if ((*it)->GetPosition()._x < next->GetPosition()._x) {
+                  next = *it;
+                } else {
+                  // if both target at same height
+                };
+              } else {
+                next = *it;
+              };
+            };
+          }
+          it++;
+        }
+        if (next == 0) {
+          next = first;
+        }
+
+        focus_->ClearFocus();
+        focus_ = next;
+        focus_->SetFocus();
         isDirty_ = true;
       }
 
-    } else { // Nor ENTER or EDIT is pressed
+      if (mask & EPBM_LEFT) {
 
-      if (!(mask & (EPBM_ENTER | EPBM_EDIT | EPBM_ALT | EPBM_NAV | EPBM_SELECT |
-                    EPBM_PLAY))) {
+        UIField *prev = 0;
+        UIField *last = 0;
 
-        if (mask & EPBM_DOWN) {
-          UIField *next = 0;
-          UIField *first = 0;
+        auto it = fieldList_.begin();
+        for (size_t i = 0; i < fieldList_.size(); i++) {
 
-          auto it = fieldList_.begin();
-          for (size_t i = 0; i < fieldList_.size(); i++) {
-            if (!(*it)->IsStatic()) {
-              if (first) {
-                if ((*it)->GetPosition()._y < first->GetPosition()._y) {
-                  first = *it;
-                };
-              } else {
-                first = *it;
-              }
-              if ((*it)->GetPosition()._y > focus_->GetPosition()._y) {
-                if (next) {
-                  if ((*it)->GetPosition()._y < next->GetPosition()._y) {
-                    next = *it;
-                  } else if ((*it)->GetPosition()._y ==
-                             next->GetPosition()._y) {
-                    // if both targets at same height, prefer the target with an
-                    // X value closest to the current focus
-
-                    // cast to signed ints
-                    int32_t itX = (*it)->GetPosition()._x;
-                    int32_t nextX = next->GetPosition()._x;
-                    int32_t focusX = focus_->GetPosition()._x;
-
-                    if (abs(itX - focusX) < abs(nextX - focusX)) {
-                      next = *it;
-                    }
-                  };
-                } else {
-                  next = *it;
-                };
-              };
-            }
-            it++;
-          }
-          if (next == 0) {
-            next = first;
-          }
-
-          focus_->ClearFocus();
-          focus_ = next;
-          focus_->SetFocus();
-          isDirty_ = true;
-        }
-
-        if (mask & EPBM_UP) {
-
-          UIField *prev = 0;
-          UIField *last = 0;
-
-          auto it = fieldList_.begin();
-          for (size_t i = 0; i < fieldList_.size(); i++) {
-
-            if (!(*it)->IsStatic()) {
-              if (last) {
-                if ((*it)->GetPosition()._y > last->GetPosition()._y) {
-                  last = *it;
-                };
-              } else {
+          if (!(*it)->IsStatic() &&
+              ((*it)->GetPosition()._y == focus_->GetPosition()._y)) {
+            if (last) {
+              if ((*it)->GetPosition()._x > last->GetPosition()._x) {
                 last = *it;
-              }
-              if ((*it)->GetPosition()._y < focus_->GetPosition()._y) {
-                if (prev) {
-                  if ((*it)->GetPosition()._y > prev->GetPosition()._y) {
-                    prev = *it;
-                  } else if ((*it)->GetPosition()._y ==
-                             prev->GetPosition()._y) {
-                    // if both targets at same height, prefer the target with an
-                    // X value closest to the current focus
-
-                    // cast to signed ints
-                    int32_t itX = (*it)->GetPosition()._x;
-                    int32_t prevX = prev->GetPosition()._x;
-                    int32_t focusX = focus_->GetPosition()._x;
-
-                    if (abs(itX - focusX) < abs(prevX - focusX)) {
-                      prev = *it;
-                    }
-                  };
-                } else {
-                  prev = *it;
-                };
               };
+            } else {
+              last = *it;
             }
-            it++;
-          }
-          if (prev == 0) {
-            prev = last;
-          }
-
-          focus_->ClearFocus();
-          focus_ = prev;
-          focus_->SetFocus();
-          isDirty_ = true;
-        }
-
-        if (mask & EPBM_RIGHT) {
-          UIField *next = 0;
-          UIField *first = 0;
-
-          auto it = fieldList_.begin();
-          for (size_t i = 0; i < fieldList_.size(); i++) {
-
-            if (!(*it)->IsStatic() &&
-                ((*it)->GetPosition()._y == focus_->GetPosition()._y)) {
-              if (first) {
-                if ((*it)->GetPosition()._x < first->GetPosition()._x) {
-                  first = *it;
+            if ((*it)->GetPosition()._x < focus_->GetPosition()._x) {
+              if (prev) {
+                if ((*it)->GetPosition()._x > prev->GetPosition()._x) {
+                  prev = *it;
+                } else {
+                  // if both target at same height
                 };
               } else {
-                first = *it;
-              }
-              if ((*it)->GetPosition()._x > focus_->GetPosition()._x) {
-                if (next) {
-                  if ((*it)->GetPosition()._x < next->GetPosition()._x) {
-                    next = *it;
-                  } else {
-                    // if both target at same height
-                  };
-                } else {
-                  next = *it;
-                };
+                prev = *it;
               };
-            }
-            it++;
+            };
           }
-          if (next == 0) {
-            next = first;
-          }
-
-          focus_->ClearFocus();
-          focus_ = next;
-          focus_->SetFocus();
-          isDirty_ = true;
+          it++;
+        }
+        if (prev == 0) {
+          prev = last;
         }
 
-        if (mask & EPBM_LEFT) {
-
-          UIField *prev = 0;
-          UIField *last = 0;
-
-          auto it = fieldList_.begin();
-          for (size_t i = 0; i < fieldList_.size(); i++) {
-
-            if (!(*it)->IsStatic() &&
-                ((*it)->GetPosition()._y == focus_->GetPosition()._y)) {
-              if (last) {
-                if ((*it)->GetPosition()._x > last->GetPosition()._x) {
-                  last = *it;
-                };
-              } else {
-                last = *it;
-              }
-              if ((*it)->GetPosition()._x < focus_->GetPosition()._x) {
-                if (prev) {
-                  if ((*it)->GetPosition()._x > prev->GetPosition()._x) {
-                    prev = *it;
-                  } else {
-                    // if both target at same height
-                  };
-                } else {
-                  prev = *it;
-                };
-              };
-            }
-            it++;
-          }
-          if (prev == 0) {
-            prev = last;
-          }
-
-          focus_->ClearFocus();
-          focus_ = prev;
-          focus_->SetFocus();
-          isDirty_ = true;
-        }
+        focus_->ClearFocus();
+        focus_ = prev;
+        focus_->SetFocus();
+        isDirty_ = true;
       }
     }
   }

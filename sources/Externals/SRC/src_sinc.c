@@ -102,12 +102,10 @@ static SRC_STATE_VT sinc_mono_state_vt = {
   (MAX_CHANNELS * SINC_STATIC_BASE_B_LEN + MAX_CHANNELS + 1)
 
 /* Static storage backing the single allowed sinc instance. */
-#ifdef ADV
 static SRC_STATE static_sinc_state;
 static SINC_FILTER static_sinc_filter;
 __attribute__((
     aligned(32))) static float static_sinc_buffer[SINC_STATIC_BUFFER_LEN];
-#endif
 static int static_sinc_in_use = 0;
 
 static inline increment_t double_to_fp(double x) {

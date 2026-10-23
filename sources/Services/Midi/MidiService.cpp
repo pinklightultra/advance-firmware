@@ -1,13 +1,18 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "MidiService.h"
+#include "Adapters/adv/usb/usb_utils.h"
 #include "Application/Model/Config.h"
 #include "Application/Player/Player.h"
 #include "Application/Player/SyncMaster.h"
@@ -16,13 +21,17 @@
 #include "System/System/System.h"
 #include "System/Timer/Timer.h"
 #include <cstdint>
-#include <cstring>
 
-#ifdef SendMessage
-#undef SendMessage
-#endif
+namespace {
+constexpr int kControlSurfaceOff = 0;
+constexpr int kControlSurfaceAuto = 1;
+} // namespace
 
-MidiService::MidiService() : activeMidiChannelMask_(0), sendSync_(true) {
+MidiService::MidiService()
+    : usbControlSurfaceOutDevice_(nullptr), activeMidiChannelMask_(0),
+      started_(false), sendSync_(true),
+      activeDetectedControlSurfaceType_(USB_HOST_CONTROL_SURFACE_NONE),
+      controlSurface_(nullptr) {
   for (int i = 0; i < MIDI_MAX_BUFFERS; i++) {
     queues_[i].clear();
   }
@@ -58,11 +67,21 @@ bool MidiService::Init() {
   auto activeDeviceConfig = midiDevVar->GetInt();
   updateActiveDevicesList(activeDeviceConfig);
 
+  auto midiInputDevVar =
+      (WatchedVariable *)config->FindVariable(FourCC::VarMidiInputDevice);
+  midiInputDevVar->AddObserver(*this);
+  updateActiveInputDevicesList(midiInputDevVar->GetInt());
+
   auto midiSyncVar =
       (WatchedVariable *)config->FindVariable(FourCC::VarMidiSync);
   midiSyncVar->AddObserver(*this);
   auto sync = midiSyncVar->GetInt();
   sendSync_ = sync != 0;
+
+  auto midiControlSurfaceVar =
+      (WatchedVariable *)config->FindVariable(FourCC::VarMidiControlSurface);
+  midiControlSurfaceVar->AddObserver(*this);
+  reconcileControlSurfaceSelection();
 
   return true;
 };
@@ -72,10 +91,39 @@ void MidiService::Close() { Stop(); };
 bool MidiService::Start() {
   currentPlayQueue_ = 0;
   currentOutQueue_ = 0;
+  started_ = true;
+  startDevice();
+  if (controlSurface_ != nullptr) {
+    controlSurface_->Start();
+  }
   return true;
 };
 
-void MidiService::Stop() { stopDevice(); };
+void MidiService::Stop() {
+  started_ = false;
+  if (controlSurface_ != nullptr) {
+    controlSurface_->Stop();
+  }
+  stopDevice();
+};
+
+bool MidiService::HasControlSurfaceSongWindow() const {
+  return (controlSurface_ != nullptr) && controlSurface_->HasSongWindow();
+}
+
+uint32_t MidiService::GetControlSurfaceSongWindowOffset() const {
+  if (controlSurface_ == nullptr) {
+    return 0;
+  }
+  return controlSurface_->GetSongWindowOffset();
+}
+
+uint32_t MidiService::GetControlSurfaceSongWindowRowCount() const {
+  if (controlSurface_ == nullptr) {
+    return 0;
+  }
+  return controlSurface_->GetSongWindowRowCount();
+}
 
 void MidiService::QueueMessage(MidiMessage &m) {
   if (!activeOutDevices_.empty()) {
@@ -83,6 +131,45 @@ void MidiService::QueueMessage(MidiMessage &m) {
     queue->emplace_back(m.status_, m.data1_, m.data2_);
   }
 };
+
+void MidiService::SendImmediate(MidiMessage &m) {
+  if (activeOutDevices_.empty()) {
+    return;
+  }
+
+  for (auto dev : activeOutDevices_) {
+    if (!isMessageAllowedWhileUsbReservedForControlSurface(dev, m)) {
+      continue;
+    }
+    dev->SendMessage(m);
+  }
+}
+
+void MidiService::SendRawImmediate(const uint8_t *data, uint8_t len) {
+  if (activeOutDevices_.empty()) {
+    return;
+  }
+
+  for (auto dev : activeOutDevices_) {
+    if (isUsbOutReservedForControlSurface(dev)) {
+      continue;
+    }
+    dev->SendRawBytes(data, len);
+  }
+}
+
+void MidiService::SendControlSurfaceImmediate(MidiMessage &m) {
+  if (usbControlSurfaceOutDevice_ != nullptr) {
+    usbControlSurfaceOutDevice_->SendMessage(m);
+  }
+}
+
+void MidiService::SendControlSurfaceRawImmediate(const uint8_t *data,
+                                                 uint8_t len) {
+  if (usbControlSurfaceOutDevice_ != nullptr) {
+    usbControlSurfaceOutDevice_->SendRawBytes(data, len);
+  }
+}
 
 void MidiService::Trigger() {
   AdvancePlayQueue();
@@ -121,9 +208,18 @@ void MidiService::Update(Observable &o, I_ObservableData *d) {
     updateActiveDevicesList(activeDeviceConfig);
     startDevice();
   } break;
+  case FourCC::VarMidiInputDevice: {
+    auto activeInputConfig = v.GetInt();
+    Trace::Debug("midi input device var changed:%d", activeInputConfig);
+    updateActiveInputDevicesList(activeInputConfig);
+  } break;
   case FourCC::VarMidiSync: {
     auto sync = v.GetInt();
     sendSync_ = sync != 0;
+  } break;
+  case FourCC::VarMidiControlSurface: {
+    activeDetectedControlSurfaceType_ = USB_HOST_CONTROL_SURFACE_NONE;
+    reconcileControlSurfaceSelection();
   } break;
   }
 }
@@ -149,11 +245,39 @@ void MidiService::OnMidiClock() {
   // This could be used for tempo synchronization
 }
 
+void MidiService::RefreshControlSurfaceSelection() {
+  activeDetectedControlSurfaceType_ = USB_HOST_CONTROL_SURFACE_NONE;
+  reconcileControlSurfaceSelection();
+}
+
+void MidiService::ReloadControlSurface() {
+  if (controlSurface_ == nullptr) {
+    return;
+  }
+
+  controlSurface_->Stop();
+  controlSurface_->Init(*this);
+  registerControlSurfaceInputs(*controlSurface_);
+  controlSurface_->SetEnabled(true);
+  if (started_) {
+    controlSurface_->Start();
+  }
+}
+
 void MidiService::flushOutQueue() {
   auto flushQueue = &queues_[currentOutQueue_];
 
   for (auto dev : activeOutDevices_) {
-    dev->SendQueue(*flushQueue);
+    if (!isUsbOutReservedForControlSurface(dev)) {
+      dev->SendQueue(*flushQueue);
+      continue;
+    }
+
+    for (auto &msg : *flushQueue) {
+      if (isMessageAllowedWhileUsbReservedForControlSurface(dev, msg)) {
+        dev->SendMessage(msg);
+      }
+    }
   }
   flushQueue->clear();
 
@@ -178,10 +302,113 @@ void MidiService::updateActiveDevicesList(unsigned short config) {
   }
 }
 
+void MidiService::updateActiveInputDevicesList(unsigned short config) {
+  // Stop all input devices
+  for (auto dev : inList_) {
+    dev->Stop();
+    dev->RemoveObserver(*this);
+  }
+  activeInDevices_.clear();
+
+  switch (config) {
+  case 1:
+    activeInDevices_.insert(activeInDevices_.end(), inList_[0]);
+    break;
+  case 2:
+    activeInDevices_.insert(activeInDevices_.end(), inList_[1]);
+    break;
+  case 3:
+    activeInDevices_.insert(activeInDevices_.end(), inList_[0]);
+    activeInDevices_.insert(activeInDevices_.end(), inList_[1]);
+    break;
+  }
+
+  // Start selected input devices and add as observers
+  for (auto dev : activeInDevices_) {
+    dev->Start();
+    dev->AddObserver(*this);
+  }
+}
+
+void MidiService::registerUsbControlSurfaceOutDevice(MidiOutDevice &device) {
+  usbControlSurfaceOutDevice_ = &device;
+}
+
+void MidiService::configureControlSurface(int surfaceSelection) {
+  IControlSurface *selectedSurface = nullptr;
+  switch (surfaceSelection) {
+  case kControlSurfaceAuto:
+    switch (activeDetectedControlSurfaceType_) {
+    case USB_HOST_CONTROL_SURFACE_LAUNCHPAD_MINI_MK3:
+      selectedSurface = &launchpadMiniMk3Surface_;
+      break;
+    case USB_HOST_CONTROL_SURFACE_APC_MINI_MK2:
+      selectedSurface = &apcMiniMk2Surface_;
+      break;
+    default:
+      break;
+    }
+    break;
+  case kControlSurfaceOff:
+  default:
+    break;
+  }
+
+  if (controlSurface_ == selectedSurface) {
+    return;
+  }
+
+  if (controlSurface_ != nullptr) {
+    controlSurface_->Stop();
+    controlSurface_->SetEnabled(false);
+  }
+
+  controlSurface_ = selectedSurface;
+  if (controlSurface_ == nullptr) {
+    return;
+  }
+
+  controlSurface_->Init(*this);
+  registerControlSurfaceInputs(*controlSurface_);
+  controlSurface_->SetEnabled(true);
+  if (started_) {
+    controlSurface_->Start();
+  }
+}
+
+void MidiService::reconcileControlSurfaceSelection() {
+  auto config = Config::GetInstance();
+  if (config == nullptr) {
+    return;
+  }
+
+  auto *midiControlSurfaceVar = static_cast<WatchedVariable *>(
+      config->FindVariable(FourCC::VarMidiControlSurface));
+  if (midiControlSurfaceVar == nullptr) {
+    return;
+  }
+
+  const int surfaceSelection = midiControlSurfaceVar->GetInt();
+  UsbHostControlSurfaceType detectedSurfaceType = USB_HOST_CONTROL_SURFACE_NONE;
+  if (surfaceSelection == kControlSurfaceAuto) {
+    detectedSurfaceType = usbHostControlSurfaceType();
+  }
+
+  activeDetectedControlSurfaceType_ = detectedSurfaceType;
+  configureControlSurface(surfaceSelection);
+}
+
+void MidiService::registerControlSurfaceInputs(IControlSurface &surface) {
+  for (auto dev : inList_) {
+    if (dev != nullptr) {
+      surface.RegisterMidiInput(*dev);
+    }
+  }
+}
+
 void MidiService::startDevice() {
   // look for the device
   for (auto dev : activeOutDevices_) {
-    auto name = dev->GetName();
     dev->Start();
   }
 };
@@ -207,6 +434,31 @@ void MidiService::OnPlayerStart() {
 
 void MidiService::RegisterActiveChannel(uint8_t channel) {
   activeMidiChannelMask_ |= static_cast<uint16_t>(1u << (channel & 0x0F));
+}
+
+bool MidiService::isUsbOutReservedForControlSurface(
+    const MidiOutDevice *dev) const {
+  return (usbControlSurfaceOutDevice_ != nullptr) &&
+         (controlSurface_ != nullptr) && (dev == usbControlSurfaceOutDevice_);
+}
+
+bool MidiService::isMessageAllowedWhileUsbReservedForControlSurface(
+    MidiOutDevice *dev, const MidiMessage &message) const {
+  if (!isUsbOutReservedForControlSurface(dev)) {
+    return true;
+  }
+
+  switch (message.status_) {
+  case MidiMessage::MIDI_CLOCK:
+  case MidiMessage::MIDI_START:
+  case MidiMessage::MIDI_CONTINUE:
+  case MidiMessage::MIDI_STOP:
+  case MidiMessage::MIDI_ACTIVE_SENSING:
+  case MidiMessage::MIDI_SYSTEM_RESET:
+    return true;
+  default:
+    return false;
+  }
 }
 
 void MidiService::OnPlayerStop() {

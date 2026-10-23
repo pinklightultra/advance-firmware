@@ -1,6 +1,6 @@
 /* USER CODE BEGIN Header */
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2025
  * STMicroelectronics.
@@ -8,6 +8,10 @@
  *
  * This file is
  * part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -18,7 +22,6 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "ltdc.h"
-#include "memorymap.h"
 #include "rng.h"
 #include "rtc.h"
 #include "sai.h"
@@ -30,25 +33,27 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "Adapters/adv/system/advSystem.h"
+#include "Adapters/adv/system/assets/error_bitmaps.h"
 #include "Application/Application.h"
 #include "Trace.h"
 #include "critical_error_message.h"
 #include "display.h"
-#include "tusb.h"
 #include <cstdio>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+extern "C" {
 __attribute__((section(".firmware_info"))) __attribute__((used))
 const firmware_info_t firmware_info = {
     .magic = 0xC0D31355,
     .length = 0,           // placeholder, filled post-link
-    .version = 0x72020301, // type, major, minor, patch (type: 0x62: beta,
+    .version = 0x72030000, // type, major, minor, patch (type: 0x62: beta,
     // debug: 0x64, 0x72: release)
     .crc32 = 0,        // placeholder, filled post-link
     .type = 0x00006677 // Only two types: "fw" 0x00006677 or "boot" 0x626f6f74
 };
+}
 
 /* USER CODE END PTD */
 
@@ -113,6 +118,9 @@ int main(void) {
   /* Enable I-Cache---------------------------------------------------------*/
   SCB_EnableICache();
 
+  /* Enable D-Cache---------------------------------------------------------*/
+  SCB_EnableDCache();
+
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick.
@@ -162,8 +170,7 @@ int main(void) {
 
   if (SDcardInitError != 0) {
     Trace::Log("MAIN", "SDCARD MISSING!!\n");
-    critical_error_message("SDCARD MISSING !", 0x01,
-                           DEFAULT_ERROR_MESSAGE_DELAY_SEC, false);
+    critical_sdcard_missing_message(DEFAULT_ERROR_MESSAGE_DELAY_SEC);
     while (false) {
     }
   }
@@ -172,10 +179,6 @@ int main(void) {
   printf("INFO: picoTracker Advance init...");
 
   init_fastcode_section();
-
-  tusb_rhport_init_t dev_init = {.role = TUSB_ROLE_DEVICE,
-                                 .speed = TUSB_SPEED_AUTO};
-  tusb_init(0, &dev_init);
 
   advSystem::Boot();
 
@@ -295,10 +298,65 @@ PUTCHAR_PROTOTYPE {
 /* MPU Configuration */
 
 void MPU_Config(void) {
+  MPU_Region_InitTypeDef MPU_InitStruct = {0};
 
   /* Disables the MPU */
   HAL_MPU_Disable();
 
+  /** Initializes and configures the Region and the memory to be protected
+   */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
+  MPU_InitStruct.BaseAddress = 0xC0000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_16MB;
+  MPU_InitStruct.SubRegionDisable = 0x00;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+   */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0xD0000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_32MB;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+   */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER2;
+  MPU_InitStruct.BaseAddress = 0xc1800000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_8MB;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+   */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER3;
+  MPU_InitStruct.BaseAddress = 0x24000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+   */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER4;
+  MPU_InitStruct.BaseAddress = 0xc1000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_8MB;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }

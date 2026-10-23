@@ -1,17 +1,24 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #include "critical_error_message.h"
 #include "Adapters/adv/display/display.h"
+#include "assets/error_bitmaps.h"
 #include "charger.h"
 #include "stm32h7xx_hal.h"
 #include "tim.h"
 #include <System/Console/nanoprintf.h>
 #include <string.h>
+
+#define ERROR_SCREEN_TEXT_COLUMNS 32
 
 // This function assumes TIM2 is configured to have a 1MHz clock (1us tick)
 // Need to use this instead of HAL_Delay() as critical_error_message() can get
@@ -26,73 +33,92 @@ static void delay_us(uint32_t us) {
 
 static void delay_ms(uint32_t ms) { delay_us(ms * 1000); }
 
-// show this message and then power down after the given delay (in seconds) so
-// only for critical errors where we need to show user a message and cannot
-// continue until a reboot
-void critical_error_message(const char *message, int guruId, int shutdownDelay,
-                            bool showGuru) {
+static void draw_error_screen_text_line(uint8_t row, uint8_t fgColor,
+                                        const char *text) {
+  char buffer[ERROR_SCREEN_TEXT_COLUMNS + 1];
+
+  if (!text || row >= TEXT_HEIGHT) {
+    return;
+  }
+
+  npf_snprintf(buffer, sizeof(buffer), "%s", text);
+  buffer[ERROR_SCREEN_TEXT_COLUMNS] = '\0';
+
+  display_set_foreground((color_t)fgColor);
+  for (uint8_t col = 0; col < ERROR_SCREEN_TEXT_COLUMNS && buffer[col] != '\0';
+       col++) {
+    display_set_cursor(col, row);
+    display_putc(buffer[col], false);
+  }
+}
+
+static void draw_error_screen(const ErrorBitmap *bitmap, const char *title,
+                              const char *const *detailLines,
+                              size_t detailLineCount) {
+  uint8_t currentRow = 0;
+
   display_set_font_index(0);
 
-  display_set_palette_color(15, 0x0000); // BLACK
-  display_set_palette_color(14, 0xF800); // RED
-  display_set_background(COLOR_GURU_BG);
-  display_clear(COLOR_GURU_BG);
-  display_set_foreground(COLOR_GURU_TXT);
+  display_set_palette_color(COLOR_WHITE, 0xFFFF);    // WHITE
+  display_set_palette_color(COLOR_GURU_TXT, 0xF800); // RED
+  display_set_palette_color(COLOR_GURU_BG, 0x0000);  // BLACK
+  display_set_background(COLOR_WHITE);
+  display_set_foreground(COLOR_GURU_BG);
+  display_clear(COLOR_WHITE);
 
-  int msglen = strlen(message) < 30 ? strlen(message) : 30;
-  char msgbuffer[32];
-  char gurumsgbuffer[32];
-  npf_snprintf(gurumsgbuffer, sizeof(gurumsgbuffer),
-               "   Guru Meditation: 00000.%04d", guruId);
-
-  int center = (32 - msglen) / 2;
-  if (center > 0) {
-    memset(&msgbuffer[1], ' ', center - 1);
-    memcpy(&msgbuffer[center], message, msglen);
-    memset(&msgbuffer[center + msglen], ' ', 32 - center - msglen - 1);
-    msgbuffer[0] = '#';
-    msgbuffer[31] = '#';
-    gurumsgbuffer[0] = '#';
-    gurumsgbuffer[31] = '#';
+  if (bitmap) {
+    display_draw_mono_bitmap_rgb565(0, 0, bitmap->data, bitmap->width,
+                                    bitmap->height, bitmap->rowBytes, 0x0000,
+                                    0xFFFF);
   }
-  // halt
-  for (;;) {
-    for (int y = 0; y < (showGuru == true ? 4 : 3); y++) {
-      for (int x = 0; x < 32; x++) {
-        display_set_cursor(x, y + 10);
-        if (y == 0 || y == (showGuru == true ? 3 : 2)) {
-          display_putc('#', false);
-        } else if (y == 2) {
-          if (showGuru) {
-            display_putc(gurumsgbuffer[x], false);
-          }
-        } else {
-          display_putc(msgbuffer[x], false);
-        }
-      }
+
+  if (title || detailLineCount > 0) {
+    size_t overlayRows = detailLineCount + ((title != NULL) ? 1U : 0U);
+
+    if (overlayRows > TEXT_HEIGHT) {
+      overlayRows = TEXT_HEIGHT;
     }
+
+    // Keep the top rows solid white so the fault text stays legible over the
+    // illustration regardless of the art in the bitmap.
+    display_fill_rect(COLOR_WHITE, 0, 0, DISPLAY_WIDTH,
+                      (uint16_t)(overlayRows * CHAR_HEIGHT));
+  }
+
+  if (title) {
+    draw_error_screen_text_line(currentRow++, COLOR_GURU_TXT, title);
+  }
+
+  for (size_t i = 0; i < detailLineCount && currentRow < TEXT_HEIGHT; i++) {
+    draw_error_screen_text_line(currentRow++, COLOR_GURU_TXT, detailLines[i]);
+  }
+
+  if (title || detailLineCount > 0) {
     display_draw_changed();
+  }
+}
+
+static __attribute__((noreturn)) void wait_then_poweroff(int shutdownDelay) {
+  for (;;) {
     delay_ms(1000);
     if (shutdownDelay-- < 0) {
       powerOff();
     }
-    display_clear(COLOR_GURU_BG);
-
-    // draw just the message
-    for (int x = 1; x < 31; x++) {
-      display_set_cursor(x, 11);
-      display_putc(msgbuffer[x], false);
-      display_set_cursor(x, 12);
-      if (showGuru) {
-        display_putc(gurumsgbuffer[x], false);
-      } else {
-        display_putc(' ', false);
-      }
-    }
-    display_draw_changed();
-    delay_ms(1000);
-    if (shutdownDelay-- < 0) {
-      // power_off();
-    }
   }
+}
+
+// show this message and then power down after the given delay (in seconds) so
+// only for critical errors where we need to show user a message and cannot
+// continue until a reboot
+__attribute__((noreturn)) void
+critical_error_message(const ErrorBitmap *bitmap, const char *title,
+                       const char *const *detailLines, size_t detailLineCount,
+                       int shutdownDelay) {
+  draw_error_screen(bitmap, title, detailLines, detailLineCount);
+  wait_then_poweroff(shutdownDelay);
+}
+
+void critical_sdcard_missing_message(int shutdownDelay) {
+  draw_error_screen(&g_sdCardMissingBitmap, NULL, NULL, 0);
+  wait_then_poweroff(shutdownDelay);
 }

@@ -1,0 +1,37 @@
+  {
+    "version": 6,
+    "configurePresets": [
+      {
+        "name": "adv-debug",
+        "displayName": "Advance Debug",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/../build",
+        "cacheVariables": {
+          "ADV": "true",
+          "CMAKE_BUILD_TYPE": "Debug"
+        }
+      },
+      {
+        "name": "adv-release",
+        "displayName": "Advance Release",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/../build-opt",
+        "cacheVariables": {
+          "ADV": "true",
+          "CMAKE_BUILD_TYPE": "Release"
+        }
+      }
+    ],
+        "buildPresets": [
+      {
+        "name": "adv-debug",
+        "configurePreset": "adv-debug",
+        "jobs": 16
+      },
+      {
+        "name": "adv-release",
+        "configurePreset": "adv-release",
+        "jobs": 16
+      }
+    ]
+  }

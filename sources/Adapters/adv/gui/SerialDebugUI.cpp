@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SerialDebugUI.h"
@@ -12,6 +16,7 @@
 #include "Application/Model/Config.h"
 #include "System/FileSystem/FileSystem.h"
 #include "System/FileSystem/I_File.h"
+#include "System/FileSystem/PathUtils.h"
 #include "System/System/System.h"
 #include "main.h"
 #include <etl/string.h>
@@ -20,6 +25,7 @@
 extern UART_HandleTypeDef huart1; // Declare the UART handle
 #include <cstdint>
 #include <nanoprintf.h>
+#include <new>
 #include <stdio.h>
 #include <string.h>
 
@@ -30,6 +36,24 @@ extern UART_HandleTypeDef huart1; // Declare the UART handle
 #define LF 10
 #define ENDSTDIN 255
 #define READ_BUFFER_SIZE 32
+
+namespace {
+
+using SerialFileEntries = etl::vector<FileSystemEntry, 32>;
+
+alignas(SerialFileEntries) __attribute__((section(".SDRAM1_NC")))
+__attribute__((aligned(32))) static unsigned char serialFileEntriesBuffer
+    [sizeof(SerialFileEntries)];
+
+SerialFileEntries &GetSerialFileEntries() {
+  static SerialFileEntries *entries = nullptr;
+  if (entries == nullptr) {
+    entries = new (serialFileEntriesBuffer) SerialFileEntries();
+  }
+  return *entries;
+}
+
+} // namespace
 
 SerialDebugUI::SerialDebugUI(){};
 
@@ -142,11 +166,7 @@ void SerialDebugUI::dispatchCmd(char *input) {
     // char *filename = strtok(NULL, " ");
     // uint32_t milliseconds = atoi(strtok(NULL, " "));
     // uint32_t threshold = atoi(strtok(NULL, " "));
-
-    FileSystem::GetInstance()->chdir("/");
-
-    const char *filename = "testrecord.wav";
-    StartRecording(filename, 1, 0);
+    StartRecording("/recordings/testrecord.wav", 1, 0);
   } else if (strcmp(cmd, "stoprec") == 0) {
     StopRecording();
   } else if (strcmp(cmd, "help") == 0) {
@@ -195,25 +215,28 @@ void SerialDebugUI::catFile(const char *path) {
 
 void SerialDebugUI::listFiles(const char *path) {
   auto fs = FileSystem::GetInstance();
-  if (!fs->chdir(path)) {
-    Trace::Error("failed to ls files path:%s", path);
+  auto &serialFileEntries = GetSerialFileEntries();
+  const char *requestedPath = (path != nullptr && path[0] != '\0') ? path : "/";
+  FileSystemPath::PathString directoryPath;
+  if (!FileSystemPath::NormalizePath(requestedPath, directoryPath) ||
+      !FileSystemPath::IsAbsolutePath(directoryPath.c_str())) {
+    Trace::Error("failed to resolve ls path:%s", requestedPath);
+    return;
   }
-  etl::vector<int, MAX_FILE_INDEX_SIZE> fileIndexes;
-  fs->list(&fileIndexes, "", false);
 
-  // No need to actually do the printing below for now as the current debug code
-  // in PicoFileSystem class is already printing all the files fetched when the
-  // list() method is run!
+  serialFileEntries.clear();
+  if (!fs->ListDirectory(directoryPath.c_str(), &serialFileEntries, "", false,
+                         true)) {
+    Trace::Error("failed to ls files path:%s", directoryPath.c_str());
+    return;
+  }
 
-  // char name[PFILENAME_SIZE];
-  // for (size_t i = 0; i < fileIndexes.size(); i++) {
-  //   fs->getFileName(fileIndexes[i], name, PFILENAME_SIZE);
-  //   if (fs->getFileType(fileIndexes[i]) == PFT_FILE) {
-  //     printf("[file] %s\n", name);
-  //   } else {
-  //     printf("[dir] %s\n", name);
-  //   }
-  // };
+  for (size_t i = 0; i < serialFileEntries.size(); i++) {
+    const char *entryType =
+        (serialFileEntries[i].type == PFT_DIR) ? "[dir]" : "[file]";
+    Trace::Log("SERIALDEBUG", "%s %s", entryType,
+               serialFileEntries[i].name.c_str());
+  }
 }
 
 void SerialDebugUI::rmFile(const char *path) {

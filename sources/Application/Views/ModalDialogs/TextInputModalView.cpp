@@ -1,23 +1,48 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "TextInputModalView.h"
 #include "Application/AppWindow.h"
+#include "Application/Views/BaseClasses/UIFieldInputDispatcher.h"
 #include "MessageBox.h" // Include for button constants
+#include <new>
+
+bool TextInputModalView::inUse_ = false;
+alignas(TextInputModalView) static unsigned char TextInputModalViewStorage
+    [sizeof(TextInputModalView)];
+void *TextInputModalView::storage_ = TextInputModalViewStorage;
+
+TextInputModalView *
+TextInputModalView::Create(View &view, const char *title, const char *prompt,
+                           int btnFlags,
+                           etl::string<MAX_TEXT_INPUT_LENGTH> defaultValue) {
+  if (inUse_) {
+    auto *existing = reinterpret_cast<TextInputModalView *>(storage_);
+    existing->~TextInputModalView();
+    inUse_ = false;
+  }
+  inUse_ = true;
+  return new (storage_)
+      TextInputModalView(view, title, prompt, btnFlags, defaultValue);
+}
 
 TextInputModalView::TextInputModalView(
     View &view, const char *title, const char *prompt, int btnFlags,
     etl::string<MAX_TEXT_INPUT_LENGTH> defaultValue)
     : ModalView(view), title_(title), prompt_(prompt),
       textVariable_(FourCC::ActionEdit, defaultValue.c_str()),
-      textFieldPos_(GetAnchor()), textField_(textVariable_, textFieldPos_, "",
-                                             FourCC::ActionEdit, defaultValue),
+      textFieldPos_(0, 0), textField_(textVariable_, textFieldPos_, "",
+                                      FourCC::ActionEdit, defaultValue),
       focus_(nullptr), editingText_(true) {
 
   buttonCount_ = 0;
@@ -30,16 +55,7 @@ TextInputModalView::TextInputModalView(
   selected_ = buttonCount_ - 1;
   NAssert(buttonCount_ != 0);
 
-  textFieldPos_._y += 2; // 2 lines below title
-  textFieldPos_._x += 6; // After "Name: " prompt
-
-  textField_.SetPosition(textFieldPos_);
   textField_.AddObserver(*this);
-
-  // Position the button
-  GUIPoint position = textFieldPos_;
-  position._y += 2; // 2 lines below text field
-  position._x += 1; // Align roughly in middle of the dialog
 
   // Set initial focus to text field
   SetFocus(&textField_);
@@ -47,10 +63,15 @@ TextInputModalView::TextInputModalView(
 
 TextInputModalView::~TextInputModalView() {}
 
+void TextInputModalView::Destroy() {
+  this->~TextInputModalView();
+  inUse_ = false;
+}
+
 void TextInputModalView::DrawView() {
   // Calculate window size based on title and prompt
   int titleSize = title_.size();
-  int promptSize = 6 + MAX_TEXT_INPUT_LENGTH; // "Name: " + text field length
+  int promptSize = prompt_.size() + MAX_TEXT_INPUT_LENGTH;
 
   // compute space needed for buttons
   int btnSize = 5; // Average button text size
@@ -60,6 +81,10 @@ void TextInputModalView::DrawView() {
   width = width > buttonWidth ? width : buttonWidth;
 
   SetWindow(width, 5);
+  textFieldPos_ = GetAnchor();
+  textFieldPos_._x += prompt_.size(); // Start immediately after prompt
+  textFieldPos_._y += 2;              // Same row as prompt
+  textField_.SetPosition(textFieldPos_);
 
   // Draw title
   GUITextProperties props;
@@ -106,24 +131,13 @@ void TextInputModalView::ProcessButtonMask(unsigned short mask, bool pressed) {
   }
 
   if (focus_ == &textField_) {
-    // Handle text field input
-    if (mask & EPBM_ENTER) {
-      // textfields procesarrow expects UP/DOWN/LEFT/RIGHT value not a mask
-      // so need to do that processing here
-      if (mask & EPBM_UP) {
-        textField_.ProcessArrow(EPBM_UP);
-      } else if (mask & EPBM_DOWN) {
-        textField_.ProcessArrow(EPBM_DOWN);
-      } else if (mask & EPBM_LEFT) {
-        textField_.ProcessArrow(EPBM_LEFT);
-      } else if (mask & EPBM_RIGHT) {
-        textField_.ProcessArrow(EPBM_RIGHT);
-      } else {
-        textField_.OnEditClick();
-      }
-    } else if (mask & EPBM_EDIT || mask & EPBM_DOWN) {
+    if (UIFieldInputDispatcher::ProcessButtonMask(textField_, mask)) {
+      isDirty_ = true;
+      return;
+    }
+    if (mask & EPBM_DOWN) {
       // Switch focus to buttons
-      focus_ = nullptr;
+      ClearFocus();
     }
   } else {
     // Button selection mode

@@ -1,15 +1,21 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SampleEditorView.h"
 #include "Application/AppWindow.h"
+#include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/SamplePool.h"
+#include "Application/Instruments/SampleSourceInstrument.h"
 #include "Application/Instruments/WavFileWriter.h"
 #include "Application/Instruments/WavHeader.h"
 #include "Application/Model/Config.h"
@@ -25,9 +31,9 @@
 #include "Services/Midi/MidiService.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/FileSystem/PathUtils.h"
 #include "System/Profiler/Profiler.h"
 #include "UIController.h"
-#include "ViewUtils.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -50,8 +56,45 @@ constexpr uint32_t sampleEditOperationCount =
 constexpr etl::string_view kSampleEditTempLeafName = ".sampledit_tmp.wav";
 constexpr etl::string_view kSampleEditBackupLeafName = ".sampledit_bak.wav";
 
-constexpr int32_t GraphXOffset = 0;
+constexpr int32_t GraphXOffset = GraphField::DefaultXOffset;
 constexpr int32_t GraphYOffset = 2 * CHAR_HEIGHT;
+
+namespace {
+
+bool extractLeafName(const char *path,
+                     etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &leafName) {
+  FileSystemPath::PathString baseName;
+  if (!FileSystemPath::BaseName(path, baseName)) {
+    leafName.clear();
+    return false;
+  }
+
+  leafName = baseName.c_str();
+  return !leafName.is_truncated() && !leafName.empty();
+}
+
+bool extractParentPath(const char *path, etl::string<PFILENAME_SIZE> &parent) {
+  FileSystemPath::PathString dirName;
+  if (!FileSystemPath::DirName(path, dirName)) {
+    parent.clear();
+    return false;
+  }
+
+  parent = dirName.c_str();
+  return !parent.empty();
+}
+
+bool pathIsWithinDirectory(const char *path, const char *directory) {
+  FileSystemPath::PathString normalizedPath;
+  FileSystemPath::PathString normalizedDir;
+  return FileSystemPath::NormalizePath(path, normalizedPath) &&
+         FileSystemPath::NormalizePath(directory, normalizedDir) &&
+         (normalizedPath == normalizedDir ||
+          FileSystemPath::IsParentOf(normalizedDir.c_str(),
+                                     normalizedPath.c_str()));
+}
+
+} // namespace
 
 SampleEditorView::SampleEditorView(GUIWindow &w, ViewData *data)
     : FieldView(w, data), fullWaveformRedraw_(false), isPlaying_(false),
@@ -117,42 +160,40 @@ void SampleEditorView::assignWorkingFilename() {
 }
 
 bool SampleEditorView::buildSiblingPath(
-    const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &srcFilename,
+    const etl::string<PFILENAME_SIZE> &srcFilename,
     etl::string_view siblingName,
-    etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &outFilename) const {
+    etl::string<PFILENAME_SIZE> &outFilename) const {
   outFilename.clear();
-  if (srcFilename.empty() || siblingName.empty()) {
+  if (srcFilename.empty() || siblingName.empty() ||
+      !FileSystemPath::IsAbsolutePath(srcFilename.c_str())) {
     return false;
   }
 
-  size_t slashPos = srcFilename.size();
-  for (size_t i = srcFilename.size(); i > 0; --i) {
-    if (srcFilename[i - 1] == '/') {
-      slashPos = i - 1;
-      break;
-    }
-  }
-
-  if (slashPos == srcFilename.size()) {
-    outFilename.append(siblingName.data(), siblingName.size());
-  } else if (slashPos == 0) {
-    outFilename.append("/");
-    outFilename.append(siblingName.data(), siblingName.size());
-  } else {
-    outFilename = srcFilename.substr(0, slashPos);
-    outFilename.append("/");
-    outFilename.append(siblingName.data(), siblingName.size());
-  }
-
-  if (outFilename.is_truncated()) {
-    outFilename.clear();
+  etl::string<PFILENAME_SIZE> parentPath;
+  if (!extractParentPath(srcFilename.c_str(), parentPath)) {
     return false;
   }
-  return true;
+
+  etl::string<PFILENAME_SIZE> combined(parentPath);
+  if (combined.empty()) {
+    return false;
+  }
+  if (combined.size() > 1) {
+    combined.append("/");
+  }
+  combined.append(siblingName.data(), siblingName.size());
+
+  FileSystemPath::PathString normalizedPath;
+  if (combined.is_truncated() ||
+      !FileSystemPath::NormalizePath(combined.c_str(), normalizedPath)) {
+    return false;
+  }
+
+  outFilename = normalizedPath.c_str();
+  return !outFilename.is_truncated();
 }
 
-const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &
-SampleEditorView::activeFilename() const {
+const etl::string<PFILENAME_SIZE> &SampleEditorView::activeFilename() const {
   return hasWorkingCopy_ ? workingFilename_ : viewData_->sampleEditorFilename;
 }
 
@@ -218,7 +259,7 @@ void SampleEditorView::discardWorkingCopy() {
 }
 
 bool SampleEditorView::commitWorkingCopy(
-    const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &targetFilename) {
+    const etl::string<PFILENAME_SIZE> &targetFilename) {
   auto fs = FileSystem::GetInstance();
 
   if (!hasWorkingCopy_) {
@@ -228,7 +269,7 @@ bool SampleEditorView::commitWorkingCopy(
   const bool commitToOriginal =
       (targetFilename == viewData_->sampleEditorFilename);
   if (commitToOriginal) {
-    etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> backupFilename;
+    etl::string<PFILENAME_SIZE> backupFilename;
     if (!buildSiblingPath(targetFilename, kSampleEditBackupLeafName,
                           backupFilename)) {
       Trace::Error("SampleEditorView: Failed creating backup filename for %s",
@@ -302,16 +343,22 @@ void SampleEditorView::OnFocus() {
   discardWorkingCopy();
 
   const auto newSampleFile = viewData_->sampleEditorFilename;
-  // Use the passed in filename to fill in our filename variable with the last 4
-  // chars (".wav") removed
-  filenameVar_.SetString(
-      newSampleFile.substr(0, newSampleFile.length() - 4).c_str());
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> displayFilename;
+  if (!extractLeafName(newSampleFile.c_str(), displayFilename)) {
+    Trace::Error("SampleEditorView: Failed to extract display name from %s",
+                 newSampleFile.c_str());
+    filenameVar_.SetString("", false);
+  } else if (displayFilename.size() >= 4 &&
+             strcmp(displayFilename.c_str() + displayFilename.size() - 4,
+                    ".wav") == 0) {
+    filenameVar_.SetString(
+        displayFilename.substr(0, displayFilename.size() - 4).c_str(), false);
+  } else {
+    filenameVar_.SetString(displayFilename.c_str(), false);
+  }
 
-  // NOTE: we rely on the prior view to have set the current working dir to the
-  // one containing the sampleEditorFilename file
-
-  // Load the sample using this filename and will fill in the wave data cache
-  loadSample(newSampleFile, viewData_->isShowingSampleEditorProjectPool);
+  // Load the sample using its absolute filename and fill the wave data cache.
+  loadSample(newSampleFile);
 
   // Update cached sample parameters
   updateSampleParameters();
@@ -353,17 +400,18 @@ void SampleEditorView::addAllFields() {
   fieldList_.insert(fieldList_.end(), &(*nameTextField_.rbegin()));
 
   const uint16_t baseX = position._x;
+  const uint32_t maxSampleIndex = tempSampleSize_ > 0 ? tempSampleSize_ - 1 : 0;
 
   position._y += 1;
-  bigHexVarField_.emplace_back(position, startVar_, 7, "start: %7.7X", 0,
-                               tempSampleSize_ - 1, 16);
+  bigHexVarField_.emplace_back(position, startVar_, 7, "Start: %7.7X", 0,
+                               maxSampleIndex, 16);
   fieldList_.insert(fieldList_.end(), &(*bigHexVarField_.rbegin()));
   (*bigHexVarField_.rbegin()).AddObserver(*this);
 
   // Add end position control
   position._y += 1;
-  bigHexVarField_.emplace_back(position, endVar_, 7, "end: %7.7X", 0,
-                               tempSampleSize_ - 1, 16);
+  bigHexVarField_.emplace_back(position, endVar_, 7, "End: %7.7X", 0,
+                               maxSampleIndex, 16);
   fieldList_.insert(fieldList_.end(), &(*bigHexVarField_.rbegin()));
   (*bigHexVarField_.rbegin()).AddObserver(*this);
 
@@ -372,7 +420,7 @@ void SampleEditorView::addAllFields() {
   position._x = baseX;
   uint8_t maxOperationIndex =
       operationVar_.GetListSize() > 0 ? operationVar_.GetListSize() - 1 : 0;
-  intVarField_.emplace_back(position, operationVar_, "op: %s", 0,
+  intVarField_.emplace_back(position, operationVar_, "Op: %s", 0,
                             maxOperationIndex, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
   (*intVarField_.rbegin()).AddObserver(*this);
@@ -452,7 +500,8 @@ void SampleEditorView::ProcessButtonMask(unsigned short mask, bool pressed) {
     if (!isPlaying_) {
       // Get the sample file name
       const auto &sampleFileName = activeFilename();
-      isSingleCycle_ = (tempSampleSize_ <= SINGLE_CYCLE_MAX_SAMPLE_SIZE);
+      isSingleCycle_ = (headerValid_ && headerInfo_.numChannels == 1 &&
+                        tempSampleSize_ <= SINGLE_CYCLE_MAX_SAMPLE_SIZE);
 
       Trace::Debug("DEBUG: Starting playback of sample '%s' (size=%d, "
                    "singleCycle=%s)\n",
@@ -611,14 +660,8 @@ void SampleEditorView::DrawView() {
   Clear();
 
   GUITextProperties props;
-  GUIPoint pos = GetTitlePosition();
 
-  // Draw title
-  char titleString[SCREEN_WIDTH];
-  strcpy(titleString, "Sample Edit");
-
-  SetColor(CD_NORMAL);
-  DrawString(pos._x, pos._y, titleString, props);
+  setTitle(etl::string<23>("Sample Edit"));
 
   if (HasModalView()) {
     // Modal rendering only clears text cells. Avoid redrawing the graph field
@@ -741,13 +784,6 @@ void SampleEditorView::rebuildWaveform() {
   }
   if (graphField_.ViewEnd() <= graphField_.ViewStart()) {
     return;
-  }
-
-  if (viewData_->isShowingSampleEditorProjectPool) {
-    if (!goProjectSamplesDir(viewData_)) {
-      Trace::Error("SampleEditorView: Failed to chdir for waveform rebuild");
-      return;
-    }
   }
 
   auto file = FileSystem::GetInstance()->Open(activeFilename().c_str(), "r");
@@ -874,7 +910,7 @@ void SampleEditorView::AnimationUpdate() {
   }
 
   GUITextProperties props;
-  drawBattery(props);
+  drawTitlebar(props);
   drawPowerButtonUI(props);
 }
 
@@ -930,7 +966,7 @@ void SampleEditorView::Update(Observable &o, I_ObservableData *d) {
     discardWorkingCopy();
 
     const auto &originalFilename = viewData_->sampleEditorFilename;
-    if (originalFilename.compare(RECORDING_FILENAME) == 0 &&
+    if (pathIsWithinDirectory(originalFilename.c_str(), RECORDINGS_DIR) &&
         !viewData_->isShowingSampleEditorProjectPool) {
       auto fs = FileSystem::GetInstance();
       if (fs) {
@@ -993,7 +1029,8 @@ void SampleEditorView::onSimpleModalDismiss(View &, ModalView &) {
 bool SampleEditorView::applySelectedOperation() {
   updateSampleParameters();
 
-  if (!ensureWorkingCopy()) {
+  if (!viewData_) {
+    Trace::Error("SampleEditorView: View data unavailable");
     return false;
   }
 
@@ -1005,6 +1042,14 @@ bool SampleEditorView::applySelectedOperation() {
   }
 
   auto op = static_cast<SampleEditOperation>(opIndex);
+  SampleEditProgressDisplay progressDisplay(viewData_->sampleEditorFilename);
+  progressDisplay.Update(0);
+
+  if (!ensureWorkingCopy()) {
+    progressDisplay.Finish(false);
+    return false;
+  }
+
   switch (op) {
   case SampleEditOperation::Trim: {
     return applyTrimOperation(static_cast<uint32_t>(start_),
@@ -1074,7 +1119,12 @@ bool SampleEditorView::applyTrimOperation(uint32_t start_, uint32_t end_) {
     return true;
   }
 
-  loadSample(activeFilename(), viewData_->isShowingSampleEditorProjectPool);
+  loadSample(activeFilename());
+  if (tempSampleSize_ == 0 || !headerValid_) {
+    Trace::Error("SampleEditorView: Failed to reload trimmed sample %s",
+                 activeFilename().c_str());
+    return false;
+  }
 
   uint32_t refreshedSize = static_cast<uint32_t>(tempSampleSize_);
   uint32_t newEndValue = refreshedSize > 0 ? refreshedSize - 1 : 0;
@@ -1138,7 +1188,7 @@ bool SampleEditorView::applyNormalizeOperation() {
     return true;
   }
 
-  loadSample(activeFilename(), viewData_->isShowingSampleEditorProjectPool);
+  loadSample(activeFilename());
   if (tempSampleSize_ == 0) {
     Trace::Error("SampleEditorView: Failed to reload normalized sample");
     return false;
@@ -1172,31 +1222,21 @@ bool SampleEditorView::applyNormalizeOperation() {
 }
 
 bool SampleEditorView::reloadEditedSample() {
-  loadSample(viewData_->sampleEditorFilename,
-             viewData_->isShowingSampleEditorProjectPool);
+  loadSample(viewData_->sampleEditorFilename);
 
-#ifndef ADV
-  MessageBox *warning = MessageBox::Create(*this, "Please reload project",
-                                           "To apply changes", MBBF_OK);
-  clearWaveformRegion();
-  DoModal(warning,
-          ModalViewCallback::create<SampleEditorView,
-                                    &SampleEditorView::onSimpleModalDismiss>(
-              *this));
-  return true;
-#else
   auto pool = SamplePool::GetInstance();
 
-  if (!goProjectSamplesDir(viewData_)) {
-    Trace::Error("SampleEditorView: Failed to chdir for pool reload");
+  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> leafName;
+  if (!extractLeafName(viewData_->sampleEditorFilename.c_str(), leafName)) {
+    Trace::Error("SampleEditorView: Failed to extract pool filename from %s",
+                 viewData_->sampleEditorFilename.c_str());
     return false;
   }
 
-  int32_t old_index =
-      pool->FindSampleIndexByName(viewData_->sampleEditorFilename);
+  int32_t old_index = pool->FindSampleIndexByName(leafName);
   if (old_index < 0) {
     Trace::Error("SampleEditorView: Sample %s not found in pool for reload",
-                 viewData_->sampleEditorFilename.c_str());
+                 leafName.c_str());
     return false;
   }
 
@@ -1204,7 +1244,7 @@ bool SampleEditorView::reloadEditedSample() {
       pool->ReloadSample(old_index, viewData_->sampleEditorFilename.c_str());
   if (new_index < 0) {
     Trace::Error("SampleEditorView: Failed to refresh pool sample %s",
-                 viewData_->sampleEditorFilename.c_str());
+                 leafName.c_str());
     return false;
   }
 
@@ -1217,11 +1257,16 @@ bool SampleEditorView::reloadEditedSample() {
         if (sampleInstrument->GetSampleIndex() == old_index) {
           sampleInstrument->AssignSample(new_index);
         }
+      } else if (instrument && instrument->GetType() == IT_SAMPLE_SOURCE) {
+        SampleSourceInstrument *sampleSourceInstrument =
+            static_cast<SampleSourceInstrument *>(instrument);
+        if (sampleSourceInstrument->GetSampleIndex() == old_index) {
+          sampleSourceInstrument->AssignSample(new_index);
+        }
       }
     }
   }
   return true;
-#endif
 }
 
 bool SampleEditorView::resolveSaveFilename(
@@ -1242,23 +1287,45 @@ bool SampleEditorView::resolveSaveFilename(
   return true;
 }
 
+bool SampleEditorView::resolveSavePath(
+    const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &filename,
+    etl::string<PFILENAME_SIZE> &resolvedPath) const {
+  resolvedPath.clear();
+  if (filename.empty()) {
+    return false;
+  }
+
+  etl::string<PFILENAME_SIZE> parentPath;
+  if (!extractParentPath(viewData_->sampleEditorFilename.c_str(), parentPath)) {
+    return false;
+  }
+
+  FileSystemPath::PathString joinedPath;
+  if (!FileSystemPath::JoinPath(parentPath.c_str(), filename.c_str(),
+                                joinedPath)) {
+    return false;
+  }
+
+  resolvedPath = joinedPath.c_str();
+  return !resolvedPath.is_truncated();
+}
+
 bool SampleEditorView::fileExists(
     const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &filename) {
   auto fs = FileSystem::GetInstance();
-  // on failures return true just in case
-  if (viewData_->isShowingSampleEditorProjectPool &&
-      !goProjectSamplesDir(viewData_)) {
-    Trace::Error("SampleEditorView: Overwrite check failed, couldn't chdir to "
-                 "project samples dir");
+  etl::string<PFILENAME_SIZE> resolvedPath;
+  if (!resolveSavePath(filename, resolvedPath)) {
+    Trace::Error("SampleEditorView: Failed to resolve save path for %s",
+                 filename.c_str());
     return true;
   }
 
   const auto &originalFilename = viewData_->sampleEditorFilename;
-  if (filename == originalFilename) {
+  if (resolvedPath == originalFilename) {
     return false;
   }
 
-  return fs->exists(filename.c_str());
+  return fs->exists(resolvedPath.c_str());
 }
 
 void SampleEditorView::attemptSave(bool loadToPool) {
@@ -1304,9 +1371,7 @@ void SampleEditorView::confirmSave(bool loadToPool) {
   }
 
   const auto &originalFilename = viewData_->sampleEditorFilename;
-  if (originalFilename.compare(RECORDING_FILENAME) == 0) {
-    auto fs = FileSystem::GetInstance();
-    fs->chdir(RECORDINGS_DIR);
+  if (pathIsWithinDirectory(originalFilename.c_str(), RECORDINGS_DIR)) {
     viewData_->importViewStartDir = RECORDINGS_DIR;
   }
   ViewType vt = SampleEditorView::sourceViewType_;
@@ -1342,33 +1407,32 @@ bool SampleEditorView::saveSample(
     return false;
   }
 
-  if (viewData_->isShowingSampleEditorProjectPool) {
-    if (!goProjectSamplesDir(viewData_)) {
-      Trace::Error("SampleEditorView: Save failed, couldn't chdir to project "
-                   "samples dir!");
-      return false;
-    }
+  etl::string<PFILENAME_SIZE> resolvedSavePath;
+  if (!resolveSavePath(savedFilename, resolvedSavePath)) {
+    Trace::Error("SampleEditorView: Failed to resolve save path for %s",
+                 savedFilename.c_str());
+    return false;
   }
 
-  const bool commitToOriginal = (savedFilename == originalFilename);
+  const bool commitToOriginal = (resolvedSavePath == originalFilename);
   const bool committingWorkingCopy = hasWorkingCopy_;
 
   if (committingWorkingCopy) {
-    if (!commitWorkingCopy(savedFilename)) {
+    if (!commitWorkingCopy(resolvedSavePath)) {
       Trace::Error("SampleEditorView: Save failed committing temp to %s",
-                   savedFilename.c_str());
+                   resolvedSavePath.c_str());
       return false;
     }
-  } else if (originalFilename != savedFilename) {
-    if (fs->exists(savedFilename.c_str()) &&
-        !fs->DeleteFile(savedFilename.c_str())) {
+  } else if (originalFilename != resolvedSavePath) {
+    if (fs->exists(resolvedSavePath.c_str()) &&
+        !fs->DeleteFile(resolvedSavePath.c_str())) {
       Trace::Error("SampleEditorView: Save failed deleting existing %s",
-                   savedFilename.c_str());
+                   resolvedSavePath.c_str());
       return false;
     }
-    if (!fs->CopyFile(originalFilename.c_str(), savedFilename.c_str())) {
+    if (!fs->CopyFile(originalFilename.c_str(), resolvedSavePath.c_str())) {
       Trace::Error("SampleEditorView: Save failed copying %s -> %s",
-                   originalFilename.c_str(), savedFilename.c_str());
+                   originalFilename.c_str(), resolvedSavePath.c_str());
       return false;
     }
   }
@@ -1379,7 +1443,7 @@ bool SampleEditorView::saveSample(
   }
 
   Trace::Log("SampleEditor", "Saved %s->%s", originalFilename.c_str(),
-             savedFilename.c_str());
+             resolvedSavePath.c_str());
 
   return true;
 }
@@ -1403,10 +1467,20 @@ bool SampleEditorView::loadSampleToPool(
     char projectName[MAX_PROJECT_NAME_LENGTH + 1];
     viewData_->project_->GetProjectName(projectName);
 
-    sampleId = pool->ImportSample(savedFilename.c_str(), projectName);
+    etl::string<PFILENAME_SIZE> savedPath;
+    if (!resolveSavePath(savedFilename, savedPath)) {
+      Trace::Error(
+          "SampleEditorView: Failed to resolve saved sample path for %s",
+          savedFilename.c_str());
+      return false;
+    }
+
+    const int targetChannelCount =
+        viewData_->project_->GetAudioMode() == kProjectAudioModeMono ? 1 : 2;
+    sampleId =
+        pool->ImportSample(savedPath.c_str(), projectName, targetChannelCount);
     if (sampleId < 0) {
-      Trace::Error("SampleEditorView: Import failed for %s",
-                   savedFilename.c_str());
+      Trace::Error("SampleEditorView: Import failed for %s", savedPath.c_str());
       return false;
     }
   } else {
@@ -1418,25 +1492,6 @@ bool SampleEditorView::loadSampleToPool(
     }
   }
   return true;
-}
-
-SampleInstrument *SampleEditorView::getCurrentSampleInstrument() {
-  if (!viewData_ || !viewData_->project_) {
-    return nullptr;
-  }
-
-  auto instrumentBank = viewData_->project_->GetInstrumentBank();
-  if (!instrumentBank) {
-    return nullptr;
-  }
-
-  I_Instrument *instrument =
-      instrumentBank->GetInstrument(viewData_->currentInstrumentID_);
-  if (!instrument || instrument->GetType() != IT_SAMPLE) {
-    return nullptr;
-  }
-
-  return static_cast<SampleInstrument *>(instrument);
 }
 
 void SampleEditorView::navigateToView(ViewType vt) {
@@ -1466,6 +1521,15 @@ void SampleEditorView::updateSampleParameters() {
 
   start_ = startVar_.GetInt();
   end_ = endVar_.GetInt();
+
+  if (sampleSize == 0) {
+    start_ = 0;
+    end_ = 0;
+    startVar_.SetInt(0);
+    endVar_.SetInt(0);
+    updateZoomWindow();
+    return;
+  }
 
   bool startAdjusted = false;
   bool endAdjusted = false;
@@ -1504,11 +1568,7 @@ void SampleEditorView::updateSampleParameters() {
 
 int16_t SampleEditorView::chunkBuffer_[512 * 2];
 
-// Load sample from the current projects samples subdir
-// ONLY filename for samples subidr (not full path!!) is supported for now
-void SampleEditorView::loadSample(
-    const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> filename,
-    bool isProjectSampleFile) {
+void SampleEditorView::loadSample(const etl::string<PFILENAME_SIZE> filename) {
 
   // Reset temporary sample state
   tempSampleSize_ = 0;
@@ -1522,15 +1582,10 @@ void SampleEditorView::loadSample(
     return;
   }
 
-  if (isProjectSampleFile) {
-    // First, navigate to the root projects samples subdir directory
-    if (!goProjectSamplesDir(viewData_)) {
-      Trace::Error("couldn't change to project pool samples dir!");
-      return;
-    }
-  } else {
-    // do nothing, we rely on the current directory being correctly set for the
-    // sample file we are trying to edit
+  if (!FileSystemPath::IsAbsolutePath(filename.c_str())) {
+    Trace::Error("SampleEditorView: Expected absolute sample path: %s",
+                 filename.c_str());
+    return;
   }
 
   auto file = FileSystem::GetInstance()->Open(filename.c_str(), "r");
@@ -1593,7 +1648,7 @@ void SampleEditorView::loadSample(
   startVar_.SetInt(0);
 
   // set end point variable
-  endVar_.SetInt(tempSampleSize_);
+  endVar_.SetInt(tempSampleSize_ > 0 ? tempSampleSize_ - 1 : 0);
 
   Trace::Log("SAMPLEEDITOR", "Loaded %d frames from %s", tempSampleSize_,
              filename.c_str());

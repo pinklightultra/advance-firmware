@@ -1,15 +1,22 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "RenderProgressModal.h"
+#include "Application/AppWindow.h"
 #include "Application/Player/Player.h"
+#include "Application/Player/SelectionResampleSession.h"
 #include "Application/Views/BaseClasses/View.h"
+#include "Application/Views/ModalDialogs/MessageBox.h"
 #include "UIFramework/BasicDatas/GUIPoint.h"
 #include <cstdint>
 #include <new>
@@ -96,16 +103,19 @@ void RenderProgressModal::OnFocus() {}
 
 void RenderProgressModal::ProcessButtonMask(unsigned short mask, bool pressed) {
   if (mask & EPBM_ENTER && pressed) {
-    // If player is still running, stop it first
     Player *player = Player::GetInstance();
     if (player && player->IsRunning()) {
+      if (SelectionResampleSession::IsActive()) {
+        SelectionResampleSession::MarkCanceled();
+      }
       player->Stop();
+      return;
     }
-    // Always allow closing the modal, whether rendering is complete or not
-    EndModal(0);
-    return; // Return early to prevent setting dirty flag unnecessarily
+
+    EndModal(MBL_OK);
+    return;
   }
-  // Only set dirty if we didn't handle the button press
+
   isDirty_ = true;
 }
 
@@ -121,28 +131,39 @@ void RenderProgressModal::AnimationUpdate() {
     if (progressDisplayMode_ == ProgressDisplayMode::ElapsedTime) {
       totalSamples_ = player->GetPlayTime() * SAMPLE_RATE;
     } else {
-      // calculate the percentage progress of the song we have rendered
-      bool hasActiveRow = false;
-      const int currentRow = getCurrentRenderedSongRow(&hasActiveRow);
-      if (hasActiveRow) {
-        if (!startSongRowCaptured_) {
-          startSongRow_ = currentRow;
-          startSongRowCaptured_ = true;
-          initializeSongProgressTracking();
-        }
-        if (progressChannel_ >= 0) {
-          const int renderedUnits =
-              calculateChannelRenderedUnits(progressChannel_, startSongRow_);
-          if (renderedUnits > renderedUnits_) {
-            renderedUnits_ = renderedUnits;
-          }
-        }
+      SelectionResampleRequest request;
+      if (!selectionBoundsCaptured_ &&
+          SelectionResampleSession::GetActiveRequest(request) &&
+          request.sourceKind == SelectionResampleSourceKind::Song) {
+        startSongRow_ = static_cast<int>(request.startSongRow);
+        endSongRow_ = static_cast<int>(request.endSongRow);
+        selectionBoundsCaptured_ = true;
       }
     }
     isDirty_ = true;
   } else if (renderStarted_ && !renderComplete_) {
+    const SelectionResampleFinalizeStatus finalizeStatus =
+        SelectionResampleSession::FinalizeIfStopped();
     renderComplete_ = true;
-    message_ = "Render Complete!";
+    switch (finalizeStatus) {
+    case SelectionResampleFinalizeStatus::Completed:
+      message_ = "Render Complete!";
+      break;
+    case SelectionResampleFinalizeStatus::Cancelled:
+      message_ = "Render Cancelled";
+      break;
+    case SelectionResampleFinalizeStatus::Failed:
+      message_ = "Render Failed";
+      break;
+    case SelectionResampleFinalizeStatus::None:
+      message_ = "Render Complete!";
+      break;
+    }
+
+    // Importing the rendered WAV into the sample pool uses the global Status
+    // renderer, which draws directly into the screen buffer. Force a full view
+    // redraw on the next UI tick so the modal is rebuilt cleanly afterwards.
+    static_cast<AppWindow &>(w_).SetDirty();
     isDirty_ = true;
   }
 
@@ -205,7 +226,8 @@ int RenderProgressModal::getCurrentRenderedSongRow(bool *hasActive) const {
 
   int currentRow = 0;
   bool foundActive = false;
-  for (int channel = 0; channel < SONG_CHANNEL_COUNT; channel++) {
+  const int channelCount = viewData_->song_->GetChannelCount();
+  for (int channel = 0; channel < channelCount; channel++) {
     if (viewData_->currentPlayPhrase_[channel] == EMPTY_SONG_VALUE) {
       continue;
     }
@@ -228,154 +250,31 @@ int RenderProgressModal::getCurrentRenderedSongRow(bool *hasActive) const {
   return currentRow;
 }
 
-int RenderProgressModal::getChainPhraseCount(int songRow, int channel) const {
-  if (viewData_ == nullptr || viewData_->song_ == nullptr) {
-    return 0;
-  }
-  if (songRow < 0 || songRow >= SONG_ROW_COUNT || channel < 0 ||
-      channel >= SONG_CHANNEL_COUNT) {
-    return 0;
-  }
-
-  const Song *song = viewData_->song_;
-  const unsigned char chain =
-      song->data_[songRow * SONG_CHANNEL_COUNT + channel];
-  if (chain == EMPTY_SONG_VALUE) {
-    return 0;
-  }
-
-  int phraseCount = 0;
-  for (int i = 0; i < PHRASES_PER_CHAIN; i++) {
-    if (song->chain_.data_[chain * PHRASES_PER_CHAIN + i] == EMPTY_SONG_VALUE) {
-      break;
-    }
-    phraseCount++;
-  }
-  return phraseCount;
-}
-
-int RenderProgressModal::calculateChannelTotalRenderUnits(
-    int channel, int startSongRow) const {
-  if (startSongRow < 0 || startSongRow >= SONG_ROW_COUNT) {
-    return 0;
-  }
-
-  int totalUnits = 0;
-  for (int row = startSongRow; row < SONG_ROW_COUNT; row++) {
-    const int phraseCount = getChainPhraseCount(row, channel);
-    if (phraseCount <= 0) {
-      break;
-    }
-    totalUnits += phraseCount * STEPS_PER_PHRASE;
-
-    if (row + 1 >= SONG_ROW_COUNT ||
-        getChainPhraseCount(row + 1, channel) <= 0) {
-      break;
-    }
-  }
-
-  return totalUnits;
-}
-
-int RenderProgressModal::calculateChannelRenderedUnits(int channel,
-                                                       int startSongRow) const {
-  if (startSongRow < 0 || startSongRow >= SONG_ROW_COUNT ||
-      viewData_ == nullptr) {
-    return 0;
-  }
-  if (channel < 0 || channel >= SONG_CHANNEL_COUNT) {
-    return 0;
-  }
-
-  int currentSongRow = viewData_->songPlayPos_[channel];
-  if (currentSongRow < startSongRow) {
-    return 0;
-  }
-
-  int renderedUnits = 0;
-  for (int row = startSongRow; row < currentSongRow && row < SONG_ROW_COUNT;
-       row++) {
-    const int phraseCount = getChainPhraseCount(row, channel);
-    if (phraseCount <= 0) {
-      return renderedUnits;
-    }
-    renderedUnits += phraseCount * STEPS_PER_PHRASE;
-  }
-
-  if (currentSongRow >= SONG_ROW_COUNT) {
-    return totalRenderUnits_;
-  }
-
-  const int currentPhraseCount = getChainPhraseCount(currentSongRow, channel);
-  if (currentPhraseCount <= 0) {
-    return renderedUnits;
-  }
-
-  int chainPos = viewData_->chainPlayPos_[channel];
-  if (chainPos < 0) {
-    chainPos = 0;
-  } else if (chainPos >= currentPhraseCount) {
-    chainPos = currentPhraseCount - 1;
-  }
-
-  int phrasePos = viewData_->phrasePlayPos_[channel];
-  if (phrasePos < 0) {
-    phrasePos = 0;
-  } else if (phrasePos >= STEPS_PER_PHRASE) {
-    phrasePos = STEPS_PER_PHRASE - 1;
-  }
-
-  renderedUnits += chainPos * STEPS_PER_PHRASE + phrasePos;
-  if (renderedUnits > totalRenderUnits_) {
-    renderedUnits = totalRenderUnits_;
-  }
-  return renderedUnits;
-}
-
-void RenderProgressModal::initializeSongProgressTracking() {
-  progressChannel_ = -1;
-  totalRenderUnits_ = 1;
-  renderedUnits_ = 0;
-
-  int bestTotalUnits = 0;
-  for (int channel = 0; channel < SONG_CHANNEL_COUNT; channel++) {
-    const int totalUnits =
-        calculateChannelTotalRenderUnits(channel, startSongRow_);
-    if (totalUnits <= 0) {
-      continue;
-    }
-    if (progressChannel_ < 0 || totalUnits < bestTotalUnits) {
-      progressChannel_ = channel;
-      bestTotalUnits = totalUnits;
-    }
-  }
-
-  if (progressChannel_ >= 0 && bestTotalUnits > 0) {
-    totalRenderUnits_ = bestTotalUnits;
-  }
-}
-
 int RenderProgressModal::calculateSongRenderPercent() const {
   if (renderComplete_) {
     return 100;
   }
-  if (!renderStarted_ || !startSongRowCaptured_ || progressChannel_ < 0) {
+  if (!renderStarted_ || !selectionBoundsCaptured_) {
     return 0;
   }
 
-  int totalUnits = totalRenderUnits_;
-  if (totalUnits <= 0) {
-    totalUnits = 1;
+  Player *player = Player::GetInstance();
+  int currentRow =
+      player != nullptr ? player->GetSelectionRenderSongRow() : startSongRow_;
+
+  int totalRows = endSongRow_ - startSongRow_ + 1;
+  if (totalRows <= 0) {
+    totalRows = 1;
   }
 
-  int renderedUnits = renderedUnits_;
-  if (renderedUnits < 0) {
-    renderedUnits = 0;
-  } else if (renderedUnits > totalUnits) {
-    renderedUnits = totalUnits;
+  int renderedRows = currentRow - startSongRow_ + 1;
+  if (renderedRows < 0) {
+    renderedRows = 0;
+  } else if (renderedRows > totalRows) {
+    renderedRows = totalRows;
   }
 
-  int percent = (renderedUnits * 100) / totalUnits;
+  int percent = (renderedRows * 100) / totalRows;
   if (percent > 99) {
     percent = 99;
   }

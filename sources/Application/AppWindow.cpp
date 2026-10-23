@@ -1,17 +1,23 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "AppWindow.h"
+#include "Adapters/adv/audio/record.h"
 #include "Application/Commands/ApplicationCommandDispatcher.h"
 #include "Application/Commands/EventDispatcher.h"
 #include "Application/Instruments/SamplePool.h"
 #include "Application/Mixer/MixerService.h"
+#include "Application/Model/FirmwareVersion.h"
 #include "Application/Model/Mixer.h"
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Player/TablePlayback.h"
@@ -23,6 +29,10 @@
 #include "Application/Views/ImportView.h"
 #include "Application/Views/InstrumentImportView.h"
 #include "Application/Views/InstrumentView.h"
+
+#include "Adapters/adv/display/display.h"
+#include "Adapters/adv/system/assets/error_bitmaps.h"
+#include "Application/Views/MasterEffectsView.h"
 #include "Application/Views/MixerView.h"
 #include "Application/Views/ModalDialogs/FullScreenBox.h"
 #include "Application/Views/ModalDialogs/MessageBox.h"
@@ -37,12 +47,14 @@
 #include "Application/Views/TableView.h"
 #include "Application/Views/ThemeImportView.h"
 #include "Application/Views/ThemeView.h"
+#include "Application/Views/VoiceView.h"
 #include "BaseClasses/View.h"
 #include "Foundation/Variables/WatchedVariable.h"
 #include "Player/Player.h"
 #include "Services/Midi/MidiService.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/FileSystem.h"
+#include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
 #include "UIFramework/Interfaces/I_GUIWindowFactory.h"
 #include "Views/UIController.h"
@@ -50,17 +62,58 @@
 #include <nanoprintf.h>
 #include <string.h>
 
-#ifdef ADV
-#include "Adapters/adv/audio/record.h"
-#else
-#include "Adapters/picoTracker/audio/record.h"
-#endif
+namespace {
+constexpr uint16_t kModifierButtonMask =
+    EPBM_ALT | EPBM_EDIT | EPBM_ENTER | EPBM_NAV | EPBM_SELECT;
+constexpr uint16_t kDirectionalButtonMask =
+    EPBM_LEFT | EPBM_DOWN | EPBM_RIGHT | EPBM_UP;
+
+uint16_t BuildButtonEventMask(uint16_t heldMask, uint16_t changedMask,
+                              bool pressed) {
+  const uint16_t heldModifiers = heldMask & kModifierButtonMask;
+  const uint16_t heldNonDirectionalMask = heldMask & ~kDirectionalButtonMask;
+  if (!pressed) {
+    return heldNonDirectionalMask;
+  }
+
+  if ((changedMask & kModifierButtonMask) != 0) {
+    return heldNonDirectionalMask;
+  }
+
+  return heldModifiers | changedMask;
+}
+} // namespace
 
 const uint16_t AUTOSAVE_INTERVAL_IN_SECONDS = 1 * 60;
 
 #define MINIMUM_ALLOWED_BATTERY_PERCENTAGE 2
 
 #define MIN_BATT_POWEROFF_SEC 15
+
+namespace {
+
+constexpr uint16_t kProfileOrderGraphicsTotal = 70;
+
+DWTProfileStats gGraphicsFlushProfile = {"gfx total", true};
+
+void registerAppWindowProfiles() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+
+  gGraphicsFlushProfile.displayOrder_ = kProfileOrderGraphicsTotal;
+  RegisterDWTProfileStats(&gGraphicsFlushProfile);
+  registered = true;
+}
+
+void drawFullscreenBitmap(const ErrorBitmap &bitmap) {
+  display_draw_mono_bitmap_rgb565(0, 0, bitmap.data, bitmap.width,
+                                  bitmap.height, bitmap.rowBytes, 0x0000,
+                                  0xFFFF);
+}
+
+} // namespace
 
 AppWindow *instance = 0;
 
@@ -103,10 +156,13 @@ struct AppWindowViews {
   ImportView importView;
   InstrumentImportView instrumentImportView;
   InstrumentView instrumentView;
+  VoiceView voiceView;
+
   TableView tableView;
   GrooveView grooveView;
   SelectProjectView selectProjectView;
   MixerView mixerView;
+  MasterEffectsView masterEffectsView;
   SampleEditorView sampleEditorView;
   SampleSlicesView sampleSlicesView;
   RecordView recordView;
@@ -118,8 +174,9 @@ struct AppWindowViews {
         themeView(w, &viewData), themeImportView(w, &viewData),
         projectView(w, &viewData), importView(w, &viewData),
         instrumentImportView(w, &viewData), instrumentView(w, &viewData),
-        tableView(w, &viewData), grooveView(w, &viewData),
-        selectProjectView(w, &viewData), mixerView(w, &viewData),
+        voiceView(w, &viewData), tableView(w, &viewData),
+        grooveView(w, &viewData), selectProjectView(w, &viewData),
+        mixerView(w, &viewData), masterEffectsView(w, &viewData),
         sampleEditorView(w, &viewData), sampleSlicesView(w, &viewData),
         recordView(w, &viewData), nullView(w, &viewData) {}
 };
@@ -147,6 +204,7 @@ void AppWindow::defineColor(FourCC colorCode, GUIColor &color,
 AppWindow::AppWindow(I_GUIWindowImp &imp, const char *projectName)
     : GUIWindow(imp), project_(projectName), viewData_(&project_),
       views_(nullptr), _currentView(nullptr) {
+  registerAppWindowProfiles();
 
   instance = this;
 
@@ -194,10 +252,13 @@ AppWindow::AppWindow(I_GUIWindowImp &imp, const char *projectName)
   views_->importView.AddObserver(*this);
   views_->instrumentImportView.AddObserver(*this);
   views_->instrumentView.AddObserver(*this);
+  views_->voiceView.AddObserver(*this);
+
   views_->tableView.AddObserver(*this);
   views_->grooveView.AddObserver(*this);
   views_->selectProjectView.AddObserver(*this);
   views_->mixerView.AddObserver(*this);
+  views_->masterEffectsView.AddObserver(*this);
   views_->sampleEditorView.AddObserver(*this);
   views_->sampleSlicesView.AddObserver(*this);
   views_->recordView.AddObserver(*this);
@@ -224,6 +285,24 @@ void AppWindow::SetSdCardPresent(bool present) {
     sdCardMessageShown_ = false;
   }
   SetDirty();
+}
+
+bool AppWindow::GetSongSelectionRect(GUIRect &selectionRect) const {
+  if (views_ == nullptr) {
+    return false;
+  }
+
+  return views_->songView.GetActiveSelectionRect(selectionRect);
+}
+
+bool AppWindow::BuildSongSelectionRenderRequest(
+    SelectionResampleRequest &request,
+    SelectionOutputIntent outputIntent) const {
+  if (views_ == nullptr) {
+    return false;
+  }
+
+  return views_->songView.BuildSelectionRenderRequest(request, outputIntent);
 }
 
 void appwindow_set_sdcard_present(bool present) {
@@ -309,7 +388,6 @@ void AppWindow::InvalidateTextCache() {
 // Flush current screen to display
 //
 void AppWindow::Flush() {
-
   Lock();
 
   GUITextProperties props;
@@ -493,7 +571,9 @@ AppWindow::LoadProjectResult AppWindow::LoadProject(const char *projectName) {
     views_->tableView.Reset();
     views_->projectView.Reset();
     views_->instrumentView.Reset();
+    views_->voiceView.Reset();
     views_->mixerView.Reset();
+    views_->masterEffectsView.Reset();
     views_->importView.Reset();
     views_->instrumentImportView.Reset();
     views_->themeView.Reset();
@@ -518,7 +598,9 @@ AppWindow::LoadProjectResult AppWindow::LoadProject(const char *projectName) {
   controller->Init(project, &viewData_);
 
   _currentView = &views_->songView;
-  _currentView->OnFocus();
+  _currentView->SetFocus(VT_SONG);
+
+  MidiService::GetInstance()->ReloadControlSurface();
 
   if (!playerOK) {
     MessageBox *mb = MessageBox::Create(views_->songView,
@@ -617,14 +699,16 @@ bool AppWindow::onEvent(GUIEvent &event) {
 
     _mask |= v;
     if (_currentView)
-      _currentView->ProcessButton(_mask, true);
+      _currentView->ProcessButton(BuildButtonEventMask(_mask, v, true), _mask,
+                                  true);
     break;
 
   case ET_PADBUTTONUP:
 
     _mask &= (0xFFFF - v);
     if (_currentView)
-      _currentView->ProcessButton(_mask, false);
+      _currentView->ProcessButton(BuildButtonEventMask(_mask, v, false), _mask,
+                                  false);
     break;
 
   case ET_SYSQUIT:
@@ -730,8 +814,8 @@ void AppWindow::AnimationUpdate() {
 
   if (lowBatteryState_ && !lowBatteryMessageShown_) {
     if (!_currentView->HasModalView()) {
-      FullScreenBox *mb = FullScreenBox::Create(*_currentView, "Low battery!",
-                                                "Connect charger", 0);
+      FullScreenBox *mb =
+          FullScreenBox::Create(*_currentView, &g_lowBatteryBitmap);
       _currentView->DoModal(mb);
       lowBatteryMessageShown_ = true;
       SetDirty();
@@ -743,14 +827,17 @@ void AppWindow::AnimationUpdate() {
       _currentView->DismissModal();
       Trace::Debug("CLose Low Batt dialog");
     }
+    GUIWindow::Clear(backgroundColor_, true);
+    Clear(true);
+    InvalidateTextCache();
     lowBatteryMessageShown_ = false;
     SetDirty();
   }
 
   if (sdCardMissing_ && !sdCardMessageShown_) {
     if (_currentView) {
-      FullScreenBox *mb = FullScreenBox::Create(
-          *_currentView, "SD Card Missing", "Insert SD Card", 0);
+      FullScreenBox *mb =
+          FullScreenBox::Create(*_currentView, &g_sdCardMissingBitmap);
       _currentView->DoModal(mb);
       sdCardMessageShown_ = true;
       SetDirty();
@@ -761,32 +848,56 @@ void AppWindow::AnimationUpdate() {
       modal->EndModal(0);
       _currentView->DismissModal();
     }
+    GUIWindow::Clear(backgroundColor_, true);
+    Clear(true);
+    InvalidateTextCache();
     sdCardMessageShown_ = false;
     SetDirty();
   }
 
   // If we need a full redraw due to state changes from key events
-  if (_currentView && _currentView->isDirty()) {
-    _currentView->Redraw(); // Draw main content
-  }
+  {
+    // Measure the full UI render pass for this clock tick, including view
+    // redraw work such as graph rectangles plus the final display flush.
+    ScopedDWTProfile graphicsFlushProfile(&gGraphicsFlushProfile, 1,
+                                          PICO_CLOCK_HZ, 1);
 
-  // Handle view updates
-  if (_currentView) {
-    // Always update the main view even if modal is active because things like
-    // batt gauge still need redrawing and visibility even with a modal onscreen
-    _currentView->AnimationUpdate();
-    // Now check if there's an active modal view and
-    ModalView *modalView = _currentView->GetModalView();
-    if (modalView) {
-      // Update the modal view
-      modalView->AnimationUpdate();
-      // Modal can complete from animation updates (e.g. timed hold confirms).
-      _currentView->DismissModal();
+    if (sdCardMissing_ && sdCardMessageShown_) {
+      if (_currentView && _currentView->isDirty()) {
+        drawFullscreenBitmap(g_sdCardMissingBitmap);
+        _currentView->SetDirty(false);
+      }
+    } else if (lowBatteryState_ && lowBatteryMessageShown_) {
+      if (_currentView && _currentView->isDirty()) {
+        drawFullscreenBitmap(g_lowBatteryBitmap);
+        _currentView->SetDirty(false);
+      }
+    } else {
+      if (_currentView && _currentView->isDirty()) {
+        _currentView->Redraw(); // Draw main content
+      }
+
+      // Handle view updates
+      if (_currentView) {
+        // Always update the main view even if modal is active because things
+        // like batt gauge still need redrawing and visibility even with a
+        // modal onscreen
+        _currentView->AnimationUpdate();
+        // Now check if there's an active modal view and
+        ModalView *modalView = _currentView->GetModalView();
+        if (modalView) {
+          // Update the modal view
+          modalView->AnimationUpdate();
+          // Modal can complete from animation updates (e.g. timed hold
+          // confirms).
+          _currentView->DismissModal();
+        }
+      }
+
+      // Always flush after AnimationUpdate to ensure consistent state
+      Flush();
     }
   }
-
-  // Always flush after AnimationUpdate to ensure consistent state
-  Flush();
 
   // *attempt* to auto save every AUTOSAVE_INTERVAL_IN_SECONDS
   // will return false if auto save was unsuccessful because eg. the sequencer
@@ -845,6 +956,10 @@ void AppWindow::Update(Observable &o, I_ObservableData *d) {
     case VT_INSTRUMENT:
       _currentView = &views_->instrumentView;
       break;
+    case VT_VOICE:
+      _currentView = &views_->voiceView;
+      break;
+
     case VT_TABLE:
       _currentView = &views_->tableView;
       break;
@@ -865,6 +980,9 @@ void AppWindow::Update(Observable &o, I_ObservableData *d) {
       break;
     case VT_MIXER:
       _currentView = &views_->mixerView;
+      break;
+    case VT_MASTER_EFFECTS:
+      _currentView = &views_->masterEffectsView;
       break;
     case VT_THEME:
       _currentView = &views_->themeView;
@@ -989,12 +1107,10 @@ void AppWindow::PrintMultiLine(char *line) {
   }
 
   // Preserve the build string at the bottom of the screen
-  char buildString[SCREEN_WIDTH + 1];
-  npf_snprintf(buildString, sizeof(buildString), "picoTracker build %s%s_%s",
-               PROJECT_NUMBER, PROJECT_RELEASE, BUILD_COUNT);
+  const FirmwareVersionString buildString = FormatFirmwareRelease();
   GUIPoint pos(0, 22);
-  pos._x = (32 - strlen(buildString)) / 2;
-  DrawString(buildString, pos, props);
+  pos._x = (32 - buildString.size()) / 2;
+  DrawString(buildString.c_str(), pos, props);
   Flush();
 };
 
@@ -1015,14 +1131,17 @@ bool AppWindow::AutoSave() {
   }
   // only auto save when sequencer is not running, not recording,
   // and the user is in an autosave-safe view.
-  bool autosaveSafeView =
-      _currentView == &views_->songView || _currentView == &views_->chainView ||
-      _currentView == &views_->phraseView ||
-      _currentView == &views_->tableView ||
-      _currentView == &views_->grooveView ||
-      _currentView == &views_->instrumentView ||
-      _currentView == &views_->deviceView ||
-      _currentView == &views_->themeView || _currentView == &views_->mixerView;
+  bool autosaveSafeView = _currentView == &views_->songView ||
+                          _currentView == &views_->chainView ||
+                          _currentView == &views_->phraseView ||
+                          _currentView == &views_->tableView ||
+                          _currentView == &views_->grooveView ||
+                          _currentView == &views_->instrumentView ||
+                          _currentView == &views_->voiceView ||
+                          _currentView == &views_->deviceView ||
+                          _currentView == &views_->themeView ||
+                          _currentView == &views_->mixerView ||
+                          _currentView == &views_->masterEffectsView;
   bool recording = IsRecordingActive();
   if (!player->IsRunning() && !recording && autosaveSafeView) {
     Trace::Log("APPWINDOW", "AutoSaving Project Data");

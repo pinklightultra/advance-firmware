@@ -28,15 +28,12 @@ public:
   bool MidiSlice();
   float GetPlaySampleCount();
   float GetTickSampleCount();
-  int GetTableRatio();
-  void SetTableRatio(int ratio);
   unsigned int GetBeatCount();
   float GetTickTime();
 
 private:
   int tempo_;
   int currentSlice_;
-  int tableRatio_;
   unsigned int beatCount_;
   float playSampleCount_;
   float tickSampleCount_;

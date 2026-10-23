@@ -1,15 +1,21 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _APP_WINDOW_H_
 #define _APP_WINDOW_H_
 
+#include "Application/Player/SelectionResampleRequest.h"
+#include "Application/ScreenConstants.h"
 #include "Application/Views/BaseClasses/View.h"
 #include "Application/Views/ViewData.h"
 #include "Foundation/Observable.h"
@@ -19,21 +25,6 @@
 #include <UIFramework/SimpleBaseClasses/EventManager.h>
 
 #define PROP_INVERT 0x80
-#ifdef ADV
-#define CHAR_WIDTH 22
-#define CHAR_HEIGHT 30
-#else
-#define CHAR_WIDTH 10
-#define CHAR_HEIGHT 10
-#endif
-#define SCREEN_WIDTH 32
-#define SCREEN_HEIGHT 24
-#define SCREEN_MAP_HEIGHT 4
-#define SCREEN_MAP_WIDTH 4
-#define BATTERY_GAUGE_WIDTH 5
-#define SCREEN_CHARS SCREEN_WIDTH *SCREEN_HEIGHT
-#define MAX_FIELD_WIDTH 26
-#define SCREEN_REDRAW_RATE PICO_CLOCK_HZ
 
 class View;
 struct AppWindowViews;
@@ -62,6 +53,10 @@ public:
   void SetDirty();
   void UpdateColorsFromConfig();
   void SetSdCardPresent(bool present);
+  bool GetSongSelectionRect(GUIRect &selectionRect) const;
+  bool
+  BuildSongSelectionRenderRequest(SelectionResampleRequest &request,
+                                  SelectionOutputIntent outputIntent) const;
 
   char projectName_[MAX_PROJECT_NAME_LENGTH + 1];
 

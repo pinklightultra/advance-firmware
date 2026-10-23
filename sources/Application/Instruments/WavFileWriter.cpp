@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "WavFileWriter.h"
@@ -52,27 +56,18 @@ bool WavFileWriter::IsOpen() const { return static_cast<bool>(file_); }
 
 WavFileWriter::~WavFileWriter() { Close(); }
 
-void WavFileWriter::AddBuffer(fixed *bufferIn, int size) {
+void WavFileWriter::AddBuffer(AudioSample *bufferIn, int size) {
 
   if (!file_)
     return;
 
   short *s = buffer_;
-  fixed *p = bufferIn;
-
-  fixed v;
-  fixed f_32767 = i2fp(32767);
-  fixed f_m32768 = i2fp(-32768);
+  AudioSample *p = bufferIn;
 
   for (int i = 0; i < size * 2; i++) {
-    // Left
-    v = *p++;
-    if (v > f_32767) {
-      v = f_32767;
-    } else if (v < f_m32768) {
-      v = f_m32768;
-    }
-    *s++ = short(fp2i(v));
+    const AudioSample sample =
+        std::clamp(*p++, kAudioSampleMin, kAudioSampleMax);
+    *s++ = static_cast<int16_t>(static_cast<int32_t>(sample * kAudioPcmScale));
   };
   file_->Write(buffer_, 2, size * 2);
   sampleCount_ += size;
@@ -205,8 +200,8 @@ bool WavFileWriter::TrimFile(const char *path, uint32_t startFrame,
 
   const uint32_t newDataSize = framesToKeep * bytesPerFrame;
   file->Seek(headerDataOffset + newDataSize, SEEK_SET);
-  if (!WavHeaderWriter::UpdateFileSize(file.get(), framesToKeep, numChannels,
-                                       bytesPerSample)) {
+  if (!WavHeaderWriter::UpdateFileSize(file.get(), framesToKeep,
+                                       headerInfo.value())) {
     Trace::Error("WavFileWriter: Failed updating WAV header after trim");
     return false;
   }

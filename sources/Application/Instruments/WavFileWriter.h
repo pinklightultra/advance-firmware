@@ -1,16 +1,20 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _WAV_FILE_WRITER_H_
 #define _WAV_FILE_WRITER_H_
 
-#include "Application/Utils/fixed.h"
+#include "Application/Audio/AudioSample.h"
 #include "Services/Audio/AudioDriver.h"
 #include "System/FileSystem/FileSystem.h"
 #include <cstddef>
@@ -41,7 +45,7 @@ public:
   ~WavFileWriter();
   bool Open(const char *path);
   bool IsOpen() const;
-  void AddBuffer(fixed *, int size); // size in samples
+  void AddBuffer(AudioSample *, int size); // size in samples
   void Close();
   static bool TrimFile(const char *path, uint32_t startFrame, uint32_t endFrame,
                        void *scratchBuffer, uint32_t scratchBufferSize,

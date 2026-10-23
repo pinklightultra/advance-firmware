@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _NONE_INSTRUMENT_H_
@@ -28,8 +32,9 @@ public:
 
   // size refers to the number of samples
   // should always fill interleaved stereo / 16bit
-  virtual bool Render(int channel, fixed *buffer, int size, bool updateTick);
-  virtual void ProcessCommand(int channel, FourCC cc, ushort value);
+  virtual bool Render(int channel, AudioSample *buffer, int size,
+                      bool updateTick) override;
+  virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
 
   virtual bool IsInitialized();
 
@@ -45,9 +50,9 @@ public:
   virtual bool GetTableAutomation();
   virtual void GetTableState(TableSaveState &state);
   virtual void SetTableState(TableSaveState &state);
-  etl::ilist<Variable *> *Variables() { return &variables_; };
+  etl::ivector<Variable *> *Variables() { return &variables_; };
 
 private:
-  etl::list<Variable *, 2> variables_;
+  etl::vector<Variable *, 2> variables_;
 };
 #endif

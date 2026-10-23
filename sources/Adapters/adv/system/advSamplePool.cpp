@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advSamplePool.h"
@@ -50,17 +54,22 @@ bool advSamplePool::loadSample(const char *name) {
   if (count_ == MAX_SAMPLES)
     return false;
 
-  auto res = wav_[count_].Open(name);
+  const uint32_t slot = count_;
+  auto res = wav_[slot].Open(name);
   if (!res) {
     Trace::Error("Failed to load sample:%s", name);
     return false;
   }
 
-  strncpy(nameStore_[count_], name, MAX_INSTRUMENT_FILENAME_LENGTH);
-  nameStore_[count_][MAX_INSTRUMENT_FILENAME_LENGTH] = '\0';
+  if (!Load(wav_[slot])) {
+    wav_[slot].Close();
+    return false;
+  }
+
+  wav_[slot].Close();
+  strncpy(nameStore_[slot], name, MAX_INSTRUMENT_FILENAME_LENGTH);
+  nameStore_[slot][MAX_INSTRUMENT_FILENAME_LENGTH] = '\0';
   count_++;
-  Load(wav_[count_ - 1]);
-  wav_[count_ - 1].Close();
 
   return true;
 };

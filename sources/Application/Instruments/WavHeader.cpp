@@ -1,13 +1,16 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "WavHeader.h"
-#include "Application/Model/Config.h"
 #include "Externals/SRC/common.h"
 #include "System/Console/Trace.h"
 #include "System/FileSystem/I_File.h"
@@ -17,6 +20,53 @@ namespace {
 constexpr uint16_t WAV_FORMAT_PCM = 0x0001;
 constexpr uint16_t WAV_FORMAT_IEEE_FLOAT = 0x0003;
 constexpr uint16_t WAV_FORMAT_EXTENSIBLE = 0xFFFE;
+
+bool UpdateFileSizeAtOffsets(I_File *file, uint32_t sampleCount,
+                             uint16_t channels, uint16_t bytesPerSample,
+                             uint32_t dataChunkSizeOffset) {
+  if (!file) {
+    return false;
+  }
+
+  const uint32_t totalFileSize = file->Tell();
+  if (totalFileSize < 8) {
+    Trace::Error("WAVHEADER: file too small to patch header (%u bytes)",
+                 totalFileSize);
+    return false;
+  }
+  if (dataChunkSizeOffset > totalFileSize ||
+      (totalFileSize - dataChunkSizeOffset) < sizeof(uint32_t)) {
+    Trace::Error("WAVHEADER: invalid data chunk size offset %u (file size %u)",
+                 dataChunkSizeOffset, totalFileSize);
+    return false;
+  }
+
+  const uint32_t chunkSize = totalFileSize - 8;
+  const uint32_t dataChunkSize = sampleCount * channels * bytesPerSample;
+
+  file->Seek(4, SEEK_SET);
+  int written = file->Write(&chunkSize, 1, 4);
+  if (written != 4) {
+    Trace::Error("WAVHEADER: failed to write RIFF chunk size (wrote=%d err=%d)",
+                 written, file->Error());
+    return false;
+  }
+
+  Trace::Log("WAVHEADER",
+             "Updating header: FileSize=%u, DataSize=%u, DataSizeOffset=%u",
+             chunkSize, dataChunkSize, dataChunkSizeOffset);
+
+  file->Seek(dataChunkSizeOffset, SEEK_SET);
+  written = file->Write(&dataChunkSize, 1, 4);
+  if (written != 4) {
+    Trace::Error("WAVHEADER: failed to write data chunk size (wrote=%d err=%d)",
+                 written, file->Error());
+    return false;
+  }
+
+  file->Seek(totalFileSize, SEEK_SET);
+  return file->Sync();
+}
 
 } // namespace
 
@@ -193,9 +243,7 @@ WavHeaderWriter::ReadHeader(I_File *file) {
     return etl::unexpected(INVALID_HEADER);
   }
 
-  bool enableResampling = Config::GetInstance()->GetValue("IMPORTRESAMP") > 0;
-  if ((!enableResampling && info.sampleRate > 44100) ||
-      (info.sampleRate < 44100 / SRC_MAX_RATIO) ||
+  if ((info.sampleRate < 44100 / SRC_MAX_RATIO) ||
       (info.sampleRate > 44100 * SRC_MAX_RATIO)) {
     Trace::Error("WavHeaderWriter: Unsupported sample rate %u",
                  info.sampleRate);
@@ -305,6 +353,7 @@ WavHeaderWriter::ReadHeader(I_File *file) {
 
     if (chunk == 0x61746164) { // "data"
       info.dataChunkSize = chunkSize;
+      info.dataChunkSizeOffset = dataStart - sizeof(uint32_t);
       info.dataOffset = dataStart;
       break;
     }
@@ -332,46 +381,20 @@ WavHeaderWriter::ReadHeader(I_File *file) {
 bool WavHeaderWriter::UpdateFileSize(I_File *file, uint32_t sampleCount,
                                      uint16_t channels,
                                      uint16_t bytesPerSample) {
-  if (!file) {
+  return UpdateFileSizeAtOffsets(file, sampleCount, channels, bytesPerSample,
+                                 40);
+}
+
+bool WavHeaderWriter::UpdateFileSize(I_File *file, uint32_t sampleCount,
+                                     const WavHeaderInfo &headerInfo) {
+  if (headerInfo.numChannels == 0 || headerInfo.bytesPerSample == 0) {
+    Trace::Error(
+        "WAVHEADER: invalid channel or sample width in parsed header (%u, %u)",
+        headerInfo.numChannels, headerInfo.bytesPerSample);
     return false;
   }
 
-  // Get the current position, which is the total file size
-  uint32_t totalFileSize = file->Tell();
-  if (totalFileSize < 44) {
-    Trace::Error("WAVHEADER: file too small to patch header (%u bytes)",
-                 totalFileSize);
-    return false;
-  }
-
-  // Calculate the two size fields required by the WAV header
-  uint32_t chunk_size = totalFileSize - 8;
-  uint32_t subchunk2_size = sampleCount * channels * bytesPerSample;
-
-  // Update ChunkSize (Total file size - 8)
-  file->Seek(4, SEEK_SET);
-  int written = file->Write(&chunk_size, 1, 4);
-  if (written != 4) {
-    Trace::Error("WAVHEADER: failed to write RIFF chunk size (wrote=%d err=%d)",
-                 written, file->Error());
-    return false;
-  }
-
-  Trace::Log("WAVHEADER", "Updating header: FileSize=%u, DataSize=%u",
-             chunk_size, subchunk2_size);
-
-  // Update Subchunk2Size (the size of the raw data)
-  file->Seek(40, SEEK_SET);
-  written = file->Write(&subchunk2_size, 1, 4);
-  if (written != 4) {
-    Trace::Error("WAVHEADER: failed to write data chunk size (wrote=%d err=%d)",
-                 written, file->Error());
-    return false;
-  }
-
-  // Return the file pointer to its original position at the end of the file
-  file->Seek(totalFileSize, SEEK_SET);
-
-  // Force a sync to write all cached data to the disk before closing.
-  return file->Sync();
+  return UpdateFileSizeAtOffsets(file, sampleCount, headerInfo.numChannels,
+                                 headerInfo.bytesPerSample,
+                                 headerInfo.dataChunkSizeOffset);
 }

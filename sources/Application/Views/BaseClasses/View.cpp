@@ -1,22 +1,31 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "View.h"
+#include "Adapters/adv/usb/usb_utils.h"
 #include "Application/AppWindow.h"
+#include "Application/Player/PlayButtonBehavior.h"
 #include "Application/Player/Player.h"
+#include "Application/Utils/HelpLegend.h"
 #include "Application/Utils/char.h"
 #include "Application/Utils/mathutils.h"
 #include "Application/Views/RecordView.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Application/Views/VoiceScreenUtils.h"
 #include "Foundation/Constants/SpecialCharacters.h"
 #include "ModalView.h"
 #include "System/Console/Trace.h"
+#include "System/System/System.h"
 #include <UIFramework/SimpleBaseClasses/EventManager.h>
 #include <nanoprintf.h>
 
@@ -25,28 +34,42 @@ bool View::initPrivate_ = false;
 int View::margin_ = 0;
 int View::songRowCount_ = 16;
 
-BatteryState View::batteryState_ = {
+namespace {
+BatteryState batteryDisplayState = {
     .percentage = 0,
     .voltage_mv = 0,
     .temperature_c = 0,
     .charging = false,
+    .error = false,
 };
 
-BatteryState View::latestBatteryState_ = {
-    .percentage = 0,
-    .voltage_mv = 0,
-    .temperature_c = 0,
-    .charging = false,
-};
+uint32_t lastBatteryPollFrame = 0;
+bool batteryDisplayInitialized = false;
 
-uint32_t View::lastBatteryDisplayFrame_ = 0;
-bool View::batteryDisplayInitialized_ = false;
+bool currentInstrumentIsSampleSource(ViewData *viewData) {
+  if (!viewData || !viewData->project_) {
+    return false;
+  }
+
+  InstrumentBank *bank = viewData->project_->GetInstrumentBank();
+  if (!bank) {
+    return false;
+  }
+
+  I_Instrument *instrument =
+      bank->GetInstrument(viewData->currentInstrumentID_);
+  return instrument && instrument->GetType() == IT_SAMPLE_SOURCE;
+}
+
+} // namespace
 
 View::View(GUIWindow &w, ViewData *viewData)
     : w_(w), viewData_(viewData), needsRedraw_(false), isVisible_(true),
       vuMeterCount_(0), viewMode_(VM_NORMAL), isDirty_(true),
-      viewType_(VT_SONG), hasFocus_(false), powerButtonPressed_(false),
-      powerButtonHoldCount_(0) {
+      viewType_(VT_SONG), hasFocus_(false), playButtonPressed_(false),
+      powerButtonPressed_(false), powerButtonHoldCount_(0),
+      deferredPlayButtonActive_(false), deferredPlayButtonKillTriggered_(false),
+      deferredPlayButtonMask_(0), deferredPlayButtonPressedAt_(0) {
   if (!initPrivate_) {
     View::margin_ = 0;
     songRowCount_ = 16;
@@ -72,6 +95,16 @@ GUIPoint View::GetAnchor() {
 
 GUIPoint View::GetTitlePosition() { return GUIPoint(0, 0); };
 
+void View::setTitle(const etl::istring &title) { title_ = title; }
+
+void View::drawTitle() {
+  GUIPoint pos = GetTitlePosition();
+  GUITextProperties props;
+
+  SetColor(CD_NORMAL);
+  DrawString(pos._x, pos._y, title_.c_str(), props);
+}
+
 bool View::Lock() {
   if (locked_)
     return false;
@@ -88,32 +121,53 @@ void View::Unlock() { locked_ = false; }
 
 void View::drawMap() {
   GUIPoint anchor = GetAnchor();
-  GUIPoint pos(View::margin_, anchor._y + View::songRowCount_ + 1);
+
+#if SHOW_FX_SCREEN
+  int mapYOffset = View::songRowCount_;
+#else
+  int mapYOffset = View::songRowCount_ + 1;
+#endif
+  GUIPoint pos(View::margin_, anchor._y + mapYOffset);
   GUITextProperties props;
+  I_Instrument *currentInstrument = nullptr;
+  if (viewData_ && viewData_->project_) {
+    InstrumentBank *bank = viewData_->project_->GetInstrumentBank();
+    if (bank) {
+      currentInstrument = bank->GetInstrument(viewData_->currentInstrumentID_);
+    }
+  }
+  const bool showVoiceOnMap =
+      ShouldShowAudioVoiceScreenOnMap(viewType_, currentInstrument);
 
   // draw entire map
   SetColor(CD_NORMAL);
-  char buffer[5];
+  char buffer[6];
   props.invert_ = false;
   // row1
-  strcpy(buffer, "D   ");
+  strcpy(buffer, "D    ");
   DrawString(pos._x, pos._y, buffer, props);
   pos._y++;
   // row2
-  strcpy(buffer, "P G ");
+  strcpy(buffer, "P G  ");
   DrawString(pos._x, pos._y, buffer, props);
   pos._y++;
   // row3
-  strcpy(buffer, "SCPI");
+  strcpy(buffer, showVoiceOnMap ? "SCPIV" : "SCPI ");
   DrawString(pos._x, pos._y, buffer, props);
   pos._y++;
   // row4
-  strcpy(buffer, "M TT");
+  strcpy(buffer, "M TT ");
   DrawString(pos._x, pos._y, buffer, props);
+  pos._y++;
+#if SHOW_FX_SCREEN
+  // row5
+  strcpy(buffer, "X    ");
+  DrawString(pos._x, pos._y, buffer, props);
+#endif
 
   // draw current screen on map
   SetColor(CD_HILITE2);
-  pos._y = anchor._y + View::songRowCount_ + 1;
+  pos._y = anchor._y + mapYOffset;
   switch (viewType_) {
   case VT_CHAIN:
     pos._x += 1;
@@ -131,6 +185,13 @@ void View::drawMap() {
   case VT_PROJECT:
     pos._y += 1;
     DrawString(pos._x, pos._y, "P", props);
+    break;
+  case VT_VOICE:
+    if (showVoiceOnMap) {
+      pos._x += 4;
+      pos._y += 2;
+      DrawString(pos._x, pos._y, "V", props);
+    }
     break;
   case VT_INSTRUMENT:
     pos._x += 3;
@@ -156,6 +217,12 @@ void View::drawMap() {
     pos._y += 3;
     DrawString(pos._x, pos._y, "M", props);
     break;
+#if SHOW_FX_SCREEN
+  case VT_MASTER_EFFECTS:
+    pos._y += 4;
+    DrawString(pos._x, pos._y, "X", props);
+    break;
+#endif
   default: // VT_SONG
     pos._y += 2;
     DrawString(pos._x, pos._y, "S", props);
@@ -172,7 +239,8 @@ void View::drawNotes() {
   Player *player = Player::GetInstance();
 
   props.invert_ = true;
-  for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+  const int channelCount = viewData_->song_->GetChannelCount();
+  for (int i = 0; i < channelCount; i++) {
     if (i == viewData_->songX_) {
       SetColor(CD_HILITE2);
     } else {
@@ -216,7 +284,8 @@ void View::drawNotes() {
 }
 
 void View::drawMasterVuMeter(Player *player, GUITextProperties props,
-                             bool forceRedraw, uint8_t xoffset) {
+                             bool forceRedraw, uint8_t xoffset,
+                             uint8_t meterHeight) {
   stereosample playerLevel = player->GetMasterLevel();
 
   // Convert amplitude to bar levels
@@ -226,18 +295,27 @@ void View::drawMasterVuMeter(Player *player, GUITextProperties props,
   // we start at the bottom of the VU meter and draw it growing upwards
   GUIPoint pos = GetAnchor();
   pos._x += xoffset;
-  pos._y += VU_METER_HEIGHT - 1; // -1 to align with song grid
+  pos._y += meterHeight - 1; // -1 to align with song grid
 
   // Use index 0 for the master VU meter
-  drawVUMeter(leftBars, rightBars, pos, props, 0, forceRedraw);
+  drawVUMeter(leftBars, rightBars, pos, props, 0, forceRedraw, meterHeight);
 }
 
 void View::drawVUMeter(int32_t leftBars, int32_t rightBars, GUIPoint pos,
-                       GUITextProperties props, int vuIndex, bool forceRedraw) {
+                       GUITextProperties props, int vuIndex, bool forceRedraw,
+                       uint8_t meterHeight) {
+  const int32_t localMeterMax = meterHeight * 10 - 1;
+  const int32_t coloredRows = std::max<int32_t>(
+      2, (7 * meterHeight + (VU_METER_HEIGHT / 2)) / VU_METER_HEIGHT);
+  const int32_t warnLevel = meterHeight - coloredRows - 1;
+  const int32_t clipLevel = meterHeight - 1;
+
+  leftBars = (leftBars * localMeterMax) / VU_METER_MAX;
+  rightBars = (rightBars * localMeterMax) / VU_METER_MAX;
 
   // Clamp the values to the maximum height
-  leftBars = std::min<int32_t>(leftBars, VU_METER_MAX);
-  rightBars = std::min<int32_t>(rightBars, VU_METER_MAX);
+  leftBars = std::min<int32_t>(leftBars, localMeterMax);
+  rightBars = std::min<int32_t>(rightBars, localMeterMax);
 
   // Add inertia effect by limiting the rate of change
   // Maximum step change allowed per update
@@ -280,11 +358,11 @@ void View::drawVUMeter(int32_t leftBars, int32_t rightBars, GUIPoint pos,
     // Then draw the active cells with inversion enabled
     props.invert_ = false;
 
-    for (int i = 0; i < VU_METER_HEIGHT; i++) {
+    for (int i = 0; i < meterHeight; i++) {
       // Set appropriate color based on level
-      if (i == VU_METER_CLIP_LEVEL) {
+      if (i == clipLevel) {
         SetColor(CD_ERROR);
-      } else if (i > VU_METER_WARN_LEVEL) {
+      } else if (i > warnLevel) {
         SetColor(CD_WARN);
       } else {
         SetColor(CD_INFO);
@@ -307,19 +385,6 @@ void View::drawVUMeter(int32_t leftBars, int32_t rightBars, GUIPoint pos,
   // Store the current values for next time
   prevLeftVU_[vuIndex] = leftBars;
   prevRightVU_[vuIndex] = rightBars;
-}
-
-void View::drawPlayTime(Player *player, GUIPoint pos,
-                        GUITextProperties &props) {
-  char strbuffer[10];
-
-  SetColor(CD_NORMAL);
-  props.invert_ = false;
-  int time = int(player->GetPlayTime());
-  int mi = time / 60;
-  int se = time - mi * 60;
-  npf_snprintf(strbuffer, sizeof(strbuffer), "%2.2d:%2.2d", mi, se);
-  DrawString(pos._x, pos._y, strbuffer, props);
 }
 
 void View::DoModal(ModalView *view, ModalViewCallback cb) {
@@ -366,16 +431,32 @@ void View::Redraw() {
 
 void View::SetDirty(bool isDirty) { isDirty_ = isDirty; };
 
-void View::ProcessButton(unsigned short mask, bool pressed) {
+void View::ProcessButton(unsigned short mask, unsigned short heldMask,
+                         bool pressed) {
+  const uint16_t eventMask = static_cast<uint16_t>(mask);
+  const uint16_t physicalHeldMask = static_cast<uint16_t>(heldMask);
+  const bool wasPlayPressed = playButtonPressed_;
+  const bool isPlayPressed = (physicalHeldMask & EPBM_PLAY) != 0;
+  const bool playReleasedEvent = !pressed && wasPlayPressed && !isPlayPressed;
+  playButtonPressed_ = isPlayPressed;
+
   if (!pressed) {
     powerButtonPressed_ = false;
-  } else if (mask & EPBM_POWER) {
+  } else if (physicalHeldMask & EPBM_POWER) {
     powerButtonPressed_ = pressed;
+  }
+
+  if (handleDeferredPlayButton(eventMask, physicalHeldMask, pressed,
+                               playReleasedEvent)) {
+    if (isDirty_) {
+      ((AppWindow &)w_).SetDirty();
+    }
+    return;
   }
 
   // Normal button processing
   if (modalView_) {
-    modalView_->ProcessButton(mask, pressed);
+    modalView_->ProcessButton(mask, heldMask, pressed);
     // checks if modal is done and if it is disposes of it:
     DismissModal();
   } else {
@@ -385,6 +466,126 @@ void View::ProcessButton(unsigned short mask, bool pressed) {
   if (isDirty_)
     ((AppWindow &)w_).SetDirty();
 };
+
+bool View::shouldDeferPlayButton(uint16_t mask) const {
+  if (!ShouldDeferPlayButtonInput() || (mask & EPBM_PLAY) == 0 ||
+      modalView_ != nullptr || (mask & EPBM_ENTER)) {
+    return false;
+  }
+
+  Player *player = Player::GetInstance();
+  if ((viewType_ == VT_INSTRUMENT || viewType_ == VT_VOICE) &&
+      ShouldBypassPlayButtonDeferralForPreview(
+          currentInstrumentIsSampleSource(viewData_), mask, EPBM_PLAY,
+          EPBM_ALT)) {
+    return false;
+  }
+
+  if (mask == static_cast<uint16_t>(EPBM_ALT | EPBM_PLAY)) {
+    return true;
+  }
+
+  switch (viewType_) {
+  case VT_SONG:
+    if (mask == EPBM_PLAY || mask == (EPBM_NAV | EPBM_PLAY) ||
+        mask == (EPBM_ALT | EPBM_PLAY)) {
+      return true;
+    }
+    return mask == (EPBM_EDIT | EPBM_PLAY) && player != nullptr &&
+           player->GetSequencerMode() == SM_LIVE;
+
+  case VT_CHAIN:
+  case VT_PHRASE:
+  case VT_TABLE:
+  case VT_TABLE2:
+  case VT_GROOVE:
+  case VT_INSTRUMENT:
+  case VT_VOICE:
+    return mask == EPBM_PLAY || mask == (EPBM_NAV | EPBM_PLAY);
+
+  case VT_PROJECT:
+  case VT_DEVICE:
+  case VT_THEME:
+  case VT_MIXER:
+  case VT_MASTER_EFFECTS:
+    return mask == EPBM_PLAY;
+
+  default:
+    return false;
+  }
+}
+
+bool View::handleDeferredPlayButton(uint16_t eventMask, uint16_t heldMask,
+                                    bool pressed, bool playReleasedEvent) {
+  if (deferredPlayButtonActive_) {
+    if (!playReleasedEvent) {
+      if ((heldMask & EPBM_PLAY) == 0) {
+        deferredPlayButtonActive_ = false;
+        deferredPlayButtonKillTriggered_ = false;
+        deferredPlayButtonMask_ = 0;
+        deferredPlayButtonPressedAt_ = 0;
+        return false;
+      }
+
+      if ((eventMask & EPBM_PLAY) != 0) {
+        if (shouldDeferPlayButton(eventMask)) {
+          if (deferredPlayButtonMask_ !=
+                  static_cast<uint16_t>(EPBM_ALT | EPBM_PLAY) ||
+              eventMask == static_cast<uint16_t>(EPBM_ALT | EPBM_PLAY)) {
+            deferredPlayButtonMask_ = eventMask;
+          }
+        }
+        return true;
+      }
+
+      if (pressed &&
+          (eventMask &
+           (EPBM_ALT | EPBM_EDIT | EPBM_ENTER | EPBM_NAV | EPBM_SELECT)) != 0 &&
+          shouldDeferPlayButton(heldMask)) {
+        deferredPlayButtonMask_ = heldMask;
+        return true;
+      }
+
+      deferredPlayButtonActive_ = false;
+      deferredPlayButtonKillTriggered_ = false;
+      deferredPlayButtonMask_ = 0;
+      deferredPlayButtonPressedAt_ = 0;
+      return false;
+    }
+
+    const uint16_t deferredMask = deferredPlayButtonMask_;
+    const bool killTriggered = deferredPlayButtonKillTriggered_;
+    deferredPlayButtonActive_ = false;
+    deferredPlayButtonKillTriggered_ = false;
+    deferredPlayButtonMask_ = 0;
+    deferredPlayButtonPressedAt_ = 0;
+
+    if (!killTriggered) {
+      if (deferredMask == static_cast<uint16_t>(EPBM_ALT | EPBM_PLAY)) {
+        Player *player = Player::GetInstance();
+        if (player != nullptr && viewData_ != nullptr) {
+          player->OnStartButton(PM_SONG, viewData_->songX_, false,
+                                viewData_->songX_);
+        }
+      } else {
+        ProcessButtonMask(deferredMask, true);
+      }
+    }
+    return true;
+  }
+
+  if (!pressed || !shouldDeferPlayButton(eventMask)) {
+    return false;
+  }
+
+  System *system = System::GetInstance();
+  deferredPlayButtonActive_ = true;
+  deferredPlayButtonKillTriggered_ = false;
+  deferredPlayButtonMask_ = eventMask;
+  deferredPlayButtonPressedAt_ =
+      (system != nullptr) ? static_cast<uint32_t>(system->GetClock()) : 0U;
+  return true;
+}
 
 void View::Clear() { ((AppWindow &)w_).Clear(); }
 
@@ -410,41 +611,19 @@ void View::DrawRect(GUIRect &r, ColorDefinition color) {
 
 void View::drawBattery(GUITextProperties &props) {
   const uint32_t frameCounter = AppWindow::GetAnimationFrameCounter();
-  const bool sampleNow = (frameCounter % PICO_CLOCK_HZ) == 0;
+  constexpr uint32_t kBatteryPollIntervalFrames = PICO_CLOCK_HZ;
 
-  // TODO: this logic is not needed on the Advance as it has accurate battery
-  // metering and so can be removed for the Advance in future
-
-  // Sample the battery once per second.
-  if (sampleNow) {
-    System *sys = System::GetInstance();
-    sys->GetBatteryState(latestBatteryState_);
-    if (!batteryDisplayInitialized_) {
-      batteryState_ = latestBatteryState_;
-      lastBatteryDisplayFrame_ = frameCounter;
-      batteryDisplayInitialized_ = true;
-    } else {
-      if (latestBatteryState_.charging != batteryState_.charging) {
-        // Immediately display change in charging state
-        batteryState_ = latestBatteryState_;
-        lastBatteryDisplayFrame_ = frameCounter;
-      } else {
-        constexpr uint32_t kBatteryDisplayUpdateFrames = PICO_CLOCK_HZ * 120;
-        if ((frameCounter - lastBatteryDisplayFrame_) >=
-            kBatteryDisplayUpdateFrames) {
-          // While discharging, update the display at most every 120 seconds.
-          batteryState_ = latestBatteryState_;
-          lastBatteryDisplayFrame_ = frameCounter;
-        }
-      }
-    }
+  if (!batteryDisplayInitialized ||
+      (frameCounter - lastBatteryPollFrame) >= kBatteryPollIntervalFrames) {
+    System::GetInstance()->GetBatteryState(batteryDisplayState);
+    lastBatteryPollFrame = frameCounter;
+    batteryDisplayInitialized = true;
   }
 
   GUIPoint battpos = GetAnchor();
   battpos._y = 0;
 
-#if BATTERY_LEVEL_AS_PERCENTAGE
-  uint8_t batteryPercent = batteryState_.percentage;
+  uint8_t batteryPercent = batteryDisplayState.percentage;
   if (batteryPercent > 100) {
     batteryPercent = 100;
   }
@@ -454,7 +633,7 @@ void View::drawBattery(GUITextProperties &props) {
     batteryColor = CD_ERROR;
   } else if (batteryPercent < 20) {
     batteryColor = CD_WARN;
-  } else if (batteryState_.charging) {
+  } else if (batteryDisplayState.charging) {
     batteryColor = CD_INFO;
   }
 
@@ -475,44 +654,104 @@ void View::drawBattery(GUITextProperties &props) {
   ClearTextRect(startX, battpos._y, kBatteryWidgetWidth, 1);
 
   DrawString(startX, battpos._y, batteryText, invertedProps);
-  const char *rightSymbol =
-      batteryState_.charging ? char_symbol_charging_s : char_battery_right_s;
+  const char *rightSymbol = batteryDisplayState.charging
+                                ? char_symbol_charging_s
+                                : char_battery_right_s;
   DrawString(startX + 3, battpos._y, rightSymbol, normalProps);
-#else
-  // use define to choose between drawing battery percentage or battery level as
-  // bars
-  SetColor(CD_NORMAL);
-  const char *battText = nullptr;
+}
 
-  if (batteryState_.charging) {
-    SetColor(CD_ACCENT);
-    battText = string_battery_charging;
+void View::drawTitlebar(GUITextProperties &props) {
+  drawTitle();
+  drawStatusIndicators(props);
+}
+
+void View::drawStatusIndicators(GUITextProperties &props) {
+  // Layout: columns 23-27 (5 chars for status indicators)
+  //   23: playing indicator (>)
+  //   24: phrase/chain indicator (P/C)
+  //   25: live mode indicator (music note glyph)
+  //   26: USB host MIDI indicator (host glyph)
+  //   27: gap (space)
+  constexpr int kStatusWidgetStartX = SCREEN_WIDTH - 9; // column 23
+  GUIPoint statusPos(0, 0);
+
+  GUITextProperties normalProps = props;
+  normalProps.invert_ = false;
+
+  // Status indicators at columns 23-26 (each draws space when inactive)
+  Player *player = Player::GetInstance();
+  int indicatorX = kStatusWidgetStartX; // column 23
+
+  // Playing indicator: ">" when running, space otherwise
+  if (player != nullptr && player->IsRunning()) {
+    SetColor(CD_INFO);
+    DrawString(indicatorX, statusPos._y, char_playback_play_s, normalProps);
   } else {
-    if (batteryState_.percentage > 90) {
-      battText = string_battery_100_percent;
-    } else if (batteryState_.percentage > 65) {
-      battText = string_battery_75_percent;
-    } else if (batteryState_.percentage > 40) {
-      battText = string_battery_50_percent;
-    } else if (batteryState_.percentage > 35) {
-      battText = string_battery_25_percent;
-    } else if (batteryState_.percentage > 10) {
-      SetColor(CD_WARN);
-      battText = string_battery_0_percent;
+    DrawString(indicatorX, statusPos._y, " ", normalProps);
+  }
+  indicatorX++;
+
+  // Phrase/Chain indicator: "P" when playing a phrase or chain, space otherwise
+  if (viewData_ && player->IsRunning() &&
+      (viewData_->playMode_ == PM_PHRASE || viewData_->playMode_ == PM_CHAIN)) {
+    SetColor(CD_INFO);
+    if (viewData_->playMode_ == PM_PHRASE) {
+      DrawString(indicatorX, statusPos._y, "P", normalProps);
     } else {
-      SetColor(CD_ERROR);
-      battText = string_battery_0_percent;
+      DrawString(indicatorX, statusPos._y, "C", normalProps);
     }
+  } else {
+    DrawString(indicatorX, statusPos._y, " ", normalProps);
+  }
+  indicatorX++;
+
+  // Live mode indicator: music note glyph when in live sequencer mode, space
+  // otherwise
+  if (player != nullptr && player->GetSequencerMode() == SM_LIVE) {
+    SetColor(CD_INFO);
+    DrawString(indicatorX, statusPos._y, char_symbol_note_s, normalProps);
+  } else {
+    DrawString(indicatorX, statusPos._y, " ", normalProps);
+  }
+  indicatorX++;
+
+  // USB Host MIDI indicator: glyph when a MIDI device is connected, "!" on
+  // error
+  if (usbHostEnumerationTimedOut() || usbHostStartupFailed()) {
+    SetColor(CD_ERROR);
+    DrawString(indicatorX, statusPos._y, "!", normalProps);
+  } else if (usbHostMidiMounted()) {
+    SetColor(CD_INFO);
+    DrawString(indicatorX, statusPos._y, char_status_usb_host_s, normalProps);
+  } else {
+    DrawString(indicatorX, statusPos._y, " ", normalProps);
   }
 
-  int battLen = (battText != nullptr) ? static_cast<int>(strlen(battText)) : 0;
-  constexpr int kBattWidth = 6; // "[100%]" is the widest we render
-  int startX = SCREEN_WIDTH - kBattWidth;
-  ClearTextRect(startX, battpos._y, kBattWidth, 1);
-  battpos._x =
-      startX + (kBattWidth - battLen); // we want to right align the batt widget
-  DrawString(battpos._x, battpos._y, battText, props);
-#endif
+  // Battery at far right
+  drawBattery(props);
+}
+
+void View::updateDeferredPlayButtonHold() {
+  if (!deferredPlayButtonActive_ || deferredPlayButtonKillTriggered_) {
+    return;
+  }
+
+  System *system = System::GetInstance();
+  if (system == nullptr) {
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(system->GetClock());
+  if (!HasPlayButtonKillHoldElapsed(deferredPlayButtonActive_,
+                                    deferredPlayButtonPressedAt_, now)) {
+    return;
+  }
+
+  Player *player = Player::GetInstance();
+  if (player != nullptr) {
+    player->Kill();
+  }
+  deferredPlayButtonKillTriggered_ = true;
 }
 
 // Draw power button UI overlay
@@ -567,11 +806,23 @@ void View::drawPowerButtonUI(GUITextProperties &props) {
   }
 }
 
+void View::printHelpLegend(TrackerCommand command, GUITextProperties props) {
+  if (command == TrackerCommand::InstrumentCommandNone) {
+    return;
+  }
+
+  HelpLegendPair helpLegend = getHelpLegend(command);
+  // clear top two lines (including title bar)
+  DrawString(0, 0, "                           ", props);
+  DrawString(0, 1, "                           ", props);
+  DrawString(0, 0, helpLegend[0].c_str(), props);
+  if (!helpLegend[1].empty()) {
+    DrawString(0, 1, helpLegend[1].c_str(), props);
+  }
+}
+
 void View::switchToRecordView() {
   // recording view only for the Advance
-#ifndef ADV
-  return;
-#endif
   if (!Player::GetInstance()->IsRunning()) {
     RecordView::SetSourceViewType(viewType_);
     SampleEditorView::SetSourceViewType(viewType_);

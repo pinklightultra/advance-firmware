@@ -1,13 +1,18 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #ifndef _TLV320AIC3204_
 #define _TLV320AIC3204_
 
+#include "Application/Utils/bit.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -29,15 +34,15 @@ void tlv320_init();
 void tlv320_select_output(void);
 void tlv320_set_volume(uint8_t);
 uint8_t tlv320_get_volume(void);
-void tlv320_set_audio_output_active(bool active);
+bool tlv320_is_initialized(void);
 void tlv320_unmute(void);
 void tlv320_mute(void);
 void tlv320_enable_linein(void);
 void tlv320_enable_mic(void);
 void tlv320_disable_linein(void);
 void tlv320_disable_mic(void);
-void tlv320_set_linein_gain_db(uint8_t gainDb);
-void tlv320_set_mic_gain_db(uint8_t gainDb);
+void tlv320_set_linein_analog_gain_db(int32_t gainDb);
+void tlv320_set_mic_digital_gain_db(int32_t gainDb);
 void tlv320_sleep(void);
 
 #ifdef __cplusplus

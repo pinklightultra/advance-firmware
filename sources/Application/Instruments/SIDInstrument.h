@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _CRSID_INSTRUMENT_H_
@@ -61,12 +65,13 @@ public:
 
   // Start & stop the instument
   virtual bool Start(int channel, unsigned char note, bool retrigger = true);
+  virtual void Release(int channel) override;
   virtual void Stop(int channel);
 
   // size refers to the number of samples
   // should always fill interleaved stereo / 16bit
   virtual bool Render(int channel, fixed *buffer, int size, bool updateTick);
-  virtual void ProcessCommand(int channel, FourCC cc, ushort value);
+  virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
 
   virtual bool IsInitialized();
 
@@ -82,7 +87,7 @@ public:
   virtual bool GetTableAutomation();
   virtual void GetTableState(TableSaveState &state);
   virtual void SetTableState(TableSaveState &state);
-  etl::ilist<Variable *> *Variables() { return &variables_; };
+  etl::ivector<Variable *> *Variables() { return &variables_; };
 
   SIDInstrumentInstance GetChip() { return chip_; };
   unsigned short GetOsc() { return osc_.GetInt(); };
@@ -92,7 +97,9 @@ public:
   const char *GetChipName() { return (chip_ == SID1) ? "SID #1" : "SID #2"; };
 
 private:
-  etl::list<Variable *, 19> variables_;
+  void HardStopOscillator();
+
+  etl::vector<Variable *, 36> variables_;
 
   SIDInstrumentInstance chip_; // SID1 or SID2
   bool render_ = false;

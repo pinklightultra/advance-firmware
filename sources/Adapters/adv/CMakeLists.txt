@@ -92,7 +92,6 @@ set(MX_Application_Src
   ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/fmc.c
   ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c.c
   ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ltdc.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/memorymap.c
   ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/rng.c
   ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/rtc.c
   ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/sai.c
@@ -318,7 +317,6 @@ add_subdirectory(gui)
 add_subdirectory(timer)
 add_subdirectory(display)
 add_subdirectory(audio)
-add_subdirectory(utils)
 add_subdirectory(midi)
 add_subdirectory(filesystem)
 add_subdirectory(platform)

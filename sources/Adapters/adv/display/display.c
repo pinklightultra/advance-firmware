@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #include "display.h"
 #include "dma2d.h"
@@ -233,6 +237,49 @@ void display_fill_rect(uint8_t color_index, uint16_t x, uint16_t y,
   for (uint16_t j = y; j < y + height; j++) {
     for (uint16_t i = x; i < x + width; i++) {
       framebuffer[j * DISPLAY_WIDTH + i] = color565;
+    }
+  }
+}
+
+void display_draw_mono_bitmap(uint16_t x, uint16_t y, const uint8_t *bitmap,
+                              uint16_t width, uint16_t height,
+                              uint16_t row_bytes, uint8_t fg_color_index,
+                              uint8_t bg_color_index) {
+  uint16_t fg_color565 = abgr8888_to_bgr565(palette[fg_color_index]);
+  uint16_t bg_color565 = abgr8888_to_bgr565(palette[bg_color_index]);
+
+  display_draw_mono_bitmap_rgb565(x, y, bitmap, width, height, row_bytes,
+                                  fg_color565, bg_color565);
+}
+
+void display_draw_mono_bitmap_rgb565(uint16_t x, uint16_t y,
+                                     const uint8_t *bitmap, uint16_t width,
+                                     uint16_t height, uint16_t row_bytes,
+                                     uint16_t fg_color565,
+                                     uint16_t bg_color565) {
+
+  if (!bitmap || width == 0 || height == 0) {
+    return;
+  }
+
+  if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT) {
+    return;
+  }
+  if (x + width > DISPLAY_WIDTH) {
+    width = DISPLAY_WIDTH - x;
+  }
+  if (y + height > DISPLAY_HEIGHT) {
+    height = DISPLAY_HEIGHT - y;
+  }
+
+  for (uint16_t row = 0; row < height; row++) {
+    const uint8_t *src = bitmap + row * row_bytes;
+    uint16_t *dest = framebuffer + (y + row) * DISPLAY_WIDTH + x;
+
+    for (uint16_t col = 0; col < width; col++) {
+      uint8_t byte = src[col >> 3];
+      uint8_t mask = (uint8_t)(0x80U >> (col & 7U));
+      dest[col] = (byte & mask) ? fg_color565 : bg_color565;
     }
   }
 }

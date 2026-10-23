@@ -1,21 +1,47 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "AudioMixer.h"
 #include "System/Console/Trace.h"
+#include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
+#include <algorithm>
 
-fixed AudioMixer::renderBuffer_[MAX_SAMPLE_COUNT * 2];
+namespace {
+
+constexpr int kEngineSampleRate = 44100;
+
+DWTProfileStats gAudioMixerRenderProfile = {"mixer total", true};
+
+void registerAudioMixerProfiles() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+
+  RegisterDWTProfileStats(&gAudioMixerRenderProfile);
+  registered = true;
+}
+
+} // namespace
+
+AudioSample AudioMixer::renderBuffer_[MAX_SAMPLE_COUNT * 2];
 
 AudioMixer::AudioMixer(const char *name)
     : enableRendering_(0), name_(name), modules_() {
-  volume_ = (i2fp(1));
+  registerAudioMixerProfiles();
+  volume_ = kAudioSampleOne;
+  renderGain_ = kAudioSampleOne;
 };
 
 AudioMixer::~AudioMixer() {}
@@ -42,10 +68,16 @@ void AudioMixer::EnableRendering(bool enable) {
   }
 };
 
-bool AudioMixer::Render(fixed *buffer, int samplecount) {
+bool AudioMixer::Render(AudioSample *buffer, int samplecount) {
+  ScopedDWTProfile instanceProfile(profileStats_, samplecount,
+                                   kEngineSampleRate,
+                                   static_cast<int>(profileSlotCount_));
+  AccumulatingDWTProfile mixProfile(
+      profileMixMath_ ? &gAudioMixerRenderProfile : nullptr, samplecount,
+      kEngineSampleRate, static_cast<int>(profileSlotCount_));
   bool gotData = false;
-  fixed peakL = 0;
-  fixed peakR = 0;
+  AudioSample peakL = 0;
+  AudioSample peakR = 0;
 
   for (auto *mod : modules_) {
     if (!mod) {
@@ -55,9 +87,10 @@ bool AudioMixer::Render(fixed *buffer, int samplecount) {
       gotData = mod->Render(buffer, samplecount);
     } else {
       if (mod->Render(renderBuffer_, samplecount)) {
-        fixed *dst = buffer;
-        fixed *src = renderBuffer_;
+        AudioSample *dst = buffer;
+        AudioSample *src = renderBuffer_;
         int count = samplecount * 2;
+        mixProfile.Begin();
 
         /* Manually unrolling the loop gives a 25% performance increase (from
          * 6500 cycles for 800 samples to 5100 cycles. This is due to being able
@@ -89,6 +122,7 @@ bool AudioMixer::Render(fixed *buffer, int samplecount) {
         }
         for (; i < count; ++i)
           dst[i] += src[i];
+        mixProfile.End();
       }
     }
   }
@@ -98,13 +132,14 @@ bool AudioMixer::Render(fixed *buffer, int samplecount) {
   // times the time it takes a mix loop above. Some tests show that at least
   // double performance is not hard to achieve
   if (gotData) {
-    fixed *c = buffer;
+    mixProfile.Begin();
+    AudioSample *c = buffer;
 
-    if (volume_ == FP_ONE) {
+    if (volume_ == kAudioSampleOne) {
       // unity gain, no calculations to be done, just grab the levels
       for (int i = 0; i < samplecount; i += 32, c += 64) {
-        fixed r = *c;
-        fixed l = *(c + 1);
+        AudioSample r = *c;
+        AudioSample l = *(c + 1);
         if (r > peakR)
           peakR = r;
         if (l > peakL)
@@ -113,11 +148,11 @@ bool AudioMixer::Render(fixed *buffer, int samplecount) {
     } else {
       for (int i = 0; i < samplecount; i++) {
         // Right
-        fixed r = fp_mul(*c, volume_);
+        AudioSample r = *c * volume_;
         *c++ = r;
 
         // Left
-        fixed l = fp_mul(*c, volume_);
+        AudioSample l = *c * volume_;
         *c++ = l;
 
         // update the level every 32 sample pairs
@@ -130,22 +165,40 @@ bool AudioMixer::Render(fixed *buffer, int samplecount) {
         }
       }
     }
+    mixProfile.End();
   }
 
   // Always update peakMixerLevel_ regardless of whether we got data
   // This ensures VU meters update properly in all scenarios
-  peakMixerLevel_ = fp2i(peakL) << 16 | fp2i(peakR);
+  peakMixerLevel_ = static_cast<int>(std::clamp(peakL, 0.0f, kAudioSampleMax) *
+                                     kAudioPcmScale)
+                        << 16 |
+                    static_cast<int>(std::clamp(peakR, 0.0f, kAudioSampleMax) *
+                                     kAudioPcmScale);
 
   if (enableRendering_ && writer_.IsOpen()) {
     if (!gotData) {
-      memset(buffer, 0, samplecount * 2 * sizeof(fixed));
-    };
-    writer_.AddBuffer(buffer, samplecount);
+      memset(buffer, 0, samplecount * 2 * sizeof(AudioSample));
+    }
+
+    AudioSample *renderSource = buffer;
+    if (renderGain_ != kAudioSampleOne) {
+      const int sampleTotal = samplecount * 2;
+      memcpy(renderBuffer_, buffer, sampleTotal * sizeof(AudioSample));
+      for (int i = 0; i < sampleTotal; ++i) {
+        renderBuffer_[i] *= renderGain_;
+      }
+      renderSource = renderBuffer_;
+    }
+
+    writer_.AddBuffer(renderSource, samplecount);
   }
   return gotData;
 };
 
-void AudioMixer::SetVolume(fixed volume) { volume_ = volume; }
+void AudioMixer::SetVolume(AudioSample volume) { volume_ = volume; }
+
+void AudioMixer::SetRenderGain(AudioSample gain) { renderGain_ = gain; }
 
 void AudioMixer::AddModule(AudioModule &module) {
   if (modules_.full()) {

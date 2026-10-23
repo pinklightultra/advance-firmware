@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _PERSISTENCY_SERVICE_H_
@@ -28,11 +32,7 @@ enum PersistencyResult {
 };
 
 #define UNNAMED_PROJECT_NAME ".untitled"
-#ifdef ADV
 #define PROJECT_DATA_FILE "ptsav.dat"
-#else
-#define PROJECT_DATA_FILE "lgptsav.dat"
-#endif
 #define AUTO_SAVE_FILENAME "autosave.dat"
 
 class PersistencyService : public Service,
@@ -64,14 +64,13 @@ private:
   void CreatePath(etl::istring &path,
                   const etl::ivector<const char *> &segments);
   PersistencyResult SaveProjectData(const char *projectName, bool autosave);
-  bool DeleteDirectoryContents_(uint8_t depth);
-  bool DeleteDirectoryTree_(const char *dirname, uint8_t depth);
+  bool DeleteDirectoryContents_(const char *directoryPath, uint8_t depth);
+  bool DeleteDirectoryTree_(const char *directoryPath, uint8_t depth);
 
   // need these as statically allocated buffers as too big for stack
-  etl::vector<int, MAX_FILE_INDEX_SIZE> fileIndexes_;
+  etl::vector<FileSystemEntry, MAX_FILE_INDEX_SIZE> &fileEntries_;
   etl::string<MAX_PROJECT_SAMPLE_PATH_LENGTH> pathBufferA;
   etl::string<MAX_PROJECT_SAMPLE_PATH_LENGTH> pathBufferB;
-  char deleteNameBuffer_[PFILENAME_SIZE];
 };
 
 #endif

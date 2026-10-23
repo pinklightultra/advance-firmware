@@ -1,22 +1,22 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SyncMaster.h"
 #include "Services/Audio/Audio.h"
 
-#ifdef WIN32
 #define AUDIO_SLICES_PER_STEP 6 // needs to be a multiple of 6 !
-#else
-#define AUDIO_SLICES_PER_STEP 6 // needs to be a multiple of 6 !
-#endif
 
-SyncMaster::SyncMaster() { tableRatio_ = 1; }
+SyncMaster::SyncMaster() = default;
 
 void SyncMaster::Start() {
   currentSlice_ = 0;
@@ -30,8 +30,8 @@ void SyncMaster::SetTempo(int tempo) {
   int driverRate = Audio::GetInstance()->GetSampleRate();
   playSampleCount_ =
       60.0f * driverRate * 2.0f / tempo_ / 8.0f / float(AUDIO_SLICES_PER_STEP);
-  tickSampleCount_ = 60.0f * driverRate * 2.0f / tempo_ / 8.0f /
-                     float(AUDIO_SLICES_PER_STEP) * tableRatio_;
+  tickSampleCount_ =
+      60.0f * driverRate * 2.0f / tempo_ / 8.0f / float(AUDIO_SLICES_PER_STEP);
 };
 
 int SyncMaster::GetTempo() { return tempo_; };
@@ -45,10 +45,7 @@ void SyncMaster::NextSlice() {
 
 bool SyncMaster::MajorSlice() { return currentSlice_ == 0; };
 
-bool SyncMaster::TableSlice() {
-  int tableTick = currentSlice_ % (AUDIO_SLICES_PER_STEP / 6 * tableRatio_);
-  return tableTick == 0;
-};
+bool SyncMaster::TableSlice() { return MidiSlice(); };
 
 bool SyncMaster::MidiSlice() {
   int midiTick = currentSlice_ % (AUDIO_SLICES_PER_STEP / 6);
@@ -69,9 +66,5 @@ float SyncMaster::GetTickSampleCount() { return tickSampleCount_; };
 float SyncMaster::GetTickTime() {
   return 60.0f * 2.0f / tempo_ / 8.0f / AUDIO_SLICES_PER_STEP * 1000.0f;
 };
-
-void SyncMaster::SetTableRatio(int ratio) { tableRatio_ = ratio; }
-
-int SyncMaster::GetTableRatio() { return tableRatio_; }
 
 unsigned int SyncMaster::GetBeatCount() { return beatCount_; };

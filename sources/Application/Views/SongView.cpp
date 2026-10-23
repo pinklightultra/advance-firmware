@@ -1,28 +1,45 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SongView.h"
+#include "Adapters/adv/usb/usb_utils.h"
 #include "Application/Player/Player.h"
 #include "Application/Utils/char.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Application/Views/SelectionResampleSupport.h"
+#include "Services/Midi/MidiService.h"
 #include "System/Console/Trace.h"
+#include "System/Console/nanoprintf.h"
 #include "System/System/System.h"
 #include "UIController.h"
 #include "ViewData.h"
+#include <cstdint>
 #include <stdlib.h>
 #include <string>
 
+namespace {
+constexpr char kControlSurfaceWindowTopGlyph[] = {static_cast<char>(0xDA), 0};
+constexpr char kControlSurfaceWindowMiddleGlyph[] = {static_cast<char>(0xB3),
+                                                     0};
+constexpr char kControlSurfaceWindowBottomGlyph[] = {static_cast<char>(0xC0),
+                                                     0};
+} // namespace
 /****************
  Constructor
  ****************/
 
 SongView::SongView(GUIWindow &w, ViewData *viewData) : ScreenView(w, viewData) {
+  viewData_->AddObserver(*this);
 
   updatingChain_ = false;
   lastChain_ = 0;
@@ -31,15 +48,15 @@ SongView::SongView(GUIWindow &w, ViewData *viewData) : ScreenView(w, viewData) {
     this->lastPlayedPosition_[i] = 0;
     this->lastQueuedPosition_[i] = 0;
   }
-  clipboard_.active_ = false;
   clipboard_.data_ = nullptr;
+  selection_.active_ = false;
 }
 
 /****************
  Destructor
  ****************/
 
-SongView::~SongView() {}
+SongView::~SongView() { viewData_->RemoveObserver(*this); }
 
 /****************
  Reset
@@ -54,22 +71,32 @@ void SongView::Reset() {
     lastQueuedPosition_[i] = 0;
   }
 
-  clipboard_.active_ = false;
   clipboard_.data_ = nullptr;
-  clipboard_.x_ = 0;
-  clipboard_.y_ = 0;
-  clipboard_.offset_ = 0;
   clipboard_.width_ = 0;
   clipboard_.height_ = 0;
   memset(clipboard_.storage_, 0xFF, sizeof(clipboard_.storage_));
 
-  saveX_ = 0;
-  saveY_ = 0;
-  saveOffset_ = 0;
+  selection_.active_ = false;
+  selection_.anchorX_ = 0;
+  selection_.anchorY_ = 0;
+  selection_.anchorOffset_ = 0;
+  selection_.cursorX_ = 0;
+  selection_.cursorY_ = 0;
+  selection_.cursorOffset_ = 0;
+  selection_.saveX_ = 0;
+  selection_.saveY_ = 0;
+  selection_.saveOffset_ = 0;
   invertBatt_ = false;
   needClear_ = false;
   needsUIUpdate_ = false;
-  needsPlayTimeUpdate_ = false;
+}
+
+void SongView::Update(Observable &o, I_ObservableData *d) {
+  if ((&o != viewData_) || (d == nullptr)) {
+    return;
+  }
+
+  isDirty_ = true;
 }
 
 /******************************************************
@@ -130,13 +157,15 @@ void SongView::updateCursor(int dx, int dy) {
 void SongView::cutPosition() {
 
   // prepare selection data
-  clipboard_.x_ = viewData_->songX_;
-  clipboard_.y_ = viewData_->songY_;
-  clipboard_.offset_ = viewData_->songOffset_;
-
-  saveX_ = viewData_->songX_;
-  saveY_ = viewData_->songY_;
-  saveOffset_ = viewData_->songOffset_;
+  selection_.anchorX_ = viewData_->songX_;
+  selection_.anchorY_ = viewData_->songY_;
+  selection_.anchorOffset_ = viewData_->songOffset_;
+  selection_.cursorX_ = viewData_->songX_;
+  selection_.cursorY_ = viewData_->songY_;
+  selection_.cursorOffset_ = viewData_->songOffset_;
+  selection_.saveX_ = viewData_->songX_;
+  selection_.saveY_ = viewData_->songY_;
+  selection_.saveOffset_ = viewData_->songOffset_;
 
   // cut selection
   cutSelection();
@@ -175,7 +204,7 @@ void SongView::clonePosition() {
   if (current == 255)
     return;
 
-  unsigned short next = viewData_->song_->chain_.GetNext();
+  uint16_t next = viewData_->song_->chain_.GetNextFrom(current);
   if (next == NO_MORE_CHAIN)
     return;
 
@@ -198,21 +227,22 @@ void SongView::clonePosition() {
 
 void SongView::extendSelection() {
   GUIRect rect = getSelectionRect();
-  if (rect.Left() > 0 || rect.Right() < 7) {
-    if (viewData_->songX_ < clipboard_.x_) {
+  const int lastChannel = viewData_->song_->GetChannelCount() - 1;
+  if (rect.Left() > 0 || rect.Right() < lastChannel) {
+    if (viewData_->songX_ < selection_.anchorX_) {
       viewData_->songX_ = 0;
-      clipboard_.x_ = 7;
+      selection_.anchorX_ = lastChannel;
     } else {
-      viewData_->songX_ = 7;
-      clipboard_.x_ = 0;
+      viewData_->songX_ = lastChannel;
+      selection_.anchorX_ = 0;
     }
     isDirty_ = true;
   } else {
-    if (viewData_->songY_ < clipboard_.y_) {
+    if (viewData_->songY_ < selection_.anchorY_) {
       viewData_->songY_ = 0;
-      clipboard_.y_ = 0x17;
+      selection_.anchorY_ = 0x17;
     } else {
-      clipboard_.y_ = 0;
+      selection_.anchorY_ = 0;
       viewData_->songY_ = 0x17;
     }
     isDirty_ = true;
@@ -225,23 +255,68 @@ void SongView::extendSelection() {
  ******************************************************/
 
 void SongView::OnFocus() {
-  clipboard_.active_ = false;
+  if (selection_.active_) {
+    viewData_->songX_ = selection_.cursorX_;
+    viewData_->songY_ = selection_.cursorY_;
+    viewData_->SetSongOffset(static_cast<uint32_t>(selection_.cursorOffset_));
+  }
 
   // eg. if the user was in master channel in mixerview and came to songview
   // we need to make sure we're not outside channel range
-  if (viewData_->songX_ > SONG_CHANNEL_COUNT - 1) {
+  if (viewData_->songX_ > viewData_->song_->GetChannelCount() - 1) {
     viewData_->songX_ = 0; // default to channel 1
   }
 };
 
-GUIRect SongView::getSelectionRect() {
+void SongView::OnFocusLost() {
+  if (!selection_.active_) {
+    return;
+  }
 
-  GUIRect selRect(clipboard_.x_, clipboard_.y_ + clipboard_.offset_,
-                  viewData_->songX_,
-                  viewData_->songY_ + viewData_->songOffset_);
+  selection_.cursorX_ = viewData_->songX_;
+  selection_.cursorY_ = viewData_->songY_;
+  selection_.cursorOffset_ = viewData_->songOffset_;
+}
+
+bool SongView::HasSelection() const { return selection_.active_; }
+
+bool SongView::GetActiveSelectionRect(GUIRect &selectionRect) const {
+  if (!HasSelection()) {
+    return false;
+  }
+
+  selectionRect = getSelectionRect();
+  return true;
+}
+
+GUIRect SongView::getSelectionRect() const {
+  GUIRect selRect(
+      selection_.anchorX_, selection_.anchorY_ + selection_.anchorOffset_,
+      selection_.cursorX_, selection_.cursorY_ + selection_.cursorOffset_);
 
   selRect.Normalize();
   return selRect;
+}
+
+bool SongView::BuildSelectionRenderRequest(
+    SelectionResampleRequest &request,
+    SelectionOutputIntent outputIntent) const {
+  if (!HasSelection()) {
+    SelectionResampleSupport::ClearProjectSamplePathError();
+    return false;
+  }
+
+  return SelectionResampleSupport::BuildSelectionRequest(
+      getSelectionRect(), *viewData_, request, outputIntent);
+}
+
+void SongView::clearSelection() {
+  selection_.active_ = false;
+  viewMode_ = VM_NORMAL;
+  viewData_->songX_ = selection_.saveX_;
+  viewData_->songY_ = selection_.saveY_;
+  viewData_->SetSongOffset(static_cast<uint32_t>(selection_.saveOffset_));
+  isDirty_ = true;
 }
 
 /******************************************************
@@ -264,15 +339,16 @@ void SongView::fillClipboardData() {
   clipboard_.width_ = selRect.Width() + 1;
   clipboard_.height_ = selRect.Height() + 1;
 
-  unsigned char *src = viewData_->song_->data_ + selRect.Left() +
-                       SONG_CHANNEL_COUNT * selRect.Top();
+  const int channelCount = viewData_->song_->GetChannelCount();
+  unsigned char *src =
+      viewData_->song_->data_ + selRect.Left() + channelCount * selRect.Top();
   unsigned char *dst = clipboard_.data_;
 
   for (int j = 0; j < clipboard_.height_; j++) {
     for (int i = 0; i < clipboard_.width_; i++) {
       *dst++ = *src++;
     }
-    src += (SONG_CHANNEL_COUNT - clipboard_.width_);
+    src += (channelCount - clipboard_.width_);
   }
 };
 
@@ -284,11 +360,11 @@ void SongView::fillClipboardData() {
 void SongView::copySelection() {
 
   fillClipboardData();
-  clipboard_.active_ = false;
+  selection_.active_ = false;
   viewMode_ = VM_NORMAL;
-  viewData_->songX_ = saveX_;
-  viewData_->songY_ = saveY_;
-  viewData_->songOffset_ = saveOffset_;
+  viewData_->songX_ = selection_.saveX_;
+  viewData_->songY_ = selection_.saveY_;
+  viewData_->SetSongOffset(static_cast<uint32_t>(selection_.saveOffset_));
   isDirty_ = true;
 }
 
@@ -303,12 +379,13 @@ void SongView::cutSelection() {
 
   fillClipboardData();
   GUIRect selRect = getSelectionRect();
+  const int channelCount = viewData_->song_->GetChannelCount();
 
   // now move all rows up for cut
 
-  unsigned char *dst = viewData_->song_->data_ + selRect.Left() +
-                       SONG_CHANNEL_COUNT * (selRect.Top());
-  unsigned char *src = dst + SONG_CHANNEL_COUNT * clipboard_.height_;
+  unsigned char *dst =
+      viewData_->song_->data_ + selRect.Left() + channelCount * (selRect.Top());
+  unsigned char *src = dst + channelCount * clipboard_.height_;
 
   int rowCount = SONG_ROW_COUNT - selRect.Bottom() - 1;
 
@@ -317,22 +394,22 @@ void SongView::cutSelection() {
     for (int i = 0; i < clipboard_.width_; i++) {
       *dst++ = *src++;
     }
-    src += (SONG_CHANNEL_COUNT - clipboard_.width_);
-    dst += (SONG_CHANNEL_COUNT - clipboard_.width_);
+    src += (channelCount - clipboard_.width_);
+    dst += (channelCount - clipboard_.width_);
   }
 
   for (int j = 0; j > clipboard_.height_; j++) {
     for (int i = 0; i < clipboard_.width_; i++) {
       *dst++ = 0xFF;
     }
-    dst += (SONG_CHANNEL_COUNT - clipboard_.width_);
+    dst += (channelCount - clipboard_.width_);
   };
 
-  clipboard_.active_ = false;
+  selection_.active_ = false;
   viewMode_ = VM_NORMAL;
-  viewData_->songX_ = saveX_;
-  viewData_->songY_ = saveY_;
-  viewData_->songOffset_ = saveOffset_;
+  viewData_->songX_ = selection_.saveX_;
+  viewData_->songY_ = selection_.saveY_;
+  viewData_->SetSongOffset(static_cast<uint32_t>(selection_.saveOffset_));
 
   isDirty_ = true;
 }
@@ -351,9 +428,10 @@ void SongView::pasteClipboard() {
 
   int width = clipboard_.width_;
   int height = clipboard_.height_;
+  const int channelCount = viewData_->song_->GetChannelCount();
 
-  if (viewData_->songX_ + width > SONG_CHANNEL_COUNT) {
-    width = SONG_CHANNEL_COUNT - viewData_->songX_;
+  if (viewData_->songX_ + width > channelCount) {
+    width = channelCount - viewData_->songX_;
   }
   if (viewData_->songY_ + viewData_->songOffset_ + height > SONG_ROW_COUNT) {
     height = SONG_ROW_COUNT - viewData_->songY_ - viewData_->songOffset_;
@@ -362,8 +440,8 @@ void SongView::pasteClipboard() {
     // Move down from insert point
 
     unsigned char *dst = viewData_->song_->data_ + viewData_->songX_ +
-                         (SONG_ROW_COUNT - 1) * SONG_CHANNEL_COUNT;
-    unsigned char *src = dst - height * SONG_CHANNEL_COUNT;
+                         (SONG_ROW_COUNT - 1) * channelCount;
+    unsigned char *src = dst - height * channelCount;
 
     int rowCount =
         SONG_ROW_COUNT - (viewData_->songY_ + viewData_->songOffset_);
@@ -372,8 +450,8 @@ void SongView::pasteClipboard() {
       for (int i = 0; i < width; i++) {
         *dst++ = *src++;
       }
-      dst -= (SONG_CHANNEL_COUNT + width);
-      src -= (SONG_CHANNEL_COUNT + width);
+      dst -= (channelCount + width);
+      src -= (channelCount + width);
     }
   }
 
@@ -386,7 +464,7 @@ void SongView::pasteClipboard() {
     for (int i = 0; i < width; i++) {
       *dst++ = *src++;
     }
-    dst += (SONG_CHANNEL_COUNT - width);
+    dst += (channelCount - width);
     src += (clipboard_.width_ - width);
   }
 
@@ -405,7 +483,7 @@ void SongView::toggleMute() {
 
   int from = viewData_->songX_;
   int to = from;
-  if (clipboard_.active_) {
+  if (selection_.active_) {
     GUIRect r = getSelectionRect();
     from = r.Left();
     to = r.Right();
@@ -419,7 +497,7 @@ void SongView::switchSoloMode() {
   UIController *controller = UIController::GetInstance();
   int from = viewData_->songX_;
   int to = from;
-  if (clipboard_.active_) {
+  if (selection_.active_) {
     GUIRect r = getSelectionRect();
     from = r.Left();
     to = r.Right();
@@ -433,7 +511,7 @@ void SongView::onStart() {
   Player *player = Player::GetInstance();
   unsigned char from = viewData_->songX_;
   unsigned char to = from;
-  if (clipboard_.active_) {
+  if (selection_.active_) {
     GUIRect r = getSelectionRect();
     from = r.Left();
     to = r.Right();
@@ -444,7 +522,8 @@ void SongView::onStart() {
 void SongView::startCurrentRow() {
   Player *player = Player::GetInstance();
   player->SetSequencerMode(SM_LIVE);
-  player->OnSongStartButton(0, 7, false, false);
+  player->OnSongStartButton(0, viewData_->song_->GetChannelCount() - 1, false,
+                            false);
 }
 
 void SongView::startImmediate() {
@@ -459,7 +538,7 @@ void SongView::onStop() {
   Player *player = Player::GetInstance();
   unsigned char from = viewData_->songX_;
   unsigned char to = from;
-  if (clipboard_.active_) {
+  if (selection_.active_) {
     GUIRect r = getSelectionRect();
     from = r.Left();
     to = r.Right();
@@ -470,10 +549,11 @@ void SongView::onStop() {
 void SongView::jumpToNextSection(int direction) {
 
   int current = viewData_->songY_ + viewData_->songOffset_;
+  const int channelCount = viewData_->song_->GetChannelCount();
   bool foundGap = false;
   for (int i = 0; i < SONG_ROW_COUNT; i++) {
-    unsigned char *start = viewData_->song_->data_ + viewData_->songX_ +
-                           SONG_CHANNEL_COUNT * current;
+    unsigned char *start =
+        viewData_->song_->data_ + viewData_->songX_ + channelCount * current;
     if (foundGap && (*start != 0xFF)) {
       break;
     } else {
@@ -493,8 +573,8 @@ void SongView::jumpToNextSection(int direction) {
 
   if (direction < 0) {
     while (current > 0) {
-      unsigned char *start = viewData_->song_->data_ + viewData_->songX_ +
-                             SONG_CHANNEL_COUNT * current;
+      unsigned char *start =
+          viewData_->song_->data_ + viewData_->songX_ + channelCount * current;
       if (*start == 0xFF) {
         current++;
         break;
@@ -507,10 +587,8 @@ void SongView::jumpToNextSection(int direction) {
 
   if ((current - viewData_->songOffset_ > 0x17) ||
       (current - viewData_->songOffset_ < 0)) {
-    viewData_->songOffset_ = current - 4;
-    if (viewData_->songOffset_ < 0) {
-      viewData_->songOffset_ = 0;
-    }
+    viewData_->SetSongOffset(
+        static_cast<uint32_t>(current > 4 ? current - 4 : 0));
   }
   viewData_->songY_ = current - viewData_->songOffset_;
   isDirty_ = true;
@@ -538,9 +616,33 @@ void SongView::ProcessButtonMask(unsigned short mask, bool pressed) {
     return;
   };
 
+  if (mask == (EPBM_ENTER | EPBM_PLAY)) {
+    SelectionResampleSupport::ClearProjectSamplePathError();
+    if (!selection_.active_) {
+      SelectionResampleSupport::ShowResampleError(*this,
+                                                  "Select rows to resample");
+      return;
+    }
+
+    SelectionResampleRequest request;
+    if (!BuildSelectionRenderRequest(request,
+                                     SelectionOutputIntent::ProjectSample)) {
+      const char *error = SelectionResampleSupport::GetProjectSamplePathError();
+      SelectionResampleSupport::ShowResampleError(
+          *this, error[0] != '\0' ? error : "Selection is not playable");
+      return;
+    }
+
+    if (SelectionResampleSupport::StartSelectionResample(*this, request)) {
+      clearSelection();
+    }
+    return;
+  }
+
   if (viewMode_ == VM_NEW) {
     if (mask == EPBM_ENTER) {
-      unsigned short next = viewData_->song_->chain_.GetNext();
+      unsigned char *current = viewData_->GetCurrentSongPointer();
+      uint16_t next = viewData_->song_->chain_.GetNextFrom(*current);
       if (next != NO_MORE_CHAIN) {
         setChain((unsigned char)next);
         isDirty_ = true;
@@ -558,20 +660,23 @@ void SongView::ProcessButtonMask(unsigned short mask, bool pressed) {
     }
   };
 
-  if (clipboard_.active_) {
+  if (selection_.active_) {
     viewMode_ = VM_SELECTION;
   };
   // Process selection related keys
 
   if (viewMode_ == VM_SELECTION) {
-    if (clipboard_.active_ == false) {
-      clipboard_.active_ = true;
-      clipboard_.x_ = viewData_->songX_;
-      clipboard_.y_ = viewData_->songY_;
-      clipboard_.offset_ = viewData_->songOffset_;
-      saveX_ = clipboard_.x_;
-      saveY_ = clipboard_.y_;
-      saveOffset_ = clipboard_.offset_;
+    if (selection_.active_ == false) {
+      selection_.active_ = true;
+      selection_.anchorX_ = viewData_->songX_;
+      selection_.anchorY_ = viewData_->songY_;
+      selection_.anchorOffset_ = viewData_->songOffset_;
+      selection_.cursorX_ = viewData_->songX_;
+      selection_.cursorY_ = viewData_->songY_;
+      selection_.cursorOffset_ = viewData_->songOffset_;
+      selection_.saveX_ = selection_.anchorX_;
+      selection_.saveY_ = selection_.anchorY_;
+      selection_.saveOffset_ = selection_.anchorOffset_;
     }
     processSelectionButtonMask(mask);
   } else {
@@ -580,6 +685,12 @@ void SongView::ProcessButtonMask(unsigned short mask, bool pressed) {
 
     viewMode_ = VM_NORMAL;
     processNormalButtonMask(mask);
+  }
+
+  if (selection_.active_ && hasFocus_) {
+    selection_.cursorX_ = viewData_->songX_;
+    selection_.cursorY_ = viewData_->songY_;
+    selection_.cursorOffset_ = viewData_->songOffset_;
   }
 }
 
@@ -720,8 +831,9 @@ void SongView::processNormalButtonMask(unsigned int mask) {
   }
 
   if ((!(mask & EPBM_ENTER)) && updatingChain_) {
+    const int channelCount = viewData_->song_->GetChannelCount();
     unsigned char *c = viewData_->song_->data_ + updateX_ +
-                       SONG_CHANNEL_COUNT * (viewData_->songOffset_ + updateY_);
+                       channelCount * (viewData_->songOffset_ + updateY_);
     viewData_->song_->chain_.SetUsed(*c);
     updatingChain_ = false;
   }
@@ -821,30 +933,28 @@ void SongView::DrawView() {
   // Prepare selection related information
 
   GUIRect selRect;
-  if (clipboard_.active_) {
-    selRect =
-        GUIRect(clipboard_.x_, clipboard_.y_ + clipboard_.offset_,
-                viewData_->songX_, viewData_->songY_ + viewData_->songOffset_);
-
-    selRect.Normalize();
+  if (selection_.active_) {
+    selRect = getSelectionRect();
   }
 
   // Draw title
-  SetColor(CD_NORMAL);
-
   Player *player = Player::GetInstance();
-
-  props.invert_ = true;
-  const char *buffer =
+  const char *modeLabel =
       ((player->GetSequencerMode() == SM_SONG) ? "Song" : "Live");
-  DrawString(pos._x, pos._y, buffer, props);
-
-  props.invert_ = false;
-
   Variable *v = viewData_->project_->FindVariable(FourCC::VarProjectName);
-
   etl::string<MAX_PROJECT_NAME_LENGTH> projectName = v->GetString();
-  DrawString(pos._x + 5, pos._y, projectName.c_str(), props);
+  etl::string<23> title(modeLabel);
+  title += ' ';
+  title += projectName;
+  setTitle(title);
+
+  // Draw hint for Live mode: EDIT+LEFT back to Song mode
+  if (player->GetSequencerMode() == SM_LIVE) {
+    SetColor(CD_INFO);
+    GUITextProperties props;
+    pos._y += 1;
+    DrawString(pos._x, pos._y, "(EDIT+LEFT back to Song)", props);
+  }
 
   // Compute song grid location
   GUIPoint anchor = GetAnchor();
@@ -854,10 +964,39 @@ void SongView::DrawView() {
   char row[3];
   pos = anchor;
   pos._x -= 3;
+  int32_t controlSurfaceSongWindowStart = -1;
+  int32_t controlSurfaceSongWindowEnd = -1;
+  MidiService *midiService = MidiService::GetInstance();
+  if (usbHostModeActive() && (player != nullptr) &&
+      (player->GetSequencerMode() == SM_LIVE) && (midiService != nullptr) &&
+      midiService->HasControlSurfaceSongWindow()) {
+    controlSurfaceSongWindowStart =
+        static_cast<int32_t>(midiService->GetControlSurfaceSongWindowOffset());
+    controlSurfaceSongWindowEnd =
+        controlSurfaceSongWindowStart +
+        static_cast<int32_t>(
+            midiService->GetControlSurfaceSongWindowRowCount()) -
+        1;
+  }
+  const int32_t controlSurfaceIndicatorX = anchor._x - 4;
   for (int j = 0; j < View::songRowCount_; j++) {
-    char p = j + viewData_->songOffset_;
-    ((p / ALT_ROW_NUMBER) % 2) ? SetColor(CD_ACCENT) : SetColor(CD_ACCENTALT);
-    hex2char(p, row);
+    const int32_t songRow = j + viewData_->songOffset_;
+    if ((songRow >= controlSurfaceSongWindowStart) &&
+        (songRow <= controlSurfaceSongWindowEnd)) {
+      const char *indicatorGlyph = kControlSurfaceWindowMiddleGlyph;
+      if (songRow == controlSurfaceSongWindowStart) {
+        indicatorGlyph = kControlSurfaceWindowTopGlyph;
+      } else if (songRow == controlSurfaceSongWindowEnd) {
+        indicatorGlyph = kControlSurfaceWindowBottomGlyph;
+      }
+      SetColor(CD_HILITE2);
+      DrawString(controlSurfaceIndicatorX, pos._y, indicatorGlyph, props);
+    }
+
+    const uint8_t rowValue = static_cast<uint8_t>(songRow);
+    ((songRow / ALT_ROW_NUMBER) % 2) ? SetColor(CD_ACCENT)
+                                     : SetColor(CD_ACCENTALT);
+    hex2char(rowValue, row);
     DrawString(pos._x, pos._y, row, props);
     pos._y += 1;
   }
@@ -865,22 +1004,23 @@ void SongView::DrawView() {
   SetColor(CD_NORMAL);
 
   pos = anchor;
+  const int channelCount = viewData_->song_->GetChannelCount();
   unsigned char *data =
-      viewData_->song_->data_ + (SONG_CHANNEL_COUNT * viewData_->songOffset_);
+      viewData_->song_->data_ + (channelCount * viewData_->songOffset_);
   short dx = 3;
   short dy = 1;
   for (int j = 0; j < View::songRowCount_; j++) {
 
     pos._x = anchor._x;
 
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    for (int i = 0; i < channelCount; i++) {
 
       bool invert = false;
 
       // see if we need to invert current step
       // if there's a selection or we are at cursor position
 
-      if (clipboard_.active_) {
+      if (selection_.active_) {
         if ((i >= selRect.Left()) && (i <= selRect.Right()) &&
             (j + viewData_->songOffset_ >= selRect.Top()) &&
             (j + viewData_->songOffset_ <= selRect.Bottom())) {
@@ -955,13 +1095,7 @@ void SongView::OnPlayerUpdate(PlayerEventType eventType, unsigned int tick) {
   // Set the consolidated flag for UI updates
   needsUIUpdate_ = true;
 
-  // Only set the play time update flag when not stopping
-  if (eventType != PET_STOP) {
-    needsPlayTimeUpdate_ = true;
-  }
-
-  // Create a memory barrier to ensure changes are visible across cores
-  createMemoryBarrier();
+  ScreenView::OnPlayerUpdate(eventType, tick);
 };
 
 void SongView::AnimationUpdate() {
@@ -986,16 +1120,6 @@ void SongView::AnimationUpdate() {
   if (needsUIUpdate_) {
     drawNotes();
 
-    // Only handle play time updates if needed
-    if (needsPlayTimeUpdate_) {
-      GUIPoint timePos = 0;
-      timePos._x = 27;
-      timePos._y += 1;
-      SetColor(CD_NORMAL);
-      drawPlayTime(player, timePos, props);
-      needsPlayTimeUpdate_ = false;
-    }
-
     // Handle position updates
     GUIPoint anchor = GetAnchor();
     GUIPoint pos = anchor;
@@ -1004,7 +1128,8 @@ void SongView::AnimationUpdate() {
     SetColor(CD_CURSOR);
 
     // Loop on all channels
-    for (int i = 0; i < SONG_CHANNEL_COUNT; i++) {
+    const int channelCount = viewData_->song_->GetChannelCount();
+    for (int i = 0; i < channelCount; i++) {
       // Clear all current positions
       int y = lastPlayedPosition_[i] - viewData_->songOffset_;
       if (y >= 0 && y < View::songRowCount_) {
@@ -1046,16 +1171,19 @@ void SongView::AnimationUpdate() {
           if (y >= 0 && y < View::songRowCount_) {
             pos._y = anchor._y + y;
             const char *indicator = player->GetLiveIndicator(i);
+            if ((indicator[0] == '-') || (indicator[0] == '_')) {
+              SetColor(CD_ACCENTALT);
+            } else {
+              SetColor(CD_ACCENT);
+            }
             DrawString(pos._x, pos._y, indicator, props);
+            SetColor(CD_CURSOR);
             lastQueuedPosition_[i] = player->GetQueuePosition(i);
           }
         }
       }
       pos._x += 3;
     }
-
-    // Create a memory barrier to ensure proper synchronization between cores
-    createMemoryBarrier();
 
     // Reset the consolidated flag
     needsUIUpdate_ = false;

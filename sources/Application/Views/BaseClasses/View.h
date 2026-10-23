@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _VIEW_H_
@@ -13,8 +17,11 @@
 #include "Application/Model/Config.h"
 #include "Application/Model/Project.h"
 #include "Application/Player/Player.h"
+#include "Application/ScreenConstants.h"
 #include "Application/Utils/mathutils.h"
 #include "Externals/etl/include/etl/delegate.h"
+#include "Externals/etl/include/etl/string.h"
+#include "Foundation/Types/Types.h"
 #include "I_Action.h"
 #include "UIFramework/Interfaces/I_GUIGraphics.h"
 #include "UIFramework/SimpleBaseClasses/GUIWindow.h"
@@ -47,10 +54,13 @@ enum ViewType {
   VT_PROJECT,
   VT_DEVICE,
   VT_INSTRUMENT,
+  VT_VOICE,
+  VT_LFO,
   VT_TABLE,  // Table screen under phrase
   VT_TABLE2, // Table screen under instrument
   VT_GROOVE,
   VT_MIXER,
+  VT_MASTER_EFFECTS,
   VT_IMPORT,            // Sample file import
   VT_INSTRUMENT_IMPORT, // Instrument file import
   VT_SELECTPROJECT,     // Select project
@@ -120,7 +130,8 @@ public:
 
   void ForceClear();
 
-  void ProcessButton(unsigned short mask, bool pressed);
+  void ProcessButton(unsigned short mask, unsigned short heldMask,
+                     bool pressed);
 
   void Redraw();
 
@@ -178,18 +189,24 @@ protected:
     *c = v;
   }
 
+  void setTitle(const etl::istring &title);
+
   GUIPoint GetAnchor();
   GUIPoint GetTitlePosition();
 
   void drawMap();
   void drawNotes();
   void drawBattery(GUITextProperties &props);
+  void drawTitlebar(GUITextProperties &props);
+  void printHelpLegend(TrackerCommand command, GUITextProperties props);
   void drawMasterVuMeter(Player *player, GUITextProperties props,
-                         bool forceRedraw = false, uint8_t xoffset = 24);
-  void drawPlayTime(Player *player, GUIPoint pos, GUITextProperties &props);
+                         bool forceRedraw = false, uint8_t xoffset = 24,
+                         uint8_t meterHeight = VU_METER_HEIGHT);
   void drawVUMeter(int32_t leftBars, int32_t rightBars, GUIPoint pos,
                    GUITextProperties props, int vuIndex,
-                   bool forceRedraw = false);
+                   bool forceRedraw = false,
+                   uint8_t meterHeight = VU_METER_HEIGHT);
+  void updateDeferredPlayButtonHold();
   void drawPowerButtonUI(GUITextProperties &props);
 
   static inline void amplitudeToBars(stereosample level, int32_t *left,
@@ -224,25 +241,36 @@ public: // temp hack for modl windo constructors
   int32_t prevRightVU_[SONG_CHANNEL_COUNT + 1];
 
   // Power button state
+  bool playButtonPressed_;
   bool powerButtonPressed_;
   int powerButtonHoldCount_;
+  bool deferredPlayButtonActive_;
+  bool deferredPlayButtonKillTriggered_;
+  uint16_t deferredPlayButtonMask_;
+  uint32_t deferredPlayButtonPressedAt_;
 
 private:
+  virtual bool ShouldDeferPlayButtonInput() const { return true; }
+  bool shouldDeferPlayButton(uint16_t mask) const;
+  bool handleDeferredPlayButton(uint16_t eventMask, uint16_t heldMask,
+                                bool pressed, bool playReleasedEvent);
+
+  void drawStatusIndicators(GUITextProperties &props);
+  void drawTitle();
+
   unsigned short mask_;
   bool locked_;
   static bool initPrivate_;
   ModalView *modalView_;
   ModalViewCallback modalViewCallback_;
 
+protected:
+  // 23 max len based on battery & other indicators size
+  etl::string<23> title_;
+
 public:
   static int margin_;
   static int songRowCount_;
-  static BatteryState batteryState_;
-
-private:
-  static BatteryState latestBatteryState_;
-  static uint32_t lastBatteryDisplayFrame_;
-  static bool batteryDisplayInitialized_;
 };
 
 #endif

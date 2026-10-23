@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 #include "tlv320aic3204.h"
 #include "gpio.h"
@@ -37,8 +41,9 @@ enum TLVInput { NONE, MIC, LINEIN } input = NONE;
 
 static uint8_t codecVolume = 100;
 static volatile char overrideSpkr = 0;
-static bool audioOutputActive = false;
-static void tlv320_update_amp_state(void);
+// Early boot fatal paths can power down before the codec has been brought out
+// of reset, so callers need a cheap init-state check before doing codec I2C.
+static bool codecInitialized = false;
 
 HAL_StatusTypeDef tlv320write(uint16_t reg, uint8_t value) {
   // Write to the register
@@ -74,26 +79,18 @@ HAL_StatusTypeDef tlv320read(uint8_t page, uint8_t reg, uint8_t *value) {
   return status;
 }
 
-static void tlv320_update_amp_state(void) {
-  GPIO_PinState ampState =
-      (output == SPKR && audioOutputActive) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-  HAL_GPIO_WritePin(AMP_EN_GPIO_Port, AMP_EN_Pin, ampState);
-}
-
-void tlv320_set_audio_output_active(bool active) {
-  if (audioOutputActive == active) {
-    return;
-  }
-  audioOutputActive = active;
-  tlv320_update_amp_state();
-}
-
 #define LINEINBASEHALFDB 12
 #define GAINMASK 0x3F
 #define PRESERVEMASK 0xC0
-#define MIC_GAIN_REGISTER 0x53 // Left ADC digital gain
+#define LEFT_ADC_DIGITAL_GAIN_REGISTER 0x53
+#define RIGHT_ADC_DIGITAL_GAIN_REGISTER 0x54
 
-static uint8_t clamp_half_db(int halfDb) {
+// Input gain paths differ by source. Line-in is analog, so its level is set on
+// the MICPGA analog volume registers. The onboard mic is a digital PDM mic; it
+// enters through the digital mic interface, bypassing the analog MICPGA path,
+// so mic level is controlled with the ADC digital volume registers.
+
+static uint8_t clamp_half_db(int32_t halfDb) {
   if (halfDb < 0) {
     return 0;
   }
@@ -104,15 +101,20 @@ static uint8_t clamp_half_db(int halfDb) {
 }
 
 static void tlv320_update_gain_register(uint8_t reg, uint8_t baseHalfDb,
-                                        int gainDb) {
+                                        int32_t gainDb) {
   uint8_t current = 0;
   if (tlv320read(0x01, reg, &current) != HAL_OK) {
     current = 0;
   }
-  const uint8_t desiredHalfDb = (uint8_t)baseHalfDb + gainDb * 2;
+  const int32_t desiredHalfDb = baseHalfDb + gainDb * 2;
   const uint8_t halfDbValue = clamp_half_db(desiredHalfDb);
   const uint8_t updated = (current & PRESERVEMASK) | (halfDbValue & GAINMASK);
   tlv320writepage(0x01, reg, updated);
+}
+
+static void tlv320_set_adc_digital_gain_db(uint8_t reg, int32_t gainDb) {
+  const uint8_t regValue = clamp_half_db(gainDb * 2);
+  tlv320writepage(0x00, reg, regValue);
 }
 
 void tlv320_reset() {
@@ -129,6 +131,7 @@ void tlv320_reset() {
 void tlv320_init() {
   // hardware reset device on start
   tlv320_reset();
+  codecInitialized = true;
   /*
 Assumption
 AVdd = 1.8V, DVdd = 1.8V
@@ -269,19 +272,19 @@ void tlv320_enable_spkr(void) {
 
   // Select Page 1
   tlv320write(0x00, 0x01);
-  // Route Right DAC negative to LOL
+  // Route the Right DAC negative output to LOL
   tlv320write(0x0e, 0x10);
-  // Route Right DAC to LOR
+  // Route the Right DAC positive output to LOR
   tlv320write(0x0f, 0x08);
 
   // Set the DAC PTM mode to PTM_P3 / 4
   tlv320write(0x03, 0x00);
   tlv320write(0x04, 0x00);
 
-  // Set the LOL gain to 0dB
-  tlv320write(0x12, 0x00);
-  // Set the LOR gain to 0dB
-  tlv320write(0x13, 0x00);
+  // Set both differential line drivers to the minimum unmuted gain for the
+  // noise-floor measurement. The signed 6-bit value 0x3a represents -6dB.
+  tlv320write(0x12, 0x3a);
+  tlv320write(0x13, 0x3a);
 
   // Power up LOL and LOR drivers
   tlv320write(0x09, 0x0c);
@@ -300,10 +303,14 @@ void tlv320_enable_spkr(void) {
 void tlv320_select_output(void) {
 
   uint8_t value;
-  tlv320read(0x00, 0x43, &value);
+  if (tlv320read(0x00, 0x43, &value) != HAL_OK) {
+    return;
+  }
 
-  enum TLVOutput previousOutput = output;
-  if (value & 0x20 || input == MIC) {
+  const bool headphonesConnected = (value & 0x20) != 0;
+  const bool speakerMustBeDisabled = headphonesConnected || input == MIC;
+
+  if (speakerMustBeDisabled) {
     if (output != HP) {
       tlv320_enable_hp();
       output = HP;
@@ -315,9 +322,11 @@ void tlv320_select_output(void) {
     }
   }
 
-  if (output != previousOutput) {
-    tlv320_update_amp_state();
-  }
+  // Disable the speaker for physical headphones or microphone recording to
+  // prevent feedback. Playback, silence, render, and line-in state must not
+  // cycle the speaker amplifier.
+  HAL_GPIO_WritePin(AMP_EN_GPIO_Port, AMP_EN_Pin,
+                    speakerMustBeDisabled ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 void tlv320_set_volume(uint8_t vol) {
@@ -344,6 +353,8 @@ uint8_t tlv320_get_volume(void) {
   }
   return reg - 155;
 };
+
+bool tlv320_is_initialized(void) { return codecInitialized; }
 
 void tlv320_mute(void) {
   // Select Page 0
@@ -392,6 +403,10 @@ void tlv320_enable_linein(void) {
   tlv320write(0x3c, 0x0c);
   // Select Page 0
   tlv320write(0x00, 0x00);
+  // Set Left & Right ADC digital gain
+  tlv320write(0x53, 0x00);
+  tlv320write(0x54, 0x00);
+  tlv320write(0x00, 0x00);
   // Power up Left and Right ADC Channels
   tlv320write(0x51, 0xc0);
   // Unmute Left and Right ADC Digital Volume Control.
@@ -409,6 +424,9 @@ void tlv320_enable_mic(void) {
   }
   // Select Page 1
   tlv320write(0x00, 0x01);
+  // The onboard mic is a digital PDM mic, so the analog input routing below is
+  // not in the active mic signal path once Page 0 Register 81 enables digital
+  // microphone mode.
   // Route IN2L to LEFT_P with 10K input impedance
   tlv320write(0x34, 0x10);
   // Route Common Mode to LEFT_M with impedance of 20K
@@ -424,6 +442,10 @@ void tlv320_enable_mic(void) {
 
   // Select Page 0
   tlv320write(0x00, 0x00);
+  // Set Left & Right ADC digital gain
+  tlv320write(0x53, 0x00);
+  tlv320write(0x54, 0x00);
+  tlv320write(0x00, 0x00);
 
   // Power up Left ADC Channels // GPIO serves as Digital Microphone Input //
   // Left Channel ADC configured for Digital Microphone
@@ -431,11 +453,11 @@ void tlv320_enable_mic(void) {
   // Unmute Left ADC Digital Volume Control.
   tlv320write(0x52, 0x08);
 
-  // Recheck output in case Speaker needs to be mutted
+  // Recheck output in case Speaker needs to be muted
   tlv320_select_output();
 }
 
-void tlv320_set_linein_gain_db(uint8_t gainDb) {
+void tlv320_set_linein_analog_gain_db(int32_t gainDb) {
   if (input != LINEIN) {
     return;
   }
@@ -443,13 +465,14 @@ void tlv320_set_linein_gain_db(uint8_t gainDb) {
   tlv320_update_gain_register(0x3c, LINEINBASEHALFDB, gainDb);
 }
 
-void tlv320_set_mic_gain_db(uint8_t gainDb) {
+void tlv320_set_mic_digital_gain_db(int32_t gainDb) {
   if (input != MIC) {
     return;
   }
-  // Register 0x53 encodes gain in 0.5dB steps with 0x00 = 0dB.
-  const uint8_t regValue = gainDb * 2;
-  tlv320writepage(0x00, MIC_GAIN_REGISTER, regValue);
+  // Mic input is mono on the left digital mic/ADC channel. This is ADC digital
+  // volume, not analog MICPGA gain; keep the unused right ADC at unity gain.
+  tlv320_set_adc_digital_gain_db(LEFT_ADC_DIGITAL_GAIN_REGISTER, gainDb);
+  tlv320_set_adc_digital_gain_db(RIGHT_ADC_DIGITAL_GAIN_REGISTER, 0);
 }
 
 void tlv320_disable_linein(void) {

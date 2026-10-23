@@ -1,20 +1,28 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SelectProjectView.h"
 #include "Application/AppWindow.h"
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Utils/DrawUtils.h"
+#include "Application/Views/BaseClasses/BrowserEntrySort.h"
 #include "Application/Views/ModalDialogs/MessageBox.h"
 #include "BaseClasses/ViewEvent.h"
+#include "Externals/etl/include/etl/string.h"
+#include "Externals/etl/include/etl/to_string.h"
 #include "Foundation/Constants/SpecialCharacters.h"
 #include "System/System/System.h"
+#include <cstring>
 #include <new>
 
 #define LIST_PAGE_SIZE (SCREEN_HEIGHT - 4)
@@ -22,6 +30,23 @@
 #define INVALID_PROJECT_NAME "INVALID NAME"
 #define DELETE_HOLD_MASK (EPBM_ALT | EPBM_PLAY | EPBM_EDIT)
 #define DELETE_HOLD_DURATION_MS 2000
+
+namespace {
+
+bool isDirectoryListTruncated(FileSystem *fs) {
+  return fs != nullptr &&
+         fs->GetLastListDirectoryStatus() == DirectoryListStatus::Truncated;
+}
+
+void showDirectoryListTruncatedDialog(View &view) {
+  etl::string<24> line("Showing first ");
+  etl::to_string(MAX_FILE_INDEX_SIZE, line, true);
+  MessageBox *mb =
+      MessageBox::Create(view, "Directory too large", line.c_str(), MBBF_OK);
+  view.DoModal(mb);
+}
+
+} // namespace
 
 class DeleteProjectConfirmModal : public ModalView {
 public:
@@ -183,7 +208,7 @@ static void DeleteProjectCallback(View &v, ModalView &dialog) {
 }
 
 SelectProjectView::SelectProjectView(GUIWindow &w, ViewData *viewData)
-    : ScreenView(w, viewData) {}
+    : ScreenView(w, viewData), fileEntries_(GetProjectBrowserFileEntries()) {}
 
 SelectProjectView::~SelectProjectView() {}
 
@@ -191,7 +216,8 @@ void SelectProjectView::Reset() {
   topIndex_ = 0;
   currentIndex_ = 0;
   selection_[0] = '\0';
-  fileIndexList_.clear();
+  currentDir_.clear();
+  fileEntries_.clear();
 }
 
 void SelectProjectView::DrawView() {
@@ -199,15 +225,9 @@ void SelectProjectView::DrawView() {
 
   GUITextProperties props;
   GUIPoint pos = GetTitlePosition();
-  SetColor(CD_NORMAL);
-
-  auto fs = FileSystem::GetInstance();
 
   // Draw title
-  const char *title = "Browse Projects";
-  SetColor(CD_INFO);
-  DrawString(pos._x + 1, pos._y, title, props);
-  SetColor(CD_NORMAL);
+  setTitle(etl::string<23>("Browse Projects"));
 
   // Draw projects
   int x = 1;
@@ -218,7 +238,7 @@ void SelectProjectView::DrawView() {
   const char *currentProject = projectName.c_str();
 
   for (size_t i = topIndex_;
-       i < topIndex_ + LIST_PAGE_SIZE && (i < fileIndexList_.size()); i++) {
+       i < topIndex_ + LIST_PAGE_SIZE && (i < fileEntries_.size()); i++) {
     if (i == currentIndex_) {
       SetColor(CD_HILITE2);
       props.invert_ = true;
@@ -229,10 +249,10 @@ void SelectProjectView::DrawView() {
 
     char buffer[MAX_PROJECT_NAME_LENGTH + 1];
     memset(buffer, '\0', sizeof(buffer));
-    unsigned fileIndex = fileIndexList_[i];
+    const auto &entry = fileEntries_[i];
 
-    if (fs->getFileType(fileIndex) == PFT_DIR) {
-      fs->getFileName(fileIndex, buffer, MAX_PROJECT_NAME_LENGTH + 1);
+    if (entry.name.size() <= MAX_PROJECT_NAME_LENGTH) {
+      std::strncpy(buffer, entry.name.c_str(), sizeof(buffer) - 1);
     }
     // SDFat lib doesn't truncate if filename longer than buffer as per docs but
     // instead returns empty string in buffer
@@ -268,7 +288,7 @@ void SelectProjectView::DrawView() {
 };
 
 void SelectProjectView::DrawScrollBar() {
-  int totalItems = fileIndexList_.size();
+  int totalItems = fileEntries_.size();
   if (totalItems <= LIST_PAGE_SIZE) {
     return; // no scrollbar needed
   }
@@ -365,7 +385,7 @@ void SelectProjectView::warpToNextProject(bool goUp) {
       }
     }
   } else {
-    if (currentIndex_ < fileIndexList_.size() - 1) {
+    if (currentIndex_ < fileEntries_.size() - 1) {
       currentIndex_++;
       // if we have scrolled off the bottom, page the file list down if not
       // at end of the list
@@ -379,35 +399,68 @@ void SelectProjectView::warpToNextProject(bool goUp) {
 
 void SelectProjectView::setCurrentFolder() {
   auto fs = FileSystem::GetInstance();
-  fs->chdir(PROJECTS_DIR);
-
-  // get ready
-  fileIndexList_.clear();
-
-  // Let's read all the directory in the project dir
-  fs->list(&fileIndexList_, "", true);
+  currentDir_ = PROJECTS_DIR;
+  fileEntries_.clear();
+  const bool listed =
+      fs->ListDirectory(currentDir_.c_str(), &fileEntries_, "", true);
+  const bool truncated = isDirectoryListTruncated(fs);
+  if (!listed && !truncated) {
+    topIndex_ = 0;
+    currentIndex_ = 0;
+    isDirty_ = true;
+    return;
+  }
+  if (truncated) {
+    Trace::Error("SELECTPROJECTVIEW: Truncated listing for %s",
+                 currentDir_.c_str());
+    showDirectoryListTruncatedDialog(*this);
+  }
 
   // Filter out "." and ".." along with the hidden default project entry
-  for (auto it = fileIndexList_.begin(); it != fileIndexList_.end();) {
-    fs->getFileName(*it, selection_, MAX_PROJECT_NAME_LENGTH + 1);
+  for (auto it = fileEntries_.begin(); it != fileEntries_.end();) {
+    const bool isUntitled = (it->name == UNNAMED_PROJECT_NAME);
 
-    const bool isDotEntry =
-        (strcmp(selection_, ".") == 0) || (strcmp(selection_, "..") == 0);
-    const bool isUntitled = (strcmp(selection_, UNNAMED_PROJECT_NAME) == 0);
-
-    if (isDotEntry || isUntitled) {
-      if (isUntitled) {
-        Trace::Log("SELECTPROJECTVIEW", "skipping untitled project on Index:%d",
-                   static_cast<int>(it - fileIndexList_.begin()));
-      }
-      it = fileIndexList_.erase(it);
+    if (isUntitled) {
+      Trace::Log("SELECTPROJECTVIEW", "skipping untitled project on Index:%d",
+                 static_cast<int>(it - fileEntries_.begin()));
+      it = fileEntries_.erase(it);
     } else {
-      ++it;
+      // Only show directories that contain ptsav.dat (Advance project marker).
+      // This prevents pico projects from being opened on the Advance.
+      FileSystemPath::PathString projectPath;
+      if (!FileSystemPath::JoinPath(PROJECTS_DIR, it->name.c_str(),
+                                    projectPath)) {
+        Trace::Log("SELECTPROJECTVIEW",
+                   "skipping project with unresolvable path on Index:%d",
+                   static_cast<int>(it - fileEntries_.begin()));
+        it = fileEntries_.erase(it);
+      } else {
+        FileSystemPath::PathString savePath;
+        if (!FileSystemPath::JoinPath(projectPath.c_str(), PROJECT_DATA_FILE,
+                                      savePath)) {
+          Trace::Log("SELECTPROJECTVIEW",
+                     "skipping project with unresolvable save path on Index:%d",
+                     static_cast<int>(it - fileEntries_.begin()));
+          it = fileEntries_.erase(it);
+        } else if (!fs->exists(savePath.c_str())) {
+          Trace::Log("SELECTPROJECTVIEW",
+                     "skipping pico project (no ptsav.dat): %s on Index:%d",
+                     it->name.c_str(),
+                     static_cast<int>(it - fileEntries_.begin()));
+          it = fileEntries_.erase(it);
+        } else {
+          ++it;
+        }
+      }
     }
   }
 
+  SortBrowserEntries(fileEntries_);
+
   // reset & redraw screen
-  currentIndex_ = std::min(currentIndex_, fileIndexList_.size() - 1);
+  if (!fileEntries_.empty()) {
+    currentIndex_ = std::min(currentIndex_, fileEntries_.size() - 1);
+  }
   topIndex_ = 0;
   currentIndex_ = 0;
   isDirty_ = true;
@@ -419,13 +472,16 @@ void SelectProjectView::getSelectedProjectName(char *name) {
 
 void SelectProjectView::getHighlightedProjectName(char *name) {
   name[0] = '\0';
-  if (currentIndex_ >= fileIndexList_.size()) {
+  if (currentIndex_ >= fileEntries_.size()) {
     return;
   }
 
-  auto fs = FileSystem::GetInstance();
-  unsigned fileIndex = fileIndexList_[currentIndex_];
-  fs->getFileName(fileIndex, name, MAX_PROJECT_NAME_LENGTH + 1);
+  const auto &entry = fileEntries_[currentIndex_];
+  if (entry.name.size() > MAX_PROJECT_NAME_LENGTH) {
+    return;
+  }
+  std::strncpy(name, entry.name.c_str(), MAX_PROJECT_NAME_LENGTH);
+  name[MAX_PROJECT_NAME_LENGTH] = '\0';
 }
 
 void SelectProjectView::SelectButton(int direction) {
@@ -434,19 +490,20 @@ void SelectProjectView::SelectButton(int direction) {
 }
 
 void SelectProjectView::LoadProject() {
-  if (currentIndex_ >= fileIndexList_.size()) {
+  if (currentIndex_ >= fileEntries_.size()) {
     return;
   }
 
   // all subdirs directly inside /project are expected to be projects
-  unsigned fileIndex = fileIndexList_[currentIndex_];
-  auto fs = FileSystem::GetInstance();
-  fs->getFileName(fileIndex, selection_, MAX_PROJECT_NAME_LENGTH + 1);
-  if (strlen(selection_) == 0) {
+  const auto &entry = fileEntries_[currentIndex_];
+  if (entry.name.size() > MAX_PROJECT_NAME_LENGTH) {
     Trace::Log("SELECTPROJECTVIEW",
-               "skipping too long project name on Index:%d", fileIndex);
+               "skipping too long project name on Index:%d",
+               static_cast<int>(currentIndex_));
     return;
   }
+  std::strncpy(selection_, entry.name.c_str(), MAX_PROJECT_NAME_LENGTH);
+  selection_[MAX_PROJECT_NAME_LENGTH] = '\0';
 
   Trace::Log("SELECTPROJECTVIEW", "Select Project:%s", selection_);
 
@@ -476,7 +533,7 @@ bool SelectProjectView::SelectionIsCurrentProject() {
 }
 
 void SelectProjectView::AttemptDeletingSelectedProject() {
-  if (currentIndex_ >= fileIndexList_.size()) {
+  if (currentIndex_ >= fileEntries_.size()) {
     return;
   }
 
@@ -503,7 +560,7 @@ void SelectProjectView::AttemptLoadingProject() {
     return;
   }
 
-  MessageBox *mb = MessageBox::Create(*this, "Load song and lose changes?",
+  MessageBox *mb = MessageBox::Create(*this, "Load song & lose changes ?",
                                       MBBF_YES | MBBF_NO);
   DoModal(mb, ModalViewCallback::create<&LoadProjectCallback>());
 }

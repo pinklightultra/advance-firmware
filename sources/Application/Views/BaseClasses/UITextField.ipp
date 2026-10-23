@@ -1,14 +1,25 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+ *
+ * Copyright (c) 2026 xiphonics, inc.
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
+ */
+
 #include "Application/AppWindow.h"
-#include "View.h"
 #include "Application/Utils/stringutils.h"
+#include "View.h"
 
 template <uint8_t MaxLength>
 UITextField<MaxLength>::UITextField(
     Variable &v, const GUIPoint &position,
     const etl::string<MAX_UITEXTFIELD_LABEL_LENGTH> &label, uint8_t fourcc,
-    etl::string<MaxLength> &defaultValue_)
+    const etl::string<MaxLength> &defaultValue_, bool clearDefaultOnFirstEdit)
     : UIField(position), src_(&v), label_(label), fourcc_(fourcc),
-      defaultValue_(defaultValue_) {}
+      defaultValue_(defaultValue_),
+      clearDefaultOnFirstEdit_(clearDefaultOnFirstEdit) {}
 
 template <uint8_t MaxLength> UITextField<MaxLength>::~UITextField(){};
 
@@ -68,7 +79,9 @@ template <uint8_t MaxLength> void UITextField<MaxLength>::OnClick() {
       reinterpret_cast<I_ObservableData *>(static_cast<uintptr_t>(fourcc_)));
 };
 
-template <uint8_t MaxLength> void UITextField<MaxLength>::OnEditClick() {
+template <uint8_t MaxLength> void UITextField<MaxLength>::OnEditClick() {}
+
+template <uint8_t MaxLength> void UITextField<MaxLength>::ProcessClear() {
   etl::string<MAX_VARIABLE_STRING_LENGTH> buffer(src_->GetString());
   if (currentChar_ > 0 && currentChar_ < buffer.length()) {
     buffer.erase(currentChar_, 1);
@@ -82,7 +95,13 @@ template <uint8_t MaxLength> void UITextField<MaxLength>::OnEditClick() {
 
 template <uint8_t MaxLength>
 void UITextField<MaxLength>::ProcessArrow(unsigned short mask) {
-  auto buffer(src_->GetString());
+  etl::string<MAX_VARIABLE_STRING_LENGTH> buffer(src_->GetString());
+  auto applyAndNotify = [&]() {
+    src_->SetString(buffer.c_str(), true);
+    SetChanged();
+    NotifyObservers(
+        reinterpret_cast<I_ObservableData *>(static_cast<uintptr_t>(fourcc_)));
+  };
 
   // If the variable's value is empty, we need to initialize it when the user
   // starts editing
@@ -90,44 +109,23 @@ void UITextField<MaxLength>::ProcessArrow(unsigned short mask) {
 
   switch (mask) {
   case EPBM_UP:
-    // If buffer is empty or matches default, initialize with 'A'
-    if (isEmptyBuffer || buffer.compare(defaultValue_) == 0) {
-      currentChar_ = 0;
-      buffer.clear();
-      buffer.append("A");
-      src_->SetString(buffer.c_str(), true);
-    } else {
-      buffer[currentChar_] = getNext(buffer.c_str()[currentChar_], false);
-      src_->SetString(buffer.c_str(), true);
-    }
-    SetChanged();
-    NotifyObservers(
-        reinterpret_cast<I_ObservableData *>(static_cast<uintptr_t>(fourcc_)));
-    break;
   case EPBM_DOWN:
-    // If buffer is empty or matches default, initialize with 'A'
-    if (isEmptyBuffer || buffer.compare(defaultValue_) == 0) {
+    if (isEmptyBuffer ||
+        (clearDefaultOnFirstEdit_ && buffer == defaultValue_)) {
+      // Seed text entry instead of editing placeholder/default seed values.
       currentChar_ = 0;
-      buffer.clear();
-      buffer.append("A");
-      src_->SetString(buffer.c_str(), true);
+      buffer = "A";
     } else {
-      buffer[currentChar_] = getNext((char)buffer.c_str()[currentChar_], true);
-      src_->SetString(buffer.c_str(), true);
+      buffer[currentChar_] = getNext(buffer[currentChar_], mask == EPBM_DOWN);
     }
-    SetChanged();
-    NotifyObservers(
-        reinterpret_cast<I_ObservableData *>(static_cast<uintptr_t>(fourcc_)));
+    applyAndNotify();
     break;
   case EPBM_LEFT:
     // If we're showing the default value and user presses left, initialize with
     // the default
     if (isEmptyBuffer) {
       buffer = defaultValue_;
-      src_->SetString(buffer.c_str(), true);
-      SetChanged();
-      NotifyObservers(reinterpret_cast<I_ObservableData *>(
-          static_cast<uintptr_t>(fourcc_)));
+      applyAndNotify();
     }
     if (currentChar_ > 0) {
       currentChar_--;
@@ -138,24 +136,23 @@ void UITextField<MaxLength>::ProcessArrow(unsigned short mask) {
     // with the default
     if (isEmptyBuffer) {
       buffer = defaultValue_;
-      src_->SetString(buffer.c_str(), true);
-      SetChanged();
-      NotifyObservers(reinterpret_cast<I_ObservableData *>(
-          static_cast<uintptr_t>(fourcc_)));
+      applyAndNotify();
     }
     if (currentChar_ < (buffer.length() - 1)) {
       currentChar_++;
       // -1 to allow for adding 1 more char
     } else if (currentChar_ < (MaxLength - 1)) {
       currentChar_++;
-      buffer.append("A");
-      src_->SetString(buffer.c_str(), true);
-      SetChanged();
-      NotifyObservers(reinterpret_cast<I_ObservableData *>(
-          static_cast<uintptr_t>(fourcc_)));
+      char str[2] = {static_cast<char>(lastUsedChar_), 0};
+      buffer.append(str);
+      applyAndNotify();
     }
     break;
   };
+
+  if (!buffer.empty()) {
+    lastUsedChar_ = buffer.back();
+  }
 };
 
 template <uint8_t MaxLength>

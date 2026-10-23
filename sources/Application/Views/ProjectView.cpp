@@ -1,20 +1,28 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "ProjectView.h"
+#include "Application/AppWindow.h"
 #include "Application/Model/Scale.h"
+#include "Application/Model/Song.h"
 #include "Application/Persistency/PersistencyService.h"
 #include "Application/Utils/randomnames.h"
+#include "Application/Views/BaseClasses/BrowserPathUtils.h"
 #include "Application/Views/ImportView.h"
 #include "Application/Views/ModalDialogs/MessageBox.h"
 #include "Application/Views/ModalDialogs/RenderProgressModal.h"
 #include "Application/Views/SampleEditorView.h"
+#include "Application/Views/SelectionResampleSupport.h"
 #include "BaseClasses/UIActionField.h"
 #include "BaseClasses/UIIntVarField.h"
 #include "BaseClasses/UIStaticField.h"
@@ -23,7 +31,31 @@
 #include "BaseClasses/ViewEvent.h"
 #include "Services/Midi/MidiService.h"
 #include "System/System/System.h"
-#include <nanoprintf.h>
+#include <etl/to_string.h>
+
+static void SaveAsOverwriteCallback(View &v, ModalView &dialog);
+
+static bool SaveAsProject(ProjectView &projectView) {
+  PersistencyService *persist = PersistencyService::GetInstance();
+  const auto projName = projectView.getProjectName();
+  const auto oldProjName = projectView.getOldProjectName();
+
+  if (persist->Save(projName.c_str(), oldProjName.c_str(), true) !=
+      PERSIST_SAVED) {
+    Trace::Error("failed to save renamed project %s [old: %s]",
+                 projName.c_str(), oldProjName.c_str());
+    return false;
+  }
+
+  if (persist->SaveProjectState(projName.c_str()) != PERSIST_SAVED) {
+    Trace::Error("Failed to save project state");
+    return false;
+  } else {
+    Trace::Log("PROJECTVIEW-STATIC", "SAVED_AS:%s", projName.c_str());
+    projectView.clearSaveAsFlag();
+  }
+  return true;
+}
 
 static void CreateNewProjectCallback(View &v, ModalView &dialog) {
   if (dialog.GetReturnCode() == MBL_YES) {
@@ -48,24 +80,11 @@ static void SaveAsOverwriteCallback(View &v, ModalView &dialog) {
     return;
   }
 
-  PersistencyService *persist = PersistencyService::GetInstance();
-  const char *projName = ((ProjectView &)v).getProjectName().c_str();
-  const char *oldProjName = ((ProjectView &)v).getOldProjectName().c_str();
-
-  if (persist->Save(projName, oldProjName, true) != PERSIST_SAVED) {
-    Trace::Error("failed to save renamed project %s [old: %s]", projName,
-                 oldProjName);
-    MessageBox *mb = MessageBox::Create(
-        ((ProjectView &)v), "Failed to save project", MBBF_OK | MBBF_CANCEL);
-    ((ProjectView &)v)
-        .DoModal(mb, ModalViewCallback::create<&SaveAsOverwriteCallback>());
-    return;
-  }
-  if (persist->SaveProjectState(projName) != PERSIST_SAVED) {
-    Trace::Error("Failed to save project state");
-  } else {
-    Trace::Log("PROJECTVIEW-STATIC", "OVERWROTE:%s", projName);
-    ((ProjectView &)v).clearSaveAsFlag(); // clear flag after saving
+  ProjectView &projectView = (ProjectView &)v;
+  if (!SaveAsProject(projectView)) {
+    MessageBox *mb = MessageBox::Create(projectView, "Failed to save project",
+                                        MBBF_OK | MBBF_CANCEL);
+    projectView.DoModal(mb);
   }
 }
 
@@ -81,45 +100,6 @@ static void PurgeInstrumentsCallback(View &v, ModalView &dialog) {
   }
 };
 
-static void RenderStopCallback(View &v, ModalView &dialog) {
-  // If the user clicked OK, stop the rendering
-  if (dialog.GetReturnCode() == MBL_OK) {
-    Player *player = Player::GetInstance();
-    if (player->IsRunning()) {
-      player->Stop();
-
-      // Show cancellation message
-      MessageBox *cancelDialog =
-          MessageBox::Create(((ProjectView &)v), "Rendering Stopped", MBBF_OK);
-      ((ProjectView &)v).DoModal(cancelDialog);
-    }
-  }
-}
-
-bool ProjectView::canRenderFromFirstSongRow() const {
-  if (project_ == nullptr) {
-    return false;
-  }
-
-  const unsigned char *songRow = project_->song_.data_;
-  for (int channel = 0; channel < SONG_CHANNEL_COUNT; channel++) {
-    const unsigned char chain = songRow[channel];
-    if (chain == EMPTY_SONG_VALUE) {
-      continue;
-    }
-
-    for (int phrase = 0; phrase < PHRASES_PER_CHAIN; phrase++) {
-      const unsigned char phraseId =
-          project_->song_.chain_.data_[chain * PHRASES_PER_CHAIN + phrase];
-      if (phraseId != EMPTY_SONG_VALUE) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
 
   lastClock_ = 0;
@@ -131,20 +111,13 @@ ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
 
   Variable *v = project_->FindVariable(FourCC::VarTempo);
   tempoField_.emplace_back(FourCC::ActionTempoChanged, position, *v,
-                           "tempo: %d [%2.2X]  ", MIN_TEMPO, MAX_TEMPO, 1, 10);
+                           "Tempo: %d [%2.2X]  ", MIN_TEMPO, MAX_TEMPO, 1, 10);
   fieldList_.insert(fieldList_.end(), &(*tempoField_.rbegin()));
   (*tempoField_.rbegin()).AddObserver(*this);
 
-#ifndef ADV
-  v = project_->FindVariable(FourCC::VarMasterVolume);
-  position._y += 1;
-  intVarField_.emplace_back(position, *v, "master vol: %d%%", 0, 100, 1, 5);
-  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
-#endif
-
   v = project_->FindVariable(FourCC::VarTranspose);
   position._y += 1;
-  intVarField_.emplace_back(position, *v, "transpose: %3.2d", -48, 48, 0x1,
+  intVarField_.emplace_back(position, *v, "Transpose: %3.2d", -48, 48, 0x1,
                             0xC);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
 
@@ -154,13 +127,13 @@ ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
     v->SetInt(0);
   }
   position._y += 1;
-  intVarField_.emplace_back(position, *v, "scale: %s", 0, numScales - 1, 1, 10);
+  intVarField_.emplace_back(position, *v, "Scale: %s", 0, numScales - 1, 1, 10);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
 
   // Add Scale Root field
   position._y += 1;
   v = project_->FindVariable(FourCC::VarScaleRoot);
-  intVarField_.emplace_back(position, *v, "scale root: %s", 0, 11, 1, 1);
+  intVarField_.emplace_back(position, *v, "Scale Root: %s", 0, 11, 1, 1);
   fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
 
   position._y += 2;
@@ -180,13 +153,11 @@ ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
   fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
   (*actionField_.rbegin()).AddObserver(*this);
 
-#ifdef ADV
   position._y += 1;
   actionField_.emplace_back("Recording", FourCC::ActionShowRecordView,
                             position);
   fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
   (*actionField_.rbegin()).AddObserver(*this);
-#endif
 
   position._y += 2;
 
@@ -195,11 +166,11 @@ ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
 
   v = project_->FindVariable(FourCC::VarProjectName);
   auto label =
-      etl::make_string_with_capacity<MAX_UITEXTFIELD_LABEL_LENGTH>("project: ");
+      etl::make_string_with_capacity<MAX_UITEXTFIELD_LABEL_LENGTH>("Project: ");
   auto defaultName = etl::make_string_with_capacity<MAX_PROJECT_NAME_LENGTH>(
       UNNAMED_PROJECT_NAME);
   textField_.emplace_back(*v, position, label, FourCC::ActionProjectRename,
-                          defaultName);
+                          defaultName, true);
   nameField_ = &(*textField_.rbegin());
 
   nameField_->AddObserver(*this);
@@ -230,18 +201,21 @@ ProjectView::ProjectView(GUIWindow &w, ViewData *data) : FieldView(w, data) {
   position._y += 2;
 
   // Add a static field as a label for the render actions
+  renderLabelPos_ = position;
   staticField_.emplace_back(position, "Render:");
   fieldList_.insert(fieldList_.end(), &(*staticField_.rbegin()));
 
-  // Position the Mixdown action field to the right of the label
-  position._x += 8;
+  // Position the Mixdown action field on the line below the label
+  position._y += 1;
   actionField_.emplace_back("Mixdown", FourCC::ActionRenderMixdown, position);
   fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
+  mixdownField_ = &(*actionField_.rbegin());
   (*actionField_.rbegin()).AddObserver(*this);
 
   position._x += 8;
   actionField_.emplace_back("Stems", FourCC::ActionRenderStems, position);
   fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
+  stemsField_ = &(*actionField_.rbegin());
   (*actionField_.rbegin()).AddObserver(*this);
   position._x = xalign;
 }
@@ -299,21 +273,74 @@ void ProjectView::DrawView() {
   Clear();
 
   GUITextProperties props;
-  GUIPoint pos = GetTitlePosition();
-
-  SetColor(CD_NORMAL);
 
   // Draw title
-  const char *title = "Project ";
-  DrawString(pos._x, pos._y, title, props);
-
   Variable *v = viewData_->project_->FindVariable(FourCC::VarProjectName);
   etl::string<MAX_PROJECT_NAME_LENGTH> projectName = v->GetString();
-  DrawString(pos._x + strlen(title), pos._y, projectName.c_str(), props);
+  etl::string<23> title("Project ");
+  title += projectName;
+  setTitle(title);
 
-  FieldView::Redraw();
+  GUIRect selectionRect;
+  bool hasSelection =
+      static_cast<AppWindow &>(w_).GetSongSelectionRect(selectionRect);
+  // Always remove Mixdown/Stems first then we add then back below only if
+  // there is a active selection on the Song screen
+  fieldList_.remove(mixdownField_);
+  fieldList_.remove(stemsField_);
+  if (!hasSelection) {
+    // No selection: show "No Selection" on Render line
+    if (GetFocus() == mixdownField_ || GetFocus() == stemsField_) {
+      ClearFocus();
+    }
+    FieldView::Redraw();
+    GUIPoint noSelPos = renderLabelPos_;
+    noSelPos._x += 8;
+    SetColor(CD_NORMAL);
+    w_.DrawString("[No Selection]", noSelPos, props);
+  } else {
+    fieldList_.push_back(mixdownField_);
+    fieldList_.push_back(stemsField_);
+    FieldView::Redraw();
+    DrawRenderSelectionSummary(selectionRect);
+  }
   drawMap();
 };
+
+void ProjectView::DrawRenderSelectionSummary(const GUIRect &selectionRect) {
+  const int32_t startRow = static_cast<int32_t>(selectionRect.Top());
+  const int32_t endRow = static_cast<int32_t>(selectionRect.Bottom());
+  const int32_t left = static_cast<int32_t>(selectionRect.Left());
+  const int32_t right = static_cast<int32_t>(selectionRect.Right());
+
+  etl::string<10> rowText("Row[");
+  etl::format_spec rowFormat;
+  rowFormat.hex().upper_case(true).width(2).fill('0');
+  etl::to_string(startRow, rowText, rowFormat, true);
+  rowText += '-';
+  etl::to_string(endRow, rowText, rowFormat, true);
+  rowText += ']';
+
+  const uint8_t channelCount = viewData_->song_->GetChannelCount();
+  const int32_t lastChannel = channelCount > 0 ? channelCount - 1 : 0;
+  const int32_t startChannel = std::max(int32_t{0}, left);
+  const int32_t endChannel = std::min(right, lastChannel);
+  etl::string<7> channelText("Ch[");
+  etl::to_string(startChannel + 1, channelText, true);
+  channelText += '-';
+  etl::to_string(endChannel + 1, channelText, true);
+  channelText += ']';
+
+  SetColor(CD_NORMAL);
+  GUITextProperties props;
+
+  GUIPoint renderSelectionInfoPos = renderLabelPos_;
+  renderSelectionInfoPos._x += 8;
+  w_.DrawString(rowText.c_str(), renderSelectionInfoPos, props);
+
+  renderSelectionInfoPos._x += 11;
+  w_.DrawString(channelText.c_str(), renderSelectionInfoPos, props);
+}
 
 void ProjectView::Update(Observable &, I_ObservableData *data) {
 
@@ -371,15 +398,12 @@ void ProjectView::Update(Observable &, I_ObservableData *data) {
         DoModal(mb, ModalViewCallback::create<&SaveAsOverwriteCallback>());
         return;
       }
-      if (persist->Save(projName, oldProjName_.c_str(), saveAsFlag_) !=
-          PERSIST_SAVED) {
-        Trace::Error("failed to save project state");
+      if (!SaveAsProject(*this)) {
         MessageBox *mb =
             MessageBox::Create(*this, "Error saving Project", MBBF_OK);
         DoModal(mb);
-        return;
       }
-      clearSaveAsFlag();
+      return;
     } else {
       if (persist->Save(projName, oldProjName_.c_str(), saveAsFlag_) !=
           PERSIST_SAVED) {
@@ -431,71 +455,63 @@ void ProjectView::Update(Observable &, I_ObservableData *data) {
     break;
   case FourCC::ActionRenderMixdown:
     if (!player->IsRunning()) {
-      if (!canRenderFromFirstSongRow()) {
-        MessageBox *mb =
-            MessageBox::Create(*this, "      Render failed",
-                               "Song row 00 has no phrases", MBBF_OK);
+      SelectionResampleRequest request;
+      if (!static_cast<AppWindow &>(w_).BuildSongSelectionRenderRequest(
+              request, SelectionOutputIntent::Mixdown)) {
+        const char *error =
+            SelectionResampleSupport::GetProjectSamplePathError();
+        MessageBox *mb = MessageBox::Create(
+            *this, "      Render failed",
+            error[0] != '\0' ? error : "Select rows in Song view first",
+            MBBF_OK);
         DoModal(mb);
         break;
       }
-      // Show a dialog with a Stop button during rendering
-      RenderProgressModal *renderDialog = RenderProgressModal::Create(
-          *this, "Rendering", "",
-          RenderProgressModal::ProgressDisplayMode::SongPercent);
-      DoModal(renderDialog, ModalViewCallback::create<&RenderStopCallback>());
-
-      // Start playback in rendering mode with MSM_FILE
-      player->Start(PM_SONG, true, MSM_FILE, true);
+      SelectionResampleSupport::StartSelectionResample(*this, request);
     }
     break;
   case FourCC::ActionRenderStems:
     if (!player->IsRunning()) {
-      if (!canRenderFromFirstSongRow()) {
-        MessageBox *mb =
-            MessageBox::Create(*this, "      Render failed",
-                               "Song row 00 has no phrases", MBBF_OK);
+      SelectionResampleRequest request;
+      if (!static_cast<AppWindow &>(w_).BuildSongSelectionRenderRequest(
+              request, SelectionOutputIntent::Stems)) {
+        const char *error =
+            SelectionResampleSupport::GetProjectSamplePathError();
+        MessageBox *mb = MessageBox::Create(
+            *this, "      Render failed",
+            error[0] != '\0' ? error : "Select rows in Song view first",
+            MBBF_OK);
         DoModal(mb);
         break;
       }
-      // Show a dialog with a Stop button during rendering
-      RenderProgressModal *renderDialog = RenderProgressModal::Create(
-          *this, "Stems Rendering", "",
-          RenderProgressModal::ProgressDisplayMode::SongPercent);
-      DoModal(renderDialog, ModalViewCallback::create<&RenderStopCallback>());
-
-      // Start playback in rendering mode with MSM_FILESPLIT
-      player->Start(PM_SONG, true, MSM_FILESPLIT, true);
+      SelectionResampleSupport::StartSelectionResample(*this, request);
     }
     break;
   case FourCC::ActionShowRecordView:
     switchToRecordView();
     break;
-  case FourCC::ActionImport:
+  case FourCC::ActionImport: {
     // Switch to the ImportView **BUT** to show the Project Pool by default
-    if (!player->IsRunning()) {
-      // First check if the samplelib exists
-      bool samplelibExists = FileSystem::GetInstance()->exists(SAMPLES_LIB_DIR);
+    // First check if the samplelib exists
+    bool samplelibExists = FileSystem::GetInstance()->exists(SAMPLES_LIB_DIR);
 
-      if (!samplelibExists) {
-        MessageBox *mb =
-            MessageBox::Create(*this, "Can't access the samplelib", MBBF_OK);
-        DoModal(mb);
-      } else {
-        ImportView::SetSourceViewType(VT_PROJECT);
-        // Set to show project pool dir in ImportView
-        viewData_->isShowingSampleEditorProjectPool = true;
-
-        // Go to import sample
-        ViewType vt = VT_IMPORT;
-        ViewEvent ve(VET_SWITCH_VIEW, &vt);
-        SetChanged();
-        NotifyObservers(&ve);
-      }
-    } else {
-      MessageBox *mb = MessageBox::Create(*this, "Not while playing", MBBF_OK);
+    if (!samplelibExists) {
+      MessageBox *mb =
+          MessageBox::Create(*this, "Can't access the samplelib", MBBF_OK);
       DoModal(mb);
+    } else {
+      ImportView::SetSourceViewType(VT_PROJECT);
+      // Set to show project pool dir in ImportView
+      viewData_->isShowingSampleEditorProjectPool = true;
+
+      // Go to import sample
+      ViewType vt = VT_IMPORT;
+      ViewEvent ve(VET_SWITCH_VIEW, &vt);
+      SetChanged();
+      NotifyObservers(&ve);
     }
     break;
+  }
   default:
     NInvalid;
     break;

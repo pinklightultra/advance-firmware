@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "SampleInstrument.h"
@@ -373,6 +377,7 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
   // Get Rendering params for current voice & fill init data
 
   renderParams *rp = renderParams_ + channel;
+  const bool resumePosition = (!cleanstart) && (!rp->finished_);
 
   rp->midiNote_ = midinote;
 
@@ -463,7 +468,9 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
     // travel slower in sample
 
     rp->rendFirst_ = start_.GetInt();
-    rp->position_ = float(rp->rendFirst_);
+    if (!resumePosition) {
+      rp->position_ = float(rp->rendFirst_);
+    }
     rp->baseSpeed_ = fl2fp(source_->GetSampleRate(rp->midiNote_) / driverRate);
     rp->reverse_ = (rp->rendLoopEnd_ < rp->position_);
 
@@ -486,7 +493,7 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
       };
       rp->baseSpeed_ = fl2fp((freq * length) / driverRate);
       rp->rendFirst_ = rp->rendLoopStart_;
-      if (cleanstart) {
+      if (!resumePosition) {
         rp->position_ = float(rp->rendFirst_);
       }
       break;
@@ -502,7 +509,7 @@ bool SampleInstrument::Start(int channel, unsigned char midinote,
     sampleCount *= (6 * 16);
     rp->baseSpeed_ = fl2fp(length / float(sampleCount));
     rp->rendFirst_ = rp->rendLoopStart_;
-    if (cleanstart) {
+    if (!resumePosition) {
       rp->position_ = float(rp->rendFirst_);
     }
     break;
@@ -610,9 +617,8 @@ void SampleInstrument::doKRateUpdate(int channel) {
 
 // Size in samples
 
-bool SampleInstrument::Render(int channel, fixed *buffer, int size,
+bool SampleInstrument::Render(int channel, AudioSample *buffer, int size,
                               bool updateTick) {
-
   bool somethingToMix = false;
 
   // Get Current render parameters
@@ -627,7 +633,7 @@ bool SampleInstrument::Render(int channel, fixed *buffer, int size,
 
     // clear the fixed point buffer
 
-    memset(buffer, 0, size * 2 * sizeof(fixed));
+    memset(buffer, 0, size * 2 * sizeof(AudioSample));
 
     bool hasUpdaters = !(rp->activeUpdaters_.empty());
 
@@ -722,7 +728,7 @@ bool SampleInstrument::Render(int channel, fixed *buffer, int size,
 
     int count = size; // number of samples to treat
 
-    fixed *result = buffer;
+    AudioSample *result = buffer;
 
     // Get volume factor and pan
 
@@ -1049,8 +1055,8 @@ bool SampleInstrument::Render(int channel, fixed *buffer, int size,
         s2 = fp_mul(s2, fixedpanl);
         t2 = fp_mul(t2, fixedpanr);
 
-        *result++ = s2;
-        *result++ = t2;
+        *result++ = static_cast<AudioSample>(fp2i(s2)) / kAudioPcmScale;
+        *result++ = static_cast<AudioSample>(fp2i(t2)) / kAudioPcmScale;
 
         // Computes new pos for next input sample
         // fpPos is always relative to 'input' pointer
@@ -1075,6 +1081,41 @@ bool SampleInstrument::Render(int channel, fixed *buffer, int size,
 
   return somethingToMix;
 };
+
+bool SampleInstrument::GetPlaybackPosition(int channel,
+                                           uint32_t &position) const {
+  position = 0;
+  if (channel < 0 || channel >= SONG_CHANNEL_COUNT || !source_) {
+    return false;
+  }
+
+  const renderParams &rp = renderParams_[channel];
+  if (rp.finished_ || rp.sampleBuffer_ == nullptr) {
+    return false;
+  }
+
+  int sampleSize = source_->GetSize(rp.midiNote_);
+  if (sampleSize <= 0) {
+    return false;
+  }
+
+  float samplePosition = rp.position_;
+  if (samplePosition < 0.0f) {
+    samplePosition = 0.0f;
+  }
+
+  uint32_t maxPosition = static_cast<uint32_t>(sampleSize - 1);
+  if (samplePosition >= static_cast<float>(sampleSize)) {
+    position = maxPosition;
+    return true;
+  }
+
+  position = static_cast<uint32_t>(samplePosition);
+  if (position > maxPosition) {
+    position = maxPosition;
+  }
+  return true;
+}
 
 void SampleInstrument::AssignSample(int i) {
 
@@ -1173,14 +1214,15 @@ void SampleInstrument::Update(Observable &o, I_ObservableData *d) {
   };
 };
 
-void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
+void SampleInstrument::ProcessCommand(int channel, TrackerCommand cc,
+                                      ushort value) {
 
   renderParams *rp = renderParams_ + channel;
   if (!source_)
     return;
 
   switch (cc) {
-  case FourCC::InstrumentCommandLoopOfset:
+  case TrackerCommand::InstrumentCommandLoopOfset:
 
     if (value > 0x8000) {
       value = 0x10000 - value;
@@ -1196,7 +1238,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
     break;
 
-  case FourCC::InstrumentCommandPlayOfset: {
+  case TrackerCommand::InstrumentCommandPlayOfset: {
     if (!source_)
       return;
     int wavSize = source_->GetSize(rp->midiNote_);
@@ -1218,7 +1260,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     rp->couldClick_ = SHOULD_KILL_CLICKS;
   } break;
 
-  case FourCC::InstrumentCommandArpeggiator: {
+  case TrackerCommand::InstrumentCommandArpeggiator: {
     rp->arp_.SetData(value);
     if (!rp->arp_.Enabled()) {
       rp->arp_.Enable();
@@ -1226,7 +1268,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   } break;
 
-  case FourCC::InstrumentCommandVolume: {
+  case TrackerCommand::InstrumentCommandVolume: {
     float targetVolume = float(value & 0xFF);
     float speed = float(value >> 8);
     float startVolume = fp2fl(rp->volume_);
@@ -1244,7 +1286,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   } break;
 
-  case FourCC::InstrumentCommandPan: {
+  case TrackerCommand::InstrumentCommandPan: {
     float targetPan = float(value & 0xFF);
     if (targetPan == 0xFF) {
       targetPan = 0xFE;
@@ -1263,7 +1305,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   } break;
 
-  case FourCC::InstrumentCommandFilterCut: {
+  case TrackerCommand::InstrumentCommandFilterCut: {
     float target = float(value & 0xFF) / 255.0f;
     float speed = float(value >> 8);
     float start = fp2fl(rp->cutoff_);
@@ -1279,7 +1321,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   } break;
 
-  case FourCC::InstrumentCommandFilterResonance: {
+  case TrackerCommand::InstrumentCommandFilterResonance: {
     float target = float(value & 0xFF) / 255.0f;
     float speed = float(value >> 8);
     float start = fp2fl(rp->reso_);
@@ -1294,7 +1336,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
       rp->activeUpdaters_.push_back(&rp->resRamp_);
     }
   } break;
-  case FourCC::InstrumentCommandPitchSlide: {
+  case TrackerCommand::InstrumentCommandPitchSlide: {
     int pitch = (char)(value & 0xFF); // number of semi tones
     float speed = float(value >> 8);  // get speed parameter
     if (pitch > 127)
@@ -1320,7 +1362,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   }; break;
 
-  case FourCC::InstrumentCommandLegato: {
+  case TrackerCommand::InstrumentCommandLegato: {
     int pitch = (char)(value & 0xFF); // number of semi tones
     float speed = float(value >> 8);  // get speed parameter
 
@@ -1353,7 +1395,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   }; break;
 
-  case FourCC::InstrumentCommandPitchFineTune: {
+  case TrackerCommand::InstrumentCommandPitchFineTune: {
 
     float semi = (value & 0xFF) / float(0x80); // number of semi tones
     if (semi > 1)
@@ -1378,7 +1420,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
   }; break;
 
-  case FourCC::InstrumentCommandRetrigger: {
+  case TrackerCommand::InstrumentCommandRetrigger: {
     unsigned char loop = (value & 0xFF); // number of ticks before repeat
     unsigned char offset =
         (value >> 8); // number of ticks to offset at each repeat
@@ -1392,7 +1434,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
       rp->retrig_ = false;
     }
   } break;
-  case FourCC::InstrumentCommandLowPassFilter: {
+  case TrackerCommand::InstrumentCommandLowPassFilter: {
     float cut =
         (value >> 8) / 255.0f; // cutoff frequency (FF=all pass, 0=none pass)
     float res =
@@ -1425,7 +1467,7 @@ void SampleInstrument::ProcessCommand(int channel, FourCC cc, ushort value) {
     }
 
   } break;
-  case FourCC::InstrumentCommandCrush: {
+  case TrackerCommand::InstrumentCommandCrush: {
     unsigned char drive = (value >> 8);
     unsigned char crush = (value & 0x0F);
     if (drive > 0)
@@ -1590,12 +1632,14 @@ void SampleInstrument::GetTableState(TableSaveState &state) {
   memcpy(state.hopCount_, tableState_.hopCount_,
          sizeof(uchar) * TABLE_STEPS * 3);
   memcpy(state.position_, tableState_.position_, sizeof(int) * 3);
+  state.groove_ = tableState_.groove_;
 };
 
 void SampleInstrument::SetTableState(TableSaveState &state) {
   memcpy(tableState_.hopCount_, state.hopCount_,
          sizeof(uchar) * TABLE_STEPS * 3);
   memcpy(tableState_.position_, state.position_, sizeof(int) * 3);
+  tableState_.groove_ = state.groove_;
 };
 
 bool SampleInstrument::IsMulti() { return source_->IsMulti(); }

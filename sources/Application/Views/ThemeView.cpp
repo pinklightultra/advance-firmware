@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "ThemeView.h"
@@ -36,7 +40,7 @@ ThemeView::ThemeView(GUIWindow &w, ViewData *data)
 
   auto config = Config::GetInstance();
 
-  // Add import/export buttons at the top
+  // Add theme action buttons at the top
   GUIPoint actionPos = position;
 
   actionPos._y -= 1;
@@ -49,22 +53,14 @@ ThemeView::ThemeView(GUIWindow &w, ViewData *data)
   actionField_.emplace_back("Export", FourCC::ActionExport, actionPos);
   fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
   (*actionField_.rbegin()).AddObserver(*this);
+
+  actionPos._x += 8;
+  actionField_.emplace_back("Reset", FourCC::ActionResetTheme, actionPos);
+  fieldList_.insert(fieldList_.end(), &(*actionField_.rbegin()));
+  (*actionField_.rbegin()).AddObserver(*this);
   actionPos._y += 1;
 
-  // Font selection
-  // BUT Not on the Advance where there is currently only a single font
-#ifndef ADV
-  position._y = FONT_FIELD_LINE;
-  Variable *fontVar = config->FindVariable(FourCC::VarUIFont);
-  intVarField_.emplace_back(position, *fontVar, "Font: %s", 0,
-                            ThemeConstants::FONT_COUNT - 1, 1,
-                            ThemeConstants::FONT_COUNT - 1);
-  fieldList_.insert(fieldList_.end(), &(*intVarField_.rbegin()));
-  (*intVarField_.rbegin()).AddObserver(*this);
-  position._y += 2;
-#else
   position._y += 1;
-#endif
 
   // Get the current theme name from Config
   Variable *configThemeVar = config->FindVariable(FourCC::VarThemeName);
@@ -188,14 +184,6 @@ void ThemeView::DrawView() {
   Clear();
 
   GUITextProperties props;
-  GUIPoint pos = GetTitlePosition();
-
-  // Draw title
-  char titleString[SCREEN_WIDTH];
-  strcpy(titleString, "Theme Settings");
-
-  SetColor(CD_NORMAL);
-  DrawString(pos._x, pos._y, titleString, props);
 
   // bit of a hack needed for font change as going from "standard" to "bold"
   // will leave behind partial characters due to different width of those string
@@ -207,6 +195,9 @@ void ThemeView::DrawView() {
   // just draw the RGB column headings directly:
   GUITextProperties headerProps;
   DrawString(17, 6, "R  G  B", headerProps);
+
+  SetColor(CD_INFO);
+  DrawString(0, 22, "(NAV+LEFT return to Device)", props);
 }
 
 void ThemeView::addSwatchField(ColorDefinition color, GUIPoint position) {
@@ -361,6 +352,16 @@ void ThemeView::Update(Observable &o, I_ObservableData *d) {
     handleThemeExport();
     return;
   }
+  case FourCC::ActionResetTheme: {
+    MessageBox *mb =
+        MessageBox::Create(*this, "Reset to default theme?",
+                           "Existing theme will be lost", MBBF_YES | MBBF_NO);
+    DoModal(
+        mb,
+        ModalViewCallback::create<ThemeView, &ThemeView::onConfirmResetTheme>(
+            *this));
+    return;
+  }
   // Handle theme name field
   case FourCC::ActionThemeName: {
     // Update the export theme name
@@ -453,6 +454,22 @@ void ThemeView::onConfirmThemeOverwrite(View &, ModalView &dialog) {
   }
 }
 
+void ThemeView::onConfirmResetTheme(View &, ModalView &dialog) {
+  if (dialog.GetReturnCode() == MBL_YES) {
+    resetThemeToDefaults();
+  }
+}
+
+void ThemeView::resetThemeToDefaults() {
+  Config *config = Config::GetInstance();
+  config->ResetTheme();
+  ((AppWindow &)w_).UpdateColorsFromConfig();
+  syncFieldsFromConfig();
+  configDirty_ = true;
+  _forceRedraw = true;
+  isDirty_ = true;
+}
+
 void ThemeView::exportThemeWithName(const char *themeName, bool overwrite) {
   // Export the theme using Config
   Config *config = Config::GetInstance();
@@ -480,6 +497,8 @@ void ThemeView::exportThemeWithName(const char *themeName, bool overwrite) {
 }
 
 void ThemeView::OnFocus() {
+  setTitle(etl::string<23>("Theme Settings"));
+
   // Refresh local field state from Config when returning from theme import.
   syncFieldsFromConfig();
   _forceRedraw = true;
@@ -519,10 +538,11 @@ void ThemeView::importTheme() {
 void ThemeView::AnimationUpdate() {
   if (_forceRedraw) {
     ForceClear();
+    ((AppWindow &)w_).InvalidateTextCache();
     DrawView();
     _forceRedraw = false;
   }
   GUITextProperties props;
-  drawBattery(props);
+  drawTitlebar(props);
   drawPowerButtonUI(props);
 }

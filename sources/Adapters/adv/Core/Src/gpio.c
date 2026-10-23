@@ -61,10 +61,13 @@ void MX_GPIO_Init(void) {
   HAL_GPIO_WritePin(GPIOC, OSC_EN_Pin | AMP_EN_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, DISPLAY_SDA_Pin | CHARGER_OTG_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(DISPLAY_SDA_GPIO_Port, DISPLAY_SDA_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, DISPLAY_CS_Pin | DISPLAY_SCK_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(CHARGER_OTG_GPIO_Port, CHARGER_OTG_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pins : CODEC_RESET_Pin CHARGER_PSEL_Pin CHARGER_CE_Pin
      OSC_EN_Pin AMP_EN_Pin */
@@ -95,11 +98,11 @@ void MX_GPIO_Init(void) {
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : POWER_Pin USB_INT_Pin */
-  GPIO_InitStruct.Pin = POWER_Pin | USB_INT_Pin;
+  /*Configure GPIO pin : POWER_Pin */
+  GPIO_InitStruct.Pin = POWER_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(POWER_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : DISPLAY_CS_Pin DISPLAY_SCK_Pin */
   GPIO_InitStruct.Pin = DISPLAY_CS_Pin | DISPLAY_SCK_Pin;
@@ -145,6 +148,12 @@ void MX_GPIO_Init(void) {
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
   GPIO_InitStruct.Alternate = GPIO_AF10_OTG1_FS;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : USB_INT_Pin */
+  GPIO_InitStruct.Pin = USB_INT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(USB_INT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : CHARGER_INT_Pin */
   GPIO_InitStruct.Pin = CHARGER_INT_Pin;

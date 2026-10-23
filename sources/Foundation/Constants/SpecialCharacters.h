@@ -1,3 +1,13 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+ *
+ * Copyright (c) 2026 xiphonics, inc.
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
+ */
+
 #pragma once
 
 // Keep glyphs as string literals so they can be concatenated at compile time.
@@ -18,6 +28,8 @@
 #define char_symbol_bpm_s "\x88"
 #define char_symbol_volume_s "\x89"
 #define char_symbol_muted_s "\x8A"
+
+#define char_symbol_note_s "\x88"
 #define char_symbol_indicatorEmpty_s "\x8B"
 #define char_symbol_indicatorFull_s "\x8C"
 
@@ -34,6 +46,8 @@
 #define char_indicator_load_s "\xED"
 #define char_indicator_save_s "\xEE"
 #define char_indicator_ellipsis_s "\xEF"
+
+#define char_status_usb_host_s "\xC7"
 
 #define char_bargraph_bar0_s " "
 #define char_bargraph_bar1_s "\xA1"

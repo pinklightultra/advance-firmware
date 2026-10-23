@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "advRemoteUI.h"
@@ -23,7 +27,7 @@
 // REMOTE_UI_CMD_MARKER and also verify the expected byte count length of each
 // command received to check for any transmission errors.
 void sendToUSBCDC(char data[], uint32_t length) {
-  if (!tud_cdc_connected()) {
+  if (!tud_inited() || !tud_cdc_connected()) {
     return;
   }
 

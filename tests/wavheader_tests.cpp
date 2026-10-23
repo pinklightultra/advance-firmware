@@ -1,13 +1,32 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+ *
+ * Copyright (c) 2026 xiphonics, inc.
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
+ */
+
 #include "doctest/doctest.h"
 
 #include "Application/Instruments/WavHeader.h"
 #include "Application/Model/Config.h"
 #include "System/FileSystem/I_File.h"
+#include "boundary_test_utils.h"
 
 #include <cstdint>
 #include <cstring>
 
 namespace {
+
+void SetImportResampler(int value) {
+  Config *config = Config::GetInstance();
+  REQUIRE(config != nullptr);
+  Variable *var = config->FindVariable(FourCC::VarImportResampler);
+  REQUIRE(var != nullptr);
+  var->SetInt(value, false);
+}
 
 struct ByteWriter {
   uint8_t data[256];
@@ -206,7 +225,8 @@ ByteWriter BuildExtensibleWav(uint16_t channels, uint32_t sampleRate,
 } // namespace
 
 TEST_CASE("ReadHeader parses valid PCM WAV") {
-  Config::SetImportResampler(0);
+  BoundaryTestEnvironment env;
+  SetImportResampler(0);
   ByteWriter wav = BuildPcmWav(2, 44100, 16, 4);
   TestFile file(wav.data, wav.size);
 
@@ -242,14 +262,15 @@ TEST_CASE("ReadHeader rejects fmt chunk too small") {
   CHECK(result.error() == INVALID_HEADER);
 }
 
-TEST_CASE("ReadHeader rejects unsupported sample rate without resampling") {
-  Config::SetImportResampler(0);
+TEST_CASE("ReadHeader accepts supported sample rate for import resampling") {
+  BoundaryTestEnvironment env;
+  SetImportResampler(2);
   ByteWriter wav = BuildPcmWav(2, 48000, 16, 4);
   TestFile file(wav.data, wav.size);
 
   auto result = WavHeaderWriter::ReadHeader(&file);
-  REQUIRE_FALSE(result.has_value());
-  CHECK(result.error() == UNSUPPORTED_SAMPLERATE);
+  REQUIRE(result.has_value());
+  CHECK(result->sampleRate == 48000);
 }
 
 TEST_CASE("ReadHeader rejects unsupported audio format") {
@@ -264,7 +285,8 @@ TEST_CASE("ReadHeader rejects unsupported audio format") {
 }
 
 TEST_CASE("ReadHeader parses extensible PCM WAV") {
-  Config::SetImportResampler(1);
+  BoundaryTestEnvironment env;
+  SetImportResampler(1);
   ByteWriter wav = BuildExtensibleWav(2, 48000, 24, 12, 1);
   TestFile file(wav.data, wav.size);
 
@@ -281,7 +303,8 @@ TEST_CASE("ReadHeader parses extensible PCM WAV") {
 }
 
 TEST_CASE("ReadHeader parses extensible float WAV") {
-  Config::SetImportResampler(1);
+  BoundaryTestEnvironment env;
+  SetImportResampler(1);
   ByteWriter wav = BuildExtensibleWav(2, 48000, 32, 16, 3);
   TestFile file(wav.data, wav.size);
 
@@ -298,7 +321,8 @@ TEST_CASE("ReadHeader parses extensible float WAV") {
 }
 
 TEST_CASE("ReadHeader accepts data chunk beyond RIFF when still within EOF") {
-  Config::SetImportResampler(0);
+  BoundaryTestEnvironment env;
+  SetImportResampler(0);
   ByteWriter wav = BuildPcmWav(2, 44100, 16, 8);
 
   // Make RIFF chunk size too small by 4 bytes so data end exceeds RIFF bounds.
@@ -314,7 +338,8 @@ TEST_CASE("ReadHeader accepts data chunk beyond RIFF when still within EOF") {
 }
 
 TEST_CASE("ReadHeader rejects data chunk beyond EOF") {
-  Config::SetImportResampler(0);
+  BoundaryTestEnvironment env;
+  SetImportResampler(0);
   ByteWriter wav = BuildPcmWav(2, 44100, 16, 8);
 
   // Increase data size field beyond available bytes in file.

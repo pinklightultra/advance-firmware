@@ -1,27 +1,24 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SAMPLE_SLICES_VIEW_H_
 #define _SAMPLE_SLICES_VIEW_H_
 
-#include "BaseClasses/UIActionField.h"
-#include "BaseClasses/UIIntVarField.h"
-#include "BaseClasses/UIStaticField.h"
+#include "Application/Instruments/I_Instrument.h"
 #include "FieldView.h"
 #include "Foundation/Observable.h"
-#include "Foundation/Variables/Variable.h"
-#include "Foundation/Variables/WatchedVariable.h"
-#include "GraphField.h"
-#include "System/System/System.h"
+#include "SampleSlicer.h"
 #include "ViewData.h"
 #include <cstdint>
-
-class SampleInstrument;
 
 class SampleSlicesView : public FieldView, public I_Observer {
 public:
@@ -39,55 +36,11 @@ public:
 private:
   static void AutoSliceConfirmCallback(View &v, ModalView &dialog);
   void buildFieldLayout();
-  void rebuildWaveform();
-  void drawWaveform();
-  void clearWaveformRegion();
-  bool refreshSampleSize();
-  void updateStatusLabels();
-  SampleInstrument *currentInstrument();
-  void updateSliceSelectionFromInstrument();
-  void applySliceStart(uint32_t start);
-  void autoSliceEvenly();
-  void updateZoomLimits();
-  bool updateZoomWindow();
-  void adjustZoom(int32_t delta);
-  void startPreview();
-  void stopPreview();
-  uint32_t sliceEndForIndex(size_t index, uint32_t start) const;
-  void handleSliceSelectionChange();
-  uint32_t selectedSliceStart();
-  bool hasInstrumentSample() const;
-
-  WatchedVariable sliceIndexVar_;
-  WatchedVariable sliceStartVar_;
-  Variable autoSliceCountVar_;
-
-  etl::vector<UIIntVarField, 2> intVarField_;
-  etl::vector<UIStaticField, 7> staticField_;
-  etl::vector<UIActionField, 1> actionField_;
-  char sliceIndexLabel_[16];
-  char zoomLabel_[16];
+  I_Instrument *currentInstrument();
 
   bool needsFullRedraw_;
-
-  SampleInstrument *instrument_;
-  int32_t instrumentIndex_;
-  uint32_t sampleSize_;
-  GUIPoint graphFieldPos_;
-  GraphField graphField_;
   bool modalWasOpen_;
-  uint8_t modalClearCount_;
-
-  bool playKeyHeld_;
-  bool previewActive_;
-  uint8_t previewNote_;
-  System *sys_;
-  uint32_t previewStartMs_;
-  uint32_t previewStartSample_;
-  uint32_t previewEndSample_;
-  float previewDurationMs_;
-  uint32_t previewPlayheadSample_;
-  bool previewCursorVisible_;
+  SampleSlicer slicer_;
 };
 
 #endif

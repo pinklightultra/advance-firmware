@@ -12,7 +12,6 @@ target_link_libraries(platform_gui PUBLIC uiframework_simplebaseclasses
                                    PUBLIC application
                                    PUBLIC platform_display
                                    PUBLIC platform_system
-                                   PRIVATE platform_utils
                                    tinyusb
                                    remote_ui
 )

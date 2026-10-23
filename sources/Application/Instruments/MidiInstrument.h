@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _MIDI_INSTRUMENT_H_
@@ -44,8 +48,9 @@ public:
 
   // size refers to the number of samples
   // should always fill interleaved stereo / 16bit
-  virtual bool Render(int channel, fixed *buffer, int size, bool updateTick);
-  virtual void ProcessCommand(int channel, FourCC cc, ushort value);
+  virtual bool Render(int channel, AudioSample *buffer, int size,
+                      bool updateTick) override;
+  virtual void ProcessCommand(int channel, TrackerCommand cc, ushort value);
 
   virtual bool IsInitialized();
 
@@ -61,7 +66,7 @@ public:
   virtual bool GetTableAutomation();
   virtual void GetTableState(TableSaveState &state);
   virtual void SetTableState(TableSaveState &state);
-  etl::ilist<Variable *> *Variables() { return &variables_; };
+  etl::ivector<Variable *> *Variables() { return &variables_; };
 
   void SetChannel(int i);
   void SendProgramChange(int channel, int program);
@@ -78,9 +83,13 @@ public:
   };
 
 private:
-  etl::list<Variable *, 7> variables_;
+  etl::vector<Variable *, 25> variables_;
 
   etl::array<uint8_t, MAX_MIDI_CHORD_NOTES + 1> lastNotes_[SONG_CHANNEL_COUNT];
+  uint8_t lastNoteCount_[SONG_CHANNEL_COUNT];
+  etl::array<uint8_t, MAX_MIDI_CHORD_NOTES + 1>
+      pendingNoteOffs_[SONG_CHANNEL_COUNT];
+  uint8_t pendingNoteOffCount_[SONG_CHANNEL_COUNT];
   int remainingTicks_;
   bool playing_;
   bool retrig_;

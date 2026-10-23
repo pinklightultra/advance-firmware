@@ -2,6 +2,16 @@
 title: The Mixer
 template: page
 ---
+<!--
+SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
+
+Copyright (c) 2026 xiphonics, inc.
+
+Inherited BSD-licensed material remains BSD-3-Clause.
+New original contributions by xiphonics, inc. are GPL-3.0-only.
+Previously granted BSD permissions are preserved. See LICENSING.md.
+-->
+
 
 ![screen capture of mixer screen](image/mixer-screen-small.png)
 
@@ -36,12 +46,12 @@ The VU meters are designed to give you a clear visual representation of the audi
 
 The mixer screen is primarily a monitoring tool, but it also provides same channel control key combos as  are available on the song screen:
 
-* `NAV`+`EDIT`: Toggles mute/unmute of cursor channel
-    * if `NAV` is released before `EDIT`, channel stays mutes
-    * if `EDIT` is released before `NAV`, channel goes back to original state
-* `NAV`+`ENTER`: Solo cursor channel
-    * if `NAV` is released before `ENTER`, channel stays solo'ed
-    * if `ENTER` is released before `NAV`, all channel go back to original state
-* `ALT`+`NAV`: restore full playback on all channels
+* <span class="minikeys">NAV</span>+<span class="minikeys">EDIT</span>: Toggles mute/unmute of cursor channel
+    * if <span class="minikeys">NAV</span> is released before <span class="minikeys">EDIT</span>, channel stays mutes
+    * if <span class="minikeys">EDIT</span> is released before <span class="minikeys">NAV</span>, channel goes back to original state
+* <span class="minikeys">NAV</span>+<span class="minikeys">ENTER</span>: Solo cursor channel
+    * if <span class="minikeys">NAV</span> is released before <span class="minikeys">ENTER</span>, channel stays solo'ed
+    * if <span class="minikeys">ENTER</span> is released before <span class="minikeys">NAV</span>, all channel go back to original state
+* <span class="minikeys">ALT</span>+<span class="minikeys">NAV</span>: restore full playback on all channels
 
 

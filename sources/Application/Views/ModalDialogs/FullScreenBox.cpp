@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "FullScreenBox.h"
@@ -40,12 +44,25 @@ FullScreenBox *FullScreenBox::Create(View &view, const char *messageLine1,
       FullScreenBox(view, messageLine1, messageLine2, btnFlags);
 }
 
+FullScreenBox *FullScreenBox::Create(View &view, const ErrorBitmap *bitmap) {
+  if (inUse) {
+    auto *existing = reinterpret_cast<FullScreenBox *>(storage);
+    existing->~FullScreenBox();
+    inUse = false;
+  }
+  inUse = true;
+  return new (storage) FullScreenBox(view, bitmap);
+}
+
 FullScreenBox::FullScreenBox(View &view, const char *message, int btnFlags)
     : MessageBox(view, message, btnFlags) {}
 
 FullScreenBox::FullScreenBox(View &view, const char *messageLine1,
                              const char *messageLine2, int btnFlags)
     : MessageBox(view, messageLine1, messageLine2, btnFlags) {}
+
+FullScreenBox::FullScreenBox(View &view, const ErrorBitmap *bitmap)
+    : MessageBox(view, "", "", MBBF_OK), bitmap_(bitmap) {}
 
 FullScreenBox::~FullScreenBox(){};
 
@@ -55,6 +72,10 @@ void FullScreenBox::Destroy() {
 };
 
 void FullScreenBox::DrawView() {
+  if (bitmap_) {
+    return;
+  }
+
   // message size
   int line1_width = line1_.size();
   // set window size full screen

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _TABLE_PLAYBACK_H_
@@ -13,20 +17,27 @@
 #include "Application/Model/Groove.h"
 #include "Application/Model/Song.h"
 #include "Application/Model/Table.h"
+#include "RowFx.h"
+#include <cstdint>
 
 class I_Instrument;
 
 class TablePlayerChange {
 public:
-  int timeToLive_;
-  int instrRetrigger_;
+  int32_t timeToLive_;
+  int32_t timeToRelease_;
+  int32_t instrRetrigger_;
+  int32_t noteRetrigger_;
 };
 
 struct TablePlayback {
 public:
   void Init(int i);
-  void ProcessStep(TablePlayerChange &tpc);
-  bool ProcessLocalCommand(int row, FourCC *commandList, ushort *paramList,
+  void ProcessStep(TablePlayerChange &tpc, uchar currentNote,
+                   PlayerLastActiveCommandState &lastActive);
+  bool ProcessPositionCommand(uint8_t row, TrackerCommand command,
+                              ushort param);
+  bool ProcessLocalCommand(TrackerCommand command, ushort param,
                            TablePlayerChange &tpc);
   void Start(I_Instrument *, Table &, bool automated);
   void Stop();
@@ -36,6 +47,7 @@ public:
 
   static void Reset();
   static TablePlayback &GetTablePlayback(int channel);
+  static TablePlayback &GetAutomationPlayback(int channel);
 
 private:
   Table *table_;
@@ -49,6 +61,7 @@ private:
   ChannelGroove groove_;
 
   static TablePlayback playback_[SONG_CHANNEL_COUNT];
+  static TablePlayback automationPlayback_[SONG_CHANNEL_COUNT];
 };
 
 class TableSaveState {
@@ -56,6 +69,7 @@ public:
   void Reset();
   uchar hopCount_[TABLE_STEPS][TABLE_COLUMNS];
   int position_[TABLE_COLUMNS];
+  ChannelGroove groove_;
 };
 
 #endif

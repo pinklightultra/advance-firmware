@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _TEXT_INPUT_MODAL_VIEW_H_
@@ -18,16 +22,21 @@
 #include "Foundation/Observable.h"
 #include "Foundation/Variables/StringVariable.h"
 
-#define MAX_TEXT_TITLE_LENGTH 24
+#define MAX_TEXT_TITLE_LENGTH 32
 #define MAX_TEXT_PROMPT_LENGTH 8
 #define MAX_TEXT_INPUT_LENGTH (MAX_TEXT_TITLE_LENGTH - MAX_TEXT_PROMPT_LENGTH)
 
 class TextInputModalView : public ModalView, public I_Observer {
 public:
+  static TextInputModalView *
+  Create(View &view, const char *title, const char *prompt, int btnFlags,
+         etl::string<MAX_TEXT_INPUT_LENGTH> defaultValue);
+
   TextInputModalView(View &view, const char *title, const char *prompt,
                      int btnFlags,
                      etl::string<MAX_TEXT_INPUT_LENGTH> defaultValue);
   virtual ~TextInputModalView();
+  virtual void Destroy() override;
 
   virtual void DrawView();
   virtual void ProcessButtonMask(unsigned short mask, bool pressed);
@@ -58,6 +67,9 @@ private:
   int buttonCount_;
   int button_[MBL_LAST];
   int selected_;
+
+  static bool inUse_;
+  static void *storage_;
 };
 
 #endif

@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _RENDER_PROGRESS_MODAL_H_
@@ -53,10 +57,6 @@ private:
   uint32_t getDialogWidth() const;
   int calculateSongRenderPercent() const;
   int getCurrentRenderedSongRow(bool *hasActive = nullptr) const;
-  int getChainPhraseCount(int songRow, int channel) const;
-  int calculateChannelTotalRenderUnits(int channel, int startSongRow) const;
-  int calculateChannelRenderedUnits(int channel, int startSongRow) const;
-  void initializeSongProgressTracking();
 
   // Title and message strings
   etl::string<20> title_;
@@ -70,10 +70,8 @@ private:
   ProgressDisplayMode progressDisplayMode_;
   uint32_t dialogWidth_ = 16;
   int startSongRow_ = 0;
-  int renderedUnits_ = 0;
-  int totalRenderUnits_ = 1;
-  int progressChannel_ = -1;
-  bool startSongRowCaptured_ = false;
+  int endSongRow_ = 0;
+  bool selectionBoundsCaptured_ = false;
 
   unsigned char spinner_ = 0;
 

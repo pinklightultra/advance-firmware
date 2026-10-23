@@ -1,18 +1,22 @@
 
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #ifndef _SAMPLE_EDITOR_VIEW_H_
 #define _SAMPLE_EDITOR_VIEW_H_
 
+#include "Application/Instruments/I_Instrument.h"
 #include "Application/Instruments/InstrumentNameVariable.h"
-#include "Application/Instruments/SampleInstrument.h"
 #include "Application/Instruments/WavHeader.h"
 #include "BaseClasses/UIActionField.h"
 #include "BaseClasses/UIBigHexVarField.h"
@@ -60,25 +64,25 @@ private:
   void updateSampleParameters();
   uint32_t selectionCenterSample() const;
   void updateSelectedMarkerFromFocus();
-  const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &activeFilename() const;
+  const etl::string<PFILENAME_SIZE> &activeFilename() const;
   bool ensureWorkingCopy();
   void discardWorkingCopy();
-  bool commitWorkingCopy(
-      const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &targetFilename);
+  bool commitWorkingCopy(const etl::string<PFILENAME_SIZE> &targetFilename);
   void assignWorkingFilename();
-  bool buildSiblingPath(
-      const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &srcFilename,
-      etl::string_view siblingName,
-      etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &outFilename) const;
+  bool buildSiblingPath(const etl::string<PFILENAME_SIZE> &srcFilename,
+                        etl::string_view siblingName,
+                        etl::string<PFILENAME_SIZE> &outFilename) const;
   bool
   resolveSaveFilename(etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &filename);
+  bool
+  resolveSavePath(const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &filename,
+                  etl::string<PFILENAME_SIZE> &resolvedPath) const;
   bool fileExists(const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &filename);
   void attemptSave(bool loadToPool);
   void confirmSave(bool loadToPool);
   void showSaveFailedDialog();
   void showLoadToPoolFailedDialog();
-  void loadSample(const etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> path,
-                  bool isProjectSampleFile);
+  void loadSample(const etl::string<PFILENAME_SIZE> path);
   bool reloadEditedSample();
   bool saveSample(etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> &savedFilename);
   bool loadSampleToPool(
@@ -87,7 +91,6 @@ private:
   bool applyTrimOperation(uint32_t startFrame, uint32_t endFrame);
   bool applyNormalizeOperation();
   void navigateToView(ViewType vt);
-  SampleInstrument *getCurrentSampleInstrument();
   void clearWaveformRegion();
   void rebuildWaveform();
   void updateGraphMarkers();
@@ -148,7 +151,7 @@ private:
 
   uint8_t modalClearCount_ = 0;
 
-  etl::string<MAX_INSTRUMENT_FILENAME_LENGTH> workingFilename_;
+  etl::string<PFILENAME_SIZE> workingFilename_;
   bool hasWorkingCopy_ = false;
   bool pendingOverwriteLoadToPool_ = false;
 };

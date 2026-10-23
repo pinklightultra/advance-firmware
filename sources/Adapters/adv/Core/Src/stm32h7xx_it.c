@@ -1,6 +1,6 @@
 /* USER CODE BEGIN Header */
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2025
  * STMicroelectronics.
@@ -8,6 +8,10 @@
  *
  * This file is
  * part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 /* USER CODE END Header */
 
@@ -16,8 +20,10 @@
 #include "main.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "Adapters/adv/system/assets/error_bitmaps.h"
 #include "Adapters/adv/system/critical_error_message.h"
 #include "tusb.h"
+#include <System/Console/nanoprintf.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,10 +65,56 @@ typedef struct {
   uint32_t xPSR;
 } HardFaultStackFrame;
 
-void hard_fault_c_handler(HardFaultStackFrame *stackFrame) {
-  // TODO: we could put something useful here
-  critical_error_message("Hard Fault", stackFrame->PC,
-                         DEFAULT_ERROR_MESSAGE_DELAY_SEC, true);
+typedef enum {
+  FAULT_TYPE_HARD = 0,
+  FAULT_TYPE_MEMMANAGE,
+  FAULT_TYPE_BUS,
+  FAULT_TYPE_USAGE,
+} FaultType;
+
+static void format_fault_hex_or_placeholder(char *buffer, size_t bufferSize,
+                                            bool valid, uint32_t value) {
+  if (valid) {
+    npf_snprintf(buffer, bufferSize, "0x%08lX", (unsigned long)value);
+  } else {
+    npf_snprintf(buffer, bufferSize, "0x--------");
+  }
+}
+
+__attribute__((used, noreturn)) static void
+fault_c_handler(HardFaultStackFrame *stackFrame, FaultType faultType,
+                uint32_t stackPointer) {
+  char detailLine[33];
+  char detailLine2[33];
+  char bfarText[11];
+  char mmfarText[11];
+  const char *detailLines[] = {detailLine, detailLine2};
+
+  (void)stackPointer;
+
+  format_fault_hex_or_placeholder(bfarText, sizeof(bfarText),
+                                  (SCB->CFSR & SCB_CFSR_BFARVALID_Msk) != 0U,
+                                  SCB->BFAR);
+  format_fault_hex_or_placeholder(mmfarText, sizeof(mmfarText),
+                                  (SCB->CFSR & SCB_CFSR_MMARVALID_Msk) != 0U,
+                                  SCB->MMFAR);
+
+  npf_snprintf(detailLine, sizeof(detailLine), "PC 0x%08lX LR 0x%08lX",
+               (unsigned long)stackFrame->PC, (unsigned long)stackFrame->LR);
+  npf_snprintf(detailLine2, sizeof(detailLine2), "CFSR 0x%08lX HFSR 0x%08lX",
+               (unsigned long)SCB->CFSR, (unsigned long)SCB->HFSR);
+
+  if (faultType == FAULT_TYPE_BUS) {
+    npf_snprintf(detailLine2, sizeof(detailLine2), "CFSR 0x%08lX BFAR %s",
+                 (unsigned long)SCB->CFSR, bfarText);
+  } else if (faultType == FAULT_TYPE_MEMMANAGE) {
+    npf_snprintf(detailLine2, sizeof(detailLine2), "CFSR 0x%08lX MMFAR %s",
+                 (unsigned long)SCB->CFSR, mmfarText);
+  }
+
+  critical_error_message(&g_deadBitmap, NULL, detailLines,
+                         sizeof(detailLines) / sizeof(detailLines[0]),
+                         DEFAULT_ERROR_MESSAGE_DELAY_SEC);
 }
 /* USER CODE END 0 */
 
@@ -98,53 +150,53 @@ void NMI_Handler(void) {
 /**
  * @brief This function handles Hard fault interrupt.
  */
-void HardFault_Handler(void) {
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-  critical_error_message("HARDFAULT", 0x00, DEFAULT_ERROR_MESSAGE_DELAY_SEC,
-                         true);
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1) {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
+__attribute__((naked)) void HardFault_Handler(void) {
+  __asm volatile("tst lr, #4\n"
+                 "ite eq\n"
+                 "mrseq r0, msp\n"
+                 "mrsne r0, psp\n"
+                 "mov r2, r0\n"
+                 "movs r1, #0\n"
+                 "b fault_c_handler\n");
 }
 
 /**
  * @brief This function handles Memory management fault.
  */
-void MemManage_Handler(void) {
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1) {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
+__attribute__((naked)) void MemManage_Handler(void) {
+  __asm volatile("tst lr, #4\n"
+                 "ite eq\n"
+                 "mrseq r0, msp\n"
+                 "mrsne r0, psp\n"
+                 "mov r2, r0\n"
+                 "movs r1, #1\n"
+                 "b fault_c_handler\n");
 }
 
 /**
  * @brief This function handles Pre-fetch fault, memory access fault.
  */
-void BusFault_Handler(void) {
-  /* USER CODE BEGIN BusFault_IRQn 0 */
-
-  /* USER CODE END BusFault_IRQn 0 */
-  while (1) {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
+__attribute__((naked)) void BusFault_Handler(void) {
+  __asm volatile("tst lr, #4\n"
+                 "ite eq\n"
+                 "mrseq r0, msp\n"
+                 "mrsne r0, psp\n"
+                 "mov r2, r0\n"
+                 "movs r1, #2\n"
+                 "b fault_c_handler\n");
 }
 
 /**
  * @brief This function handles Undefined instruction or illegal state.
  */
-void UsageFault_Handler(void) {
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
-  /* USER CODE END UsageFault_IRQn 0 */
-  while (1) {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
+__attribute__((naked)) void UsageFault_Handler(void) {
+  __asm volatile("tst lr, #4\n"
+                 "ite eq\n"
+                 "mrseq r0, msp\n"
+                 "mrsne r0, psp\n"
+                 "mov r2, r0\n"
+                 "movs r1, #3\n"
+                 "b fault_c_handler\n");
 }
 
 /**
@@ -213,6 +265,7 @@ void EXTI15_10_IRQHandler(void) {
 
   /* USER CODE END EXTI15_10_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(SD_DET_Pin);
+  HAL_GPIO_EXTI_IRQHandler(USB_INT_Pin);
   /* USER CODE BEGIN EXTI15_10_IRQn 1 */
 
   /* USER CODE END EXTI15_10_IRQn 1 */

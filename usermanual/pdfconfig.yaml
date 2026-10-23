@@ -5,8 +5,70 @@ styles:
   code:
     background-color: 0xffe0e0e0
   show-page-numbers-from: 1
-  # path from inside assets dir
-  ttf-font-path: font/UbuntuMono-Regular.ttf
+
+  # Multi-font configuration for PDF output.
+  # Maps font family names (as used in CSS font-family) to TTF file paths.
+  # These fonts are applied to different element types:
+  #   body     - default font for paragraph text (used as theme base font)
+  #   heading  - font for h1-h6 headings
+  #   code     - font for inline code and pre blocks
+  #   code-bold- font for bold code (optional)
+  fonts:
+    body: font/Geist-Regular.ttf
+    heading: font/PROJEKTBlackbird.ttf
+    code: font/UbuntuMono-Regular.ttf
+    code-bold: font/UbuntuMono-Bold.ttf
+
+  pdf:
+    paragraph_margin_bottom: 10
+    list_margin_left: 8
+    list_margin_bottom: 10
+    h1_margin_bottom: 12
+    h1_font_size: 22
+    h1_font_weight: bold
+    # inline_code_background_color: "#f2e1c6"
+    inline_code_text_color: "#030303"
+    # inline_code_border_color: "#010101"
+    # inline_code_border_width: 1
+    inline_code_padding: 0
+    
+    class_styles:
+      btn:
+        background_color: "#f2e1c6"
+        text_color: "#eeeeee"
+        border_color: "#010101"
+        border_width: 1
+        padding: 2
+      minikeys:
+        border_color: "#cccccc"
+        border_width: 1
+        border_radius: 4
+        padding_horizontal: 1
+        padding_vertical: 1
+
+    block_class_styles:
+      callout:
+        border_width: 1
+        padding: 8
+        margin: 10
+        border_radius: 6
+      callout-table:
+        border_width: 0
+        padding: 0
+        margin: 0
+      callout-icon:
+        padding: 0
+      callout-text:
+        padding: 4
+      callout-note:
+        background_color: "#e9f2fb"
+        border_color: "#c7def5"
+      callout-tip:
+        background_color: "#eef8ed"
+        border_color: "#cfe8cc"
+      callout-warn:
+        background_color: "#fff3e6"
+        border_color: "#f1d2b3"
 
 tocPagePosition: 1
 
@@ -31,5 +93,6 @@ pages:
   - commands.md
   - scales.md
   - midi.md
+  - midi-control-surfaces.md
   - appendix-remoteui.md
   - theindex.md

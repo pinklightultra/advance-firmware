@@ -1,10 +1,14 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #pragma once
@@ -40,7 +44,7 @@ struct MidiMessage : public I_ObservableData {
   MidiMessage(unsigned char status = UNUSED_BYTE,
               unsigned char data1 = UNUSED_BYTE,
               unsigned char data2 = UNUSED_BYTE)
-      : status_(status), data1_(data1), data2_(data2){};
+      : status_(status), data1_(data1), data2_(data2), consumed_(false){};
 
   //----------------------------------------------------------------------------
 
@@ -53,6 +57,10 @@ struct MidiMessage : public I_ObservableData {
   unsigned char status_;
   unsigned char data1_;
   unsigned char data2_;
+  bool consumed_;
+
+  inline void Consume() { consumed_ = true; }
+  inline bool IsConsumed() const { return consumed_; }
 };
 
 // MIDI Control Change numbers used throughout the firmware

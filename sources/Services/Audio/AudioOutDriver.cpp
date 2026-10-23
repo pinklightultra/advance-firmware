@@ -1,19 +1,44 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2018 Discodirt
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "AudioOutDriver.h"
+#include "System/Profiler/DWTProfiler.h"
 #include "System/System/System.h"
+#include <algorithm>
 
-fixed AudioOutDriver::primarySoundBuffer_[MIX_BUFFER_SIZE];
+namespace {
+
+constexpr int kEngineSampleRate = 44100;
+
+DWTProfileStats gGrandTotalProfile = {"grand total", true};
+
+void registerAudioOutProfiles() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+
+  RegisterDWTProfileStats(&gGrandTotalProfile);
+  registered = true;
+}
+
+} // namespace
+
+AudioSample AudioOutDriver::primarySoundBuffer_[MIX_BUFFER_SIZE];
 short AudioOutDriver::mixBuffer_[MIX_BUFFER_SIZE];
 
 AudioOutDriver::AudioOutDriver(AudioDriver &driver) {
+  registerAudioOutProfiles();
   driver_ = &driver;
   driver.AddObserver(*this);
 }
@@ -45,6 +70,8 @@ stereosample AudioOutDriver::GetLastPeakLevels() { return lastPeakVolume_; };
 
 void AudioOutDriver::Trigger() {
   prepareMixBuffers();
+  ScopedDWTProfile grandTotalProfile(&gGrandTotalProfile, sampleCount_,
+                                     kEngineSampleRate, 1);
   hasSound_ = AudioMixer::Render(primarySoundBuffer_, sampleCount_) > 0;
   clipToMix();
   driver_->AddBuffer(mixBuffer_, sampleCount_);
@@ -70,19 +97,16 @@ void AudioOutDriver::clipToMix() {
     short *s2 = (interlaced) ? s1 + 1 : s1 + sampleCount_;
     int offset = (interlaced) ? 2 : 1;
 
-    fixed *p = primarySoundBuffer_;
-
-    fixed v;
-    fixed f_32767 = i2fp(32767);
-    fixed f_m32768 = i2fp(-32768);
+    AudioSample *p = primarySoundBuffer_;
 
     short peakL = 0;
     short peakR = 0;
 
     for (int i = 0; i < sampleCount_; i++) {
       // Left
-      v = *p++;
-      int iVal = fp2i(v);
+      const AudioSample left =
+          std::clamp(*p++, kAudioSampleMin, kAudioSampleMax);
+      int iVal = static_cast<int32_t>(left * kAudioPcmScale);
       *s1 = short(iVal);
       s1 += offset;
       if (iVal >= peakL) {
@@ -90,8 +114,9 @@ void AudioOutDriver::clipToMix() {
       }
 
       // Right
-      v = *p++;
-      iVal = fp2i(v);
+      const AudioSample right =
+          std::clamp(*p++, kAudioSampleMin, kAudioSampleMax);
+      iVal = static_cast<int32_t>(right * kAudioPcmScale);
       *s2 = short(iVal);
       s2 += offset;
       if (iVal >= peakR) {
