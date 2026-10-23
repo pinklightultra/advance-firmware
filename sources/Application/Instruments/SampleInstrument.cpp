@@ -1182,13 +1182,17 @@ void SampleInstrument::updateInstrumentData(bool search) {
     }
   }
 
-  Variable *v = FindVariable(FourCC::SampleInstrumentEnd);
-  v->SetInt(instrSize);
-  v = FindVariable(FourCC::SampleInstrumentLoopStart);
-  v->SetInt(0);
-  v = FindVariable(FourCC::SampleInstrumentStart);
-  v->SetInt(0);
-  clampSlicePoints(static_cast<uint32_t>(instrSize));
+  // Skip resetting the user's edits when we're only tracking a pool re-index.
+  if (!preserveEditsOnReload_) {
+    Variable *v = FindVariable(FourCC::SampleInstrumentEnd);
+    v->SetInt(instrSize);
+    v = FindVariable(FourCC::SampleInstrumentLoopStart);
+    v->SetInt(0);
+    v = FindVariable(FourCC::SampleInstrumentStart);
+    v->SetInt(0);
+    clampSlicePoints(static_cast<uint32_t>(instrSize));
+  }
+  preserveEditsOnReload_ = false;
   dirty_ = false;
 };
 
@@ -1198,6 +1202,10 @@ void SampleInstrument::Update(Observable &o, I_ObservableData *d) {
 
   switch (id) {
   case FourCC::SampleInstrumentSample: {
+    // A pool re-index (an entry below us was purged) shifts our unchanged
+    // sample to a new pool position: reload the source pointer but keep the
+    // user's start/loop/end/slice edits.
+    preserveEditsOnReload_ = sample_.IsReindexing();
     if (running_) {
       dirty_ = true; // we'll update later, when instrument gets re-triggered
     } else {

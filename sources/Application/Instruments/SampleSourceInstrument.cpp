@@ -1662,13 +1662,17 @@ void SampleSourceInstrument::updateInstrumentData(bool search) {
     }
   }
 
-  Variable *v = FindVariable(FourCC::SampleSourceInstrumentEnd);
-  v->SetInt(instrSize);
-  v = FindVariable(FourCC::SampleSourceInstrumentLoopStart);
-  v->SetInt(0);
-  v = FindVariable(FourCC::SampleSourceInstrumentStart);
-  v->SetInt(0);
-  clampSlicePoints(static_cast<uint32_t>(instrSize));
+  // Skip resetting the user's edits when we're only tracking a pool re-index.
+  if (!preserveEditsOnReload_) {
+    Variable *v = FindVariable(FourCC::SampleSourceInstrumentEnd);
+    v->SetInt(instrSize);
+    v = FindVariable(FourCC::SampleSourceInstrumentLoopStart);
+    v->SetInt(0);
+    v = FindVariable(FourCC::SampleSourceInstrumentStart);
+    v->SetInt(0);
+    clampSlicePoints(static_cast<uint32_t>(instrSize));
+  }
+  preserveEditsOnReload_ = false;
   dirty_ = false;
 }
 
@@ -1680,6 +1684,10 @@ void SampleSourceInstrument::Update(Observable &o, I_ObservableData *d) {
 
   switch (id) {
   case FourCC::SampleSourceInstrumentSample:
+    // A pool re-index (an entry below us was purged) shifts our unchanged
+    // sample to a new pool position: reload the source pointer but keep the
+    // user's start/loop/end/slice edits.
+    preserveEditsOnReload_ = sample_.IsReindexing();
     if (running_) {
       dirty_ = true;
     } else {
@@ -1986,12 +1994,14 @@ void SampleSourceInstrument::GetTableState(TableSaveState &state) {
   memcpy(state.hopCount_, tableState_.hopCount_,
          sizeof(uchar) * TABLE_STEPS * 3);
   memcpy(state.position_, tableState_.position_, sizeof(int) * 3);
+  state.groove_ = tableState_.groove_;
 }
 
 void SampleSourceInstrument::SetTableState(TableSaveState &state) {
   memcpy(tableState_.hopCount_, state.hopCount_,
          sizeof(uchar) * TABLE_STEPS * 3);
   memcpy(tableState_.position_, state.position_, sizeof(int) * 3);
+  tableState_.groove_ = state.groove_;
 }
 
 bool SampleSourceInstrument::IsMulti() { return source_->IsMulti(); }

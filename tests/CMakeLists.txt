@@ -202,3 +202,85 @@ target_compile_definitions(picoTracker_boundary_tests PRIVATE
   PACKAGE="picoTrackerHostTests"
   VERSION="test"
 )
+
+# End-to-end instrument import test: real PersistencyService + real Persistent +
+# real SampleSourceInstrument together (issue #370).
+add_executable(picoTracker_instr_import_e2e_tests
+  test_main.cpp
+  instrument_import_e2e_tests.cpp
+  stubs/project_audio_mode_link_stubs.cpp
+  stubs/nanoprintf_impl.c
+  stubs/System/FileSystem/FakeFileSystem.cpp
+  ../sources/Application/Instruments/CommandList.cpp
+  ../sources/Application/Instruments/Filters.cpp
+  ../sources/Application/Instruments/I_Instrument.cpp
+  ../sources/Application/Instruments/InstrumentBank.cpp
+  ../sources/Application/Instruments/InstrumentNameVariable.cpp
+  ../sources/Application/Instruments/MidiInstrument.cpp
+  ../sources/Application/Instruments/NoneInstrument.cpp
+  ../sources/Application/Instruments/SRPUpdaters.cpp
+  ../sources/Application/Instruments/SampleInstrument.cpp
+  ../sources/Application/Instruments/SampleSourceInstrument.cpp
+  ../sources/Application/Instruments/SamplePool.cpp
+  ../sources/Application/Instruments/SampleVariable.cpp
+  ../sources/Application/Instruments/SoundSource.cpp
+  ../sources/Application/Instruments/WavFile.cpp
+  ../sources/Application/Instruments/WavFileWriter.cpp
+  ../sources/Application/Instruments/LFOSettings.cpp
+  ../sources/Application/Instruments/VoiceParameters.cpp
+  ../sources/Application/Mixer/OutputEffectSlot.cpp
+  ../sources/Application/Mixer/ReverbOutputEffect.cpp
+  ../sources/Application/Model/Chain.cpp
+  ../sources/Application/Model/Config.cpp
+  ../sources/Application/Model/Groove.cpp
+  ../sources/Application/Model/Phrase.cpp
+  ../sources/Application/Model/Project.cpp
+  ../sources/Application/Model/Scale.cpp
+  ../sources/Application/Model/Song.cpp
+  ../sources/Application/Model/Table.cpp
+  ../sources/Application/Persistency/PersistencyDocument.cpp
+  ../sources/Application/Persistency/PersistencyService.cpp
+  ../sources/Application/Persistency/Persistent.cpp
+  ../sources/Application/Utils/HexBuffers.cpp
+  ../sources/Application/Utils/char.cpp
+  ../sources/Application/Player/AudioVoice.cpp
+  ../sources/Application/Player/InsertEffectSlot.cpp
+  ../sources/Application/Player/LFOProcessor.cpp
+  ../sources/Application/Player/RowFx.cpp
+  ../sources/Application/Player/SyncMaster.cpp
+  ../sources/Application/Player/VoiceADSR.cpp
+  ../sources/Application/Views/VoiceFilterGraph.cpp
+  ../sources/Application/Views/VoiceEnvelopeGraph.cpp
+  ../sources/Foundation/Observable.cpp
+  ../sources/Foundation/Services/Service.cpp
+  ../sources/Foundation/Services/ServiceRegistry.cpp
+  ../sources/Foundation/Services/SubService.cpp
+  ../sources/Foundation/Variables/Variable.cpp
+  ../sources/Foundation/Variables/VariableContainer.cpp
+  ../sources/Foundation/Variables/WatchedVariable.cpp
+  ../sources/Application/Instruments/WavHeader.cpp
+  ../sources/Externals/SRC/samplerate.c
+  ../sources/Externals/SRC/src_linear.c
+  ../sources/Externals/SRC/src_sinc_stub.c
+  ../sources/Externals/TinyXML2/tinyxml2_printer_only.cpp
+  ../sources/Externals/TinyXML2/tinyxml2adapter.cpp
+  ../sources/Externals/yxml/yxml.c
+  ../sources/System/io/Status.cpp
+)
+target_include_directories(picoTracker_instr_import_e2e_tests PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/stubs
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Externals/SRC/include
+  ${CMAKE_CURRENT_LIST_DIR}/../sources
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Model
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Application/Persistency
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation
+  ${CMAKE_CURRENT_LIST_DIR}/../sources/Foundation/Variables
+)
+target_compile_definitions(picoTracker_instr_import_e2e_tests PRIVATE
+  HOST_TEST
+  REVERB_OUTPUT_EFFECT_ALGORITHM=1
+  HAVE_STDBOOL_H
+  PACKAGE="picoTrackerHostTests"
+  VERSION="test"
+)

@@ -22,9 +22,19 @@ namespace {
 
 constexpr int MixerStripX = 5;
 constexpr int MixerStripStride = 3;
+// VU meters grow upwards from a baseline at (anchorY + height - 1). The strip
+// labels sit one row below the baseline and the VOL field one row below that.
+#if SHOW_FX_SCREEN
 constexpr int MixerVuMeterHeight = 9;
 constexpr int MixerStripLabelY = 12;
 constexpr int MixerFieldBaseY = 13;
+#else
+// With the FX send rows gated off the meters are made tall enough to fill the
+// space those rows used to occupy above the bottom nav map.
+constexpr int MixerVuMeterHeight = 14;
+constexpr int MixerStripLabelY = 17;
+constexpr int MixerFieldBaseY = 18;
+#endif
 constexpr int MixerRowLabelX = 1;
 constexpr int MixerMasterStripIndex = SONG_CHANNEL_COUNT_STEREO;
 constexpr int MixerVolumeRow = 0;

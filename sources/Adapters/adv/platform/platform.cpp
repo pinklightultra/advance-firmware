@@ -1,9 +1,13 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause AND GPL-3.0-only
  *
  * Copyright (c) 2024 xiphonics, inc.
  *
  * This file is part of the picoTracker firmware
+ *
+ * Inherited BSD-licensed material remains BSD-3-Clause.
+ * New original contributions by xiphonics, inc. are GPL-3.0-only.
+ * Previously granted BSD permissions are preserved. See LICENSING.md.
  */
 
 #include "platform.h"
@@ -13,27 +17,49 @@
 #include "tim.h"
 #include <System/Console/nanoprintf.h>
 
+namespace {
+
+// This must not use the stack after CONTROL selects MSP because the caller is
+// running on the FreeRTOS process stack.
+[[noreturn]] __attribute__((naked)) void
+jumpToBootloader(uint32_t appStack, uint32_t appResetHandler) {
+  __asm volatile("msr msp, r0\n"
+                 "movs r2, #0\n"
+                 "msr control, r2\n"
+                 "isb\n"
+                 "msr basepri, r2\n"
+                 "msr faultmask, r2\n"
+                 "cpsie i\n"
+                 "dsb\n"
+                 "isb\n"
+                 "bx r1\n");
+}
+
+} // namespace
+
 void platform_reboot() { NVIC_SystemReset(); };
 
 void platform_bootloader() {
 
+  // Disable external interrupts first since they can fire during this process
+  __disable_irq();
+
   uint32_t appStack = *(volatile uint32_t *)BOOTLOADER_ADDR;
   uint32_t appResetHandler = *(volatile uint32_t *)(BOOTLOADER_ADDR + 4);
-  pFunction appEntry = (pFunction)appResetHandler;
 
-  // Disable external interrupts first since they can fire during this process
-  NVIC_DisableIRQ(EXTI9_5_IRQn);
-  NVIC_DisableIRQ(EXTI15_10_IRQn);
-  NVIC_ClearPendingIRQ(EXTI9_5_IRQn);
-  NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
-
-  HAL_DeInit();
+  // Disable and clear every external interrupt. An interrupt using the new
+  // vector table must not run before the bootloader initializes it.
+  for (size_t index = 0; index < sizeof(NVIC->ICER) / sizeof(NVIC->ICER[0]);
+       ++index) {
+    NVIC->ICER[index] = UINT32_MAX;
+    NVIC->ICPR[index] = UINT32_MAX;
+  }
 
   // Disable SysTick (this may not be needed, not using it)
   SysTick->CTRL = 0;
   SysTick->LOAD = 0;
   SysTick->VAL = 0;
-  HAL_RCC_DeInit(); // Reset clock configuration
+  SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
 
   // We disable TIM8 because that's what we are using as systick
   // 1. Disable TIM8 IRQ at peripheral level
@@ -44,15 +70,17 @@ void platform_bootloader() {
 
   // 3. Clear all flags
   TIM8->SR = 0;
-  NVIC_DisableIRQ(TIM8_UP_TIM13_IRQn);
-  NVIC_ClearPendingIRQ(TIM8_UP_TIM13_IRQn);
-
-  // Disable MPU
-  MPU->CTRL = 0;
 
   // Disable caches
-  //  SCB_DisableICache();
-  //  SCB_DisableDCache();
+  // D-cache must be cleaned before HAL_DeInit resets the external memory bus.
+  SCB_DisableDCache();
+  SCB_DisableICache();
+
+  HAL_DeInit();
+  HAL_RCC_DeInit(); // Reset clock configuration
+
+  // Disable MPU
+  HAL_MPU_Disable();
 
   // Memory barrier
   __DSB();
@@ -62,10 +90,8 @@ void platform_bootloader() {
   SCB->VTOR = BOOTLOADER_ADDR;
 
   // Set MSP
-  __set_MSP(appStack);
-
   // Jump to application
-  appEntry();
+  jumpToBootloader(appStack, appResetHandler);
 };
 
 SysMutex *platform_mutex() {

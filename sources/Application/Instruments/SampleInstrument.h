@@ -112,6 +112,10 @@ private:
   static struct renderParams renderParams_[SONG_CHANNEL_COUNT];
   bool running_;
   bool dirty_;
+  // When true, the next updateInstrumentData() reload keeps the user's
+  // start/loop/end/slice edits instead of resetting them. Set when the sample
+  // change is only a pool re-index (same sample shifted to a new index).
+  bool preserveEditsOnReload_ = false;
   TableSaveState tableState_;
 
   static signed char lastMidiNote_[SONG_CHANNEL_COUNT];

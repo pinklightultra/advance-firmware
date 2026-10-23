@@ -101,17 +101,7 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
     return;
 
   if (mask & EPBM_PLAY) {
-    const auto *entry = getCurrentEntry(fileEntries_, currentIndex_);
-    FileSystemPath::PathString instrumentPath;
-    if (entry != nullptr && (mask & EPBM_ALT) && entry->type == PFT_FILE) {
-      if (!resolveEntryPath(currentDir_, *entry, instrumentPath)) {
-        return;
-      }
-      Trace::Log("INSTRUMENTIMPORT", "SHIFT play - import");
-      importInstrument(instrumentPath.c_str());
-    } else {
-      // TODO: audition instrument by temporarily loading it and playing a note
-    }
+    // TODO: audition instrument by temporarily loading it and playing a note
 
     // handle moving up and down the file list
   } else if (mask & EPBM_UP) {
@@ -141,6 +131,8 @@ void InstrumentImportView::ProcessButtonMask(unsigned short mask,
         setCurrentFolder(fs, selectedPath.c_str());
         isDirty_ = true;
         topIndex_ = 0;
+      } else {
+        importInstrument(selectedPath.c_str());
       }
     }
   }
