@@ -12,8 +12,17 @@
 #ifndef _RECORD_H_
 #define _RECORD_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
 #include "FreeRTOS.h"
 #include "semphr.h"
+#endif
+#endif
+#endif
 
 #define MAX_INT32 0xFFFFFFFF
 
@@ -25,9 +34,15 @@ extern uint16_t recordBuffer[RECORD_BUFFER_SIZE];
 #define MIC_GAIN_MINDB 0  // can be negitive but mic level is already very low
 #define MIC_GAIN_MAXDB 20 // per TLV320 datasheet max gain is 20dB
 
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
 static StackType_t RecordStack[1024];
 static StaticTask_t RecordTCB;
 extern TaskHandle_t RecordHandle;
+#endif
+#endif
+#endif
 
 enum RecordSource { AllOff, LineIn, Mic, USBIn };
 

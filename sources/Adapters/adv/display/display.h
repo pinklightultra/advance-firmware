@@ -16,7 +16,14 @@
 extern "C" {
 #endif
 
+#ifndef _DESKTOP_
 #include "ltdc.h"
+#else
+#include <stdint.h>
+#define DISPLAY_WIDTH 720
+#define DISPLAY_HEIGHT 720
+extern uint16_t framebuffer[];
+#endif
 #include <stdbool.h>
 
 #define TEXT_WIDTH 33 // extra half empty char

@@ -1,0 +1,41 @@
+{
+  "name": "picotracker-advance-electron",
+  "version": "1.0.0",
+  "description": "Standalone Handheld Electron host for picoTracker Advance with XInput and ROG Ally controls",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.picotracker.advance",
+    "productName": "picoTracker Advance ROG Ally Edition",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "picoTrackerAdvance-ROGAlly.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.12"
+  }
+}

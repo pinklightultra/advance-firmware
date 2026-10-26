@@ -14,7 +14,11 @@
 #include "Trace.h"
 #include "Externals/etl/include/etl/error_handler.h"
 #include "System/System/System.h"
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
 #include "tim.h"
+#endif
+#endif
 #include <string.h>
 
 // be explicit about the nanoprintf configuration
@@ -34,6 +38,14 @@ uint64_t getMonotonicTimestampUs() {
   static uint32_t lastCounter = 0;
   static uint64_t wrapOffset = 0;
 
+#ifdef _DESKTOP_
+  System *system = System::GetInstance();
+  return system ? system->Micros() : 0;
+#else
+#ifdef _DESKTOP_
+  System *system = System::GetInstance();
+  return system ? system->Micros() : 0;
+#else
   const uint32_t counter = __HAL_TIM_GET_COUNTER(&htim2);
   if (counter < lastCounter) {
     wrapOffset += (1ULL << 32);
@@ -41,6 +53,8 @@ uint64_t getMonotonicTimestampUs() {
   lastCounter = counter;
 
   return wrapOffset + counter;
+#endif
+#endif
 }
 #endif
 

@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>picoTracker Advance - ROG Ally Handheld Edition</title>
+  <style>
+    :root {
+      --bg-void: #06070a;
+      --chassis-dark: #0e1017;
+      --chassis-mid: #141722;
+      --chassis-edge: #232838;
+      --chassis-bevel: #2f364a;
+      --screen-bezel: #08090d;
+      --silk-white: #e3e8f2;
+      --silk-dim: #7a8296;
+      --silk-dark: #4b5266;
+      --pt-cyan: #00f0ff;
+      --pt-magenta: #ff0055;
+      --pt-amber: #ffb700;
+      --pt-green: #00ff66;
+      --pt-red: #ff3344;
+      --cap-bg: #161922;
+      --cap-top: #1e222e;
+      --cap-border: #2c3244;
+      --cap-active: #00f0ff;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background: var(--bg-void);
+      color: var(--silk-white);
+      font-family: "SF Mono", "Consolas", "JetBrains Mono", "Segoe UI", monospace;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Strict 16:9 Widescreen Handheld Container */
+    .viewport-16x9 {
+      width: 100vw;
+      height: 56.25vw; /* 9 / 16 = 0.5625 */
+      max-height: 100vh;
+      max-width: 177.78vh; /* 16 / 9 = 1.7778 */
+      display: flex;
+      flex-direction: column;
+      background:
+        radial-gradient(ellipse at 50% 0%, rgba(0, 240, 255, 0.05) 0%, transparent 70%),
+        linear-gradient(180deg, #181b26 0%, #10121a 45%, #0a0b10 100%);
+      border: 2px solid var(--chassis-edge);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.1),
+        inset 0 0 50px rgba(0, 0, 0, 0.8),
+        0 24px 80px rgba(0, 0, 0, 0.95);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Top Hardware Bar */
+    .top-io-bar {
+      height: 38px;
+      background: linear-gradient(180deg, #0d0f15 0%, #131620 100%);
+      border-bottom: 1px solid var(--chassis-bevel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      z-index: 10;
+      flex-shrink: 0;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-title {
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: var(--silk-white);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .brand-title span {
+      color: var(--pt-cyan);
+    }
+
+    .badge {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: rgba(0, 240, 255, 0.12);
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      color: var(--pt-cyan);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .io-telemetry {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 10px;
+      color: var(--silk-dim);
+    }
+
+    .telemetry-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 7px;
+      background: #090a0f;
+      border: 1px solid #1c202c;
+      border-radius: 3px;
+    }
+
+    .led {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--pt-amber);
+      box-shadow: 0 0 6px var(--pt-amber);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+
+    .led.running {
+      background: var(--pt-green);
+      box-shadow: 0 0 8px var(--pt-green);
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .hw-btn {
+      background: #171a24;
+      color: var(--silk-white);
+      border: 1px solid #2b3144;
+      border-radius: 3px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .hw-btn:hover {
+      background: #222736;
+      border-color: var(--pt-cyan);
+      color: #fff;
+    }
+
+    .hw-btn:active {
+      transform: translateY(1px);
+    }
+
+    .hw-btn.active {
+      background: rgba(0, 240, 255, 0.15);
+      border-color: var(--pt-cyan);
+      color: var(--pt-cyan);
+    }
+
+    .hw-btn.danger:hover {
+      border-color: var(--pt-red);
+      color: var(--pt-red);
+    }
+
+    /* Main Handheld Chassis Layout */
+    .handheld-body {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Lateral Wings (ROG Ally Grip Areas) */
+    .chassis-wing {
+      width: 25%;
+      min-width: 200px;
+      max-width: 280px;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(255,255,255,0.02) 0%, transparent 80%),
+        linear-gradient(180deg, #141722 0%, #0e1017 100%);
+      border-right: 2px solid var(--chassis-bevel);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 18px 16px;
+      position: relative;
+      z-index: 5;
+    }
+
+    .chassis-wing.right-wing {
+      border-right: none;
+      border-left: 2px solid var(--chassis-bevel);
+    }
+
+    .wing-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--silk-dark);
+      letter-spacing: 0.1em;
+      font-weight: 700;
+    }
+
+    .torx {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #1d212e;
+      border: 1px solid #333a50;
+      position: relative;
+    }
+
+    .torx::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      right: 2px;
+      bottom: 2px;
+      background: #0d0f15;
+      clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    }
+
+    /* Screen Area */
+    .screen-well {
+      flex: 1;
+      background: #030406;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      box-shadow: inset 0 0 80px rgba(0,0,0,0.9);
+    }
+
+    .canvas-container {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      padding: 10px;
+    }
+
+    #pt-canvas {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: contain;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      box-shadow: 0 0 30px rgba(0, 0, 0, 0.8), 0 0 10px rgba(0, 240, 255, 0.08);
+    }
+
+    #pt-canvas.aspect-16x9 {
+      aspect-ratio: 16 / 9;
+    }
+
+    #pt-canvas.aspect-4x3 {
+      aspect-ratio: 4 / 3;
+    }
+
+    /* Touchscreen Button Well & Controls */
+    .touch-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin: auto 0;
+    }
+
+    /* D-Pad Styling */
+    .dpad-container {
+      width: 150px;
+      height: 150px;
+      margin: 0 auto;
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 3px;
+    }
+
+    .dpad-btn {
+      background: linear-gradient(145deg, #1f2330, #141722);
+      border: 1px solid #2f364a;
+      border-radius: 6px;
+      color: var(--silk-white);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      transition: all 0.08s ease;
+    }
+
+    .dpad-btn:active, .dpad-btn.pressed {
+      background: linear-gradient(145deg, #00f0ff, #0088cc);
+      color: #000;
+      border-color: #00f0ff;
+      box-shadow: 0 0 16px rgba(0, 240, 255, 0.6), inset 0 2px 4px rgba(0, 0, 0, 0.4);
+      transform: scale(0.96);
+    }
+
+    .dpad-btn.up { grid-column: 2; grid-row: 1; border-radius: 8px 8px 3px 3px; }
+    .dpad-btn.left { grid-column: 1; grid-row: 2; border-radius: 8px 3px 3px 8px; }
+    .dpad-center { grid-column: 2; grid-row: 2; background: #11141c; border-radius: 4px; border: 1px solid #202636; }
+    .dpad-btn.right { grid-column: 3; grid-row: 2; border-radius: 3px 8px 8px 3px; }
+    .dpad-btn.down { grid-column: 2; grid-row: 3; border-radius: 3px 3px 8px 8px; }
+
+    /* Action Buttons (Right Wing) */
+    .action-cluster {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 100%;
+      max-width: 220px;
+      margin: 0 auto;
+    }
+
+    .action-row {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .action-btn {
+      flex: 1;
+      height: 60px;
+      background: linear-gradient(145deg, #222634, #161924);
+      border: 1px solid #333a50;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      transition: all 0.08s ease;
+      position: relative;
+    }
+
+    .action-btn .btn-title {
+      font-size: 16px;
+      font-weight: 900;
+      letter-spacing: 0.05em;
+      color: var(--silk-white);
+    }
+
+    .action-btn .btn-sub {
+      font-size: 8px;
+      color: var(--silk-dim);
+      letter-spacing: 0.08em;
+      margin-top: 2px;
+    }
+
+    .action-btn.btn-a { border-color: rgba(0, 240, 255, 0.4); }
+    .action-btn.btn-b { border-color: rgba(255, 0, 85, 0.4); }
+    .action-btn.btn-opt { border-color: rgba(255, 183, 0, 0.4); }
+    .action-btn.btn-nav { border-color: rgba(0, 255, 102, 0.4); }
+
+    .action-btn:active, .action-btn.pressed {
+      transform: scale(0.95);
+    }
+
+    .action-btn.btn-a:active, .action-btn.btn-a.pressed {
+      background: var(--pt-cyan);
+      color: #000;
+      box-shadow: 0 0 20px rgba(0, 240, 255, 0.8);
+    }
+    .action-btn.btn-a:active .btn-title, .action-btn.btn-a.pressed .btn-title,
+    .action-btn.btn-a:active .btn-sub, .action-btn.btn-a.pressed .btn-sub {
+      color: #000;
+    }
+
+    .action-btn.btn-b:active, .action-btn.btn-b.pressed {
+      background: var(--pt-magenta);
+      color: #fff;
+      box-shadow: 0 0 20px rgba(255, 0, 85, 0.8);
+    }
+    .action-btn.btn-b:active .btn-title, .action-btn.btn-b.pressed .btn-title,
+    .action-btn.btn-b:active .btn-sub, .action-btn.btn-b.pressed .btn-sub {
+      color: #fff;
+    }
+
+    .action-btn.btn-opt:active, .action-btn.btn-opt.pressed {
+      background: var(--pt-amber);
+      color: #000;
+      box-shadow: 0 0 20px rgba(255, 183, 0, 0.8);
+    }
+    .action-btn.btn-opt:active .btn-title, .action-btn.btn-opt.pressed .btn-title,
+    .action-btn.btn-opt:active .btn-sub, .action-btn.btn-opt.pressed .btn-sub {
+      color: #000;
+    }
+
+    .action-btn.btn-nav:active, .action-btn.btn-nav.pressed {
+      background: var(--pt-green);
+      color: #000;
+      box-shadow: 0 0 20px rgba(0, 255, 102, 0.8);
+    }
+    .action-btn.btn-nav:active .btn-title, .action-btn.btn-nav.pressed .btn-title,
+    .action-btn.btn-nav:active .btn-sub, .action-btn.btn-nav.pressed .btn-sub {
+      color: #000;
+    }
+
+    .shoulder-bar {
+      display: flex;
+      gap: 8px;
+    }
+
+    .shoulder-btn {
+      flex: 1;
+      height: 38px;
+      background: #181b26;
+      border: 1px solid #2e3549;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+      color: var(--silk-white);
+      box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+      transition: all 0.08s ease;
+    }
+
+    .shoulder-btn:active, .shoulder-btn.pressed {
+      background: var(--pt-cyan);
+      color: #000;
+      box-shadow: 0 0 14px rgba(0, 240, 255, 0.6);
+      transform: scale(0.96);
+    }
+
+    .shoulder-btn.latched {
+      background: rgba(255, 183, 0, 0.25);
+      border-color: var(--pt-amber);
+      color: var(--pt-amber);
+    }
+
+    /* Screen-Only Collapse Mode */
+    .handheld-body.screen-only .chassis-wing {
+      display: none;
+    }
+
+    .handheld-body.screen-only .screen-well {
+      width: 100%;
+    }
+
+    /* Bottom Status / Key Bindings Overlay */
+    .bottom-bar {
+      height: 24px;
+      background: #090a0e;
+      border-top: 1px solid #1a1e2a;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      font-size: 9px;
+      color: var(--silk-dark);
+      letter-spacing: 0.05em;
+    }
+
+    .key-hints {
+      display: flex;
+      gap: 12px;
+    }
+
+    .key-hints span {
+      color: var(--silk-dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="viewport-16x9">
+    <!-- Top I/O & Hardware Status Bar -->
+    <div class="top-io-bar">
+      <div class="brand-section">
+        <div class="led" id="status-led"></div>
+        <div class="brand-title">picoTracker<span>Advance</span></div>
+        <div class="badge">ROG ALLY EDITION</div>
+      </div>
+
+      <div class="io-telemetry">
+        <div class="telemetry-item">
+          <span>STATE:</span> <strong id="status-text" style="color:var(--pt-cyan);">BOOTING</strong>
+        </div>
+        <div class="telemetry-item">
+          <span>PAD:</span> <strong id="pad-text">XInput / Polling</strong>
+        </div>
+        <div class="telemetry-item">
+          <span>FPS:</span> <strong id="fps-text">60</strong>
+        </div>
+        <div class="telemetry-item">
+          <span>RES:</span> <strong id="res-text">720×720</strong>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <button class="hw-btn" id="btn-aspect">1:1 SQUARE</button>
+        <button class="hw-btn" id="btn-layout">CHASSIS</button>
+        <button class="hw-btn" id="btn-refresh">REFRESH</button>
+        <button class="hw-btn" id="btn-fullscreen">F11 FULL</button>
+        <button class="hw-btn danger" id="btn-quit">QUIT</button>
+      </div>
+    </div>
+
+    <!-- Handheld Body (Wings + Display) -->
+    <div class="handheld-body" id="handheld-body">
+      <!-- Left Chassis Wing (Left Thumb Zone) -->
+      <div class="chassis-wing left-wing">
+        <div class="wing-header">
+          <div class="torx"></div>
+          <span>DIRECTIONAL MATRIX</span>
+          <div class="torx"></div>
+        </div>
+
+        <div class="touch-controls">
+          <div class="shoulder-bar">
+            <button class="shoulder-btn" data-bit="16" id="btn-nav">
+              <span>NAV</span> <small>(LB / SHIFT)</small>
+            </button>
+            <button class="shoulder-btn" data-bit="512" id="btn-view">
+              <span>VIEW</span> <small>(SELECT)</small>
+            </button>
+          </div>
+
+          <div class="dpad-container">
+            <button class="dpad-btn up" data-bit="8">▲</button>
+            <button class="dpad-btn left" data-bit="1">◀</button>
+            <div class="dpad-center"></div>
+            <button class="dpad-btn right" data-bit="4">▶</button>
+            <button class="dpad-btn down" data-bit="2">▼</button>
+          </div>
+        </div>
+
+        <div class="wing-header">
+          <div class="torx"></div>
+          <span>L-GRIP // S1-S4</span>
+          <div class="torx"></div>
+        </div>
+      </div>
+
+      <!-- Center Display Area -->
+      <div class="screen-well">
+        <div class="canvas-container">
+          <canvas id="pt-canvas" width="720" height="720"></canvas>
+        </div>
+      </div>
+
+      <!-- Right Chassis Wing (Right Thumb Zone) -->
+      <div class="chassis-wing right-wing">
+        <div class="wing-header">
+          <div class="torx"></div>
+          <span>ACTION CLUSTER</span>
+          <div class="torx"></div>
+        </div>
+
+        <div class="touch-controls">
+          <div class="shoulder-bar">
+            <button class="shoulder-btn" data-bit="128" id="btn-opt">
+              <span>OPT</span> <small>(RB / ALT)</small>
+            </button>
+            <button class="shoulder-btn" data-bit="256" id="btn-play">
+              <span>PLAY</span> <small>(START)</small>
+            </button>
+          </div>
+
+          <div class="action-cluster">
+            <div class="action-row">
+              <button class="action-btn btn-b" data-bit="32">
+                <span class="btn-title">B</span>
+                <span class="btn-sub">EDIT / BACK (X)</span>
+              </button>
+              <button class="action-btn btn-a" data-bit="64">
+                <span class="btn-title">A</span>
+                <span class="btn-sub">ENTER / VAL (A)</span>
+              </button>
+            </div>
+            <div class="action-row">
+              <button class="shoulder-btn" id="btn-combo-del" style="background:#22151c; border-color:#5c2438;">
+                <span>DELETE</span> <small>(NAV+B)</small>
+              </button>
+              <button class="shoulder-btn" id="btn-latch">
+                <span>LATCH NAV</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="wing-header">
+          <div class="torx"></div>
+          <span>R-GRIP // S5-S8</span>
+          <div class="torx"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Telemetry & Quick Legend -->
+    <div class="bottom-bar">
+      <div>picoTracker Advance v3.0 Native Handheld Engine</div>
+      <div class="key-hints">
+        <div>D-PAD: <span>Arrows / Left Stick</span></div>
+        <div>A: <span>Enter / Z / Pad A</span></div>
+        <div>B: <span>Esc / X / Pad B</span></div>
+        <div>NAV: <span>Shift / Q / LB</span></div>
+        <div>OPT: <span>Alt / E / RB</span></div>
+        <div>PLAY: <span>Space / Start</span></div>
+      </div>
+      <div>ASUS ROG ALLY / STEAM DECK / XINPUT</div>
+    </div>
+  </div>
+
+  <script>
+    // Canvas & Frame Rendering
+    const canvas = document.getElementById('pt-canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    let imageData = ctx.createImageData(720, 720);
+
+    // Initial boot screen display
+    ctx.fillStyle = '#06070a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00f0ff';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText('picoTracker Advance', 220, 340);
+    ctx.fillStyle = '#7a8296';
+    ctx.font = '14px monospace';
+    ctx.fillText('BOOTING HANDHELD ENGINE...', 245, 380);
+
+    const statusLed = document.getElementById('status-led');
+    const statusText = document.getElementById('status-text');
+    const padText = document.getElementById('pad-text');
+    const resText = document.getElementById('res-text');
+    const fpsText = document.getElementById('fps-text');
+    const handheldBody = document.getElementById('handheld-body');
+
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+
+    window.pt.onFrame(({ width, height, pixels }) => {
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        imageData = ctx.createImageData(width, height);
+        resText.textContent = `${width}×${height}`;
+      }
+      imageData.data.set(pixels);
+      ctx.putImageData(imageData, 0, 0);
+
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 1000) {
+        fpsText.textContent = Math.round((frameCount * 1000) / (now - lastFpsTime));
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+    });
+
+    window.pt.onStatus((st) => {
+      if (st.state === 'running') {
+        statusLed.classList.add('running');
+        statusText.textContent = 'ONLINE';
+        statusText.style.color = 'var(--pt-green)';
+      } else if (st.state === 'booting') {
+        statusLed.classList.remove('running');
+        statusText.textContent = 'BOOTING';
+        statusText.style.color = 'var(--pt-cyan)';
+      } else if (st.state === 'stopped' || st.state === 'error') {
+        statusLed.classList.remove('running');
+        statusText.textContent = st.message || 'STOPPED';
+        statusText.style.color = 'var(--pt-red)';
+      }
+      if (st.gamepad) {
+        padText.textContent = st.gamepad.replace('Opened joystick', 'Joy');
+      }
+    });
+
+    // Button Mask Protocol
+    // Bit 0: LEFT   (1)
+    // Bit 1: DOWN   (2)
+    // Bit 2: RIGHT  (4)
+    // Bit 3: UP     (8)
+    // Bit 4: L/NAV  (16)
+    // Bit 5: B      (32)
+    // Bit 6: A      (64)
+    // Bit 7: R/OPT  (128)
+    // Bit 8: START  (256)
+    // Bit 9: SELECT (512)
+    // Bit 10: POWER (1024)
+
+    let keyboardMask = 0;
+    let touchMask = 0;
+    let gamepadMask = 0;
+    let latchedMask = 0;
+    let lastSentMask = -1;
+
+    function updateControllerMask() {
+      const combined = (keyboardMask | touchMask | gamepadMask | latchedMask) & 0xffff;
+      if (combined !== lastSentMask) {
+        lastSentMask = combined;
+        window.pt.sendController(combined);
+      }
+      // Update visual glow on touch buttons
+      document.querySelectorAll('[data-bit]').forEach((el) => {
+        const bit = parseInt(el.dataset.bit, 10);
+        const active = (combined & bit) !== 0;
+        el.classList.toggle('pressed', active);
+      });
+    }
+
+    // Touchscreen / Pointer Controls
+    document.querySelectorAll('[data-bit]').forEach((btn) => {
+      const bit = parseInt(btn.dataset.bit, 10);
+
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        btn.setPointerCapture(e.pointerId);
+        touchMask |= bit;
+        updateControllerMask();
+      });
+
+      const release = (e) => {
+        e.preventDefault();
+        touchMask &= ~bit;
+        updateControllerMask();
+      };
+
+      btn.addEventListener('pointerup', release);
+      btn.addEventListener('pointercancel', release);
+    });
+
+    // Delete Combo Button (NAV + B)
+    const delBtn = document.getElementById('btn-combo-del');
+    delBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      delBtn.setPointerCapture(e.pointerId);
+      touchMask |= (16 | 32); // NAV(16) + B(32)
+      updateControllerMask();
+    });
+    const releaseDel = (e) => {
+      e.preventDefault();
+      touchMask &= ~(16 | 32);
+      updateControllerMask();
+    };
+    delBtn.addEventListener('pointerup', releaseDel);
+    delBtn.addEventListener('pointercancel', releaseDel);
+
+    // Latch NAV Button
+    const latchBtn = document.getElementById('btn-latch');
+    latchBtn.addEventListener('click', () => {
+      latchedMask ^= 16; // Toggle NAV
+      latchBtn.classList.toggle('latched', (latchedMask & 16) !== 0);
+      updateControllerMask();
+    });
+
+    // HTML5 Gamepad / XInput Polling Loop
+    function pollGamepads() {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      let mask = 0;
+      let padFound = null;
+
+      for (const gp of gamepads) {
+        if (!gp || !gp.connected) continue;
+        padFound = gp;
+
+        // D-Pad
+        if (gp.buttons[12] && gp.buttons[12].pressed) mask |= 8;  // UP
+        if (gp.buttons[13] && gp.buttons[13].pressed) mask |= 2;  // DOWN
+        if (gp.buttons[14] && gp.buttons[14].pressed) mask |= 1;  // LEFT
+        if (gp.buttons[15] && gp.buttons[15].pressed) mask |= 4;  // RIGHT
+
+        // Left Analog Stick (deadzone 0.45)
+        if (gp.axes && gp.axes.length >= 2) {
+          if (gp.axes[1] < -0.45) mask |= 8; // UP
+          if (gp.axes[1] > 0.45) mask |= 2;  // DOWN
+          if (gp.axes[0] < -0.45) mask |= 1; // LEFT
+          if (gp.axes[0] > 0.45) mask |= 4;  // RIGHT
+        }
+
+        // Action Buttons
+        if (gp.buttons[0] && gp.buttons[0].pressed) mask |= 64;  // A -> A
+        if (gp.buttons[1] && gp.buttons[1].pressed) mask |= 32;  // B -> B
+        if (gp.buttons[2] && gp.buttons[2].pressed) mask |= 512; // X -> VIEW
+        if (gp.buttons[3] && gp.buttons[3].pressed) mask |= 64;  // Y -> A
+
+        // Bumpers & Triggers
+        if (gp.buttons[4] && gp.buttons[4].pressed) mask |= 16;  // LB -> NAV
+        if (gp.buttons[5] && gp.buttons[5].pressed) mask |= 128; // RB -> OPT
+        if (gp.buttons[6] && gp.buttons[6].value > 0.5) mask |= 16;  // LT -> NAV
+        if (gp.buttons[7] && gp.buttons[7].value > 0.5) mask |= 128; // RT -> OPT
+
+        // Select & Start
+        if (gp.buttons[8] && gp.buttons[8].pressed) mask |= 512; // Back/View -> VIEW
+        if (gp.buttons[9] && gp.buttons[9].pressed) mask |= 256; // Start/Menu -> PLAY
+        if (gp.buttons[16] && gp.buttons[16].pressed) mask |= 1024; // Guide/Power
+      }
+
+      if (padFound) {
+        padText.textContent = padFound.id.includes('Xbox') ? 'Xbox / Ally' : 'Gamepad OK';
+      }
+
+      if (mask !== gamepadMask) {
+        gamepadMask = mask;
+        updateControllerMask();
+      }
+
+      requestAnimationFrame(pollGamepads);
+    }
+    requestAnimationFrame(pollGamepads);
+
+    // Keyboard Navigation Mapping
+    const KEY_TO_BIT = {
+      ArrowUp: 8,
+      ArrowDown: 2,
+      ArrowLeft: 1,
+      ArrowRight: 4,
+      KeyZ: 64,
+      KeyC: 64,
+      Enter: 64,
+      KeyX: 32,
+      KeyV: 32,
+      Backspace: 32,
+      Escape: 32,
+      ShiftLeft: 16,
+      ShiftRight: 16,
+      ControlLeft: 16,
+      KeyQ: 16,
+      Tab: 16,
+      AltLeft: 128,
+      AltRight: 128,
+      ControlRight: 128,
+      KeyE: 128,
+      Space: 256,
+      Delete: 512,
+      Backquote: 512
+    };
+
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'F11') {
+        e.preventDefault();
+        window.pt.toggleFullscreen();
+        return;
+      }
+      const bit = KEY_TO_BIT[e.code];
+      if (bit) {
+        e.preventDefault();
+        keyboardMask |= bit;
+        updateControllerMask();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const bit = KEY_TO_BIT[e.code];
+      if (bit) {
+        e.preventDefault();
+        keyboardMask &= ~bit;
+        updateControllerMask();
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      keyboardMask = 0;
+      touchMask = 0;
+      updateControllerMask();
+    });
+
+    // Top Bar Action Handlers
+    let currentAspect = '1:1';
+    const btnAspect = document.getElementById('btn-aspect');
+    btnAspect.addEventListener('click', () => {
+      if (currentAspect === '1:1') {
+        currentAspect = '16:9';
+        canvas.className = 'aspect-16x9';
+        btnAspect.textContent = '16:9 WIDE';
+      } else if (currentAspect === '16:9') {
+        currentAspect = '4:3';
+        canvas.className = 'aspect-4x3';
+        btnAspect.textContent = '4:3 STRETCH';
+      } else {
+        currentAspect = '1:1';
+        canvas.className = '';
+        btnAspect.textContent = '1:1 SQUARE';
+      }
+    });
+
+    const btnLayout = document.getElementById('btn-layout');
+    btnLayout.addEventListener('click', () => {
+      const isScreenOnly = handheldBody.classList.toggle('screen-only');
+      btnLayout.textContent = isScreenOnly ? 'SCREEN ONLY' : 'CHASSIS';
+      btnLayout.classList.toggle('active', isScreenOnly);
+    });
+
+    document.getElementById('btn-refresh').addEventListener('click', () => {
+      window.pt.resetDisplay();
+    });
+
+    document.getElementById('btn-fullscreen').addEventListener('click', () => {
+      window.pt.toggleFullscreen();
+    });
+
+    document.getElementById('btn-quit').addEventListener('click', () => {
+      window.pt.quit();
+    });
+  </script>
+</body>
+</html>

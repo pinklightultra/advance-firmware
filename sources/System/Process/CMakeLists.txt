@@ -1,5 +1,6 @@
 add_library(system_process
   SysMutex.cpp
+  Process.cpp
 )
 
 target_include_directories(system_process PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

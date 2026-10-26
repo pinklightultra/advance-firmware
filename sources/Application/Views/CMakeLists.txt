@@ -43,14 +43,24 @@ add_library(application_views
   CreditsView.cpp
 )
 
-target_link_libraries(application_views PUBLIC
-  application_views_baseclasses
-  application_effects
-  application_instruments
-  etl
-  application_utils
-  platform_display
-)
+if(BUILD_DESKTOP)
+  target_link_libraries(application_views PUBLIC
+    application_views_baseclasses
+    application_effects
+    application_instruments
+    etl
+    application_utils
+  )
+else()
+  target_link_libraries(application_views PUBLIC
+    application_views_baseclasses
+    application_effects
+    application_instruments
+    etl
+    application_utils
+    platform_display
+  )
+endif()
 
 target_include_directories(application_views PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

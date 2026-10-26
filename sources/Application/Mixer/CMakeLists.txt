@@ -11,13 +11,22 @@ add_library(application_mixer
   MixerService.cpp
 )
 
-target_link_libraries(application_mixer PUBLIC
-  application_audio
-  application_effects
-  application_model
-  system_console
-  platform
-)
+if(BUILD_DESKTOP)
+  target_link_libraries(application_mixer PUBLIC
+    application_audio
+    application_effects
+    application_model
+    system_console
+  )
+else()
+  target_link_libraries(application_mixer PUBLIC
+    application_audio
+    application_effects
+    application_model
+    system_console
+    platform
+  )
+endif()
 
 target_include_directories(application_mixer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

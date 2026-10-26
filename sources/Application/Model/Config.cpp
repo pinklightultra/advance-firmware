@@ -508,6 +508,8 @@ Config::Config()
 
 Config::~Config() {}
 
+void Config::ProcessArguments(int argc, char **argv) {}
+
 bool Config::IsInstrumentAuditionEnabled() {
   return instrumentAudition_.GetBool();
 }

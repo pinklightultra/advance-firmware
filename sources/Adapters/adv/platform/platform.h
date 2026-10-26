@@ -10,8 +10,14 @@
 #include "System/Process/SysMutex.h"
 #include <cstdint>
 
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
+#ifndef _DESKTOP_
 #include "main.h"
 #include "usart.h"
+#endif
+#endif
+#endif
 
 #define BOOTLOADER_ADDR 0x81e0000U
 

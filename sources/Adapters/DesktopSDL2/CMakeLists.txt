@@ -1,0 +1,29 @@
+add_library(platform_desktop
+  Platform/platform.cpp
+  Platform/firmware_info.c
+  Process/SDLProcess.cpp
+  Timer/SDLTimer.cpp
+  FileSystem/DesktopFileSystem.cpp
+  System/DesktopSystem.cpp
+  System/DesktopSamplePool.cpp
+  Audio/SDLAudio.cpp
+  Audio/SDLAudioDriver.cpp
+  Audio/record_stub.cpp
+  Midi/DummyMidi.cpp
+  Display/DesktopDisplay.cpp
+  GUI/GUIFactory.cpp
+  GUI/DesktopGUIWindowImp.cpp
+  GUI/DesktopEventManager.cpp
+  Bridge/DesktopBridge.cpp
+  Tests/SmokeTest.cpp
+  ../adv/system/assets/error_bitmaps.c
+)
+
+target_include_directories(platform_desktop PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/Platform
+  ${CMAKE_CURRENT_SOURCE_DIR}/Display
+  ${PROJECT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/Externals
+  ${SDL2_INCLUDE_DIRS}
+)
