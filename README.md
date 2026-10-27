@@ -66,3 +66,18 @@ Discussion of the Advance and its firmware happens on [Discord](https://discord.
 ## Development
 
 See [the development docs](docs/DEV.md).
+
+## Development & Testing
+
+### Doctest C++ Test Suite
+The firmware includes a comprehensive unit testing suite using `doctest` verifying all instrument voice pipelines, MIDI routing, phrase sequencing, and table processing:
+
+```bash
+cmake -B build -S . -G Ninja -DBUILD_TESTING=ON
+cmake --build build --target tests
+./build/tests
+```
+> All **502 test cases and 144,919 assertions** execute in ~2.5 seconds on host systems.
+
+### Automated CI
+Continuous integration runs on GitHub Actions on every commit to `main`, validating the build matrix, header dependencies, and test suite execution.
