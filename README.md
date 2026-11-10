@@ -1,3 +1,9 @@
+**Notice:** This repository is a copy of the upstream [picoTracker Advance firmware](https://github.com/xiphonics/advance-firmware), through upstream tag [v3.2.1](https://github.com/xiphonics/advance-firmware/tree/v3.2.1). The original project is by [xiphonics](https://github.com/xiphonics) (copyright xiphonics, inc. and Discodirt). Most of the history is by Maksim Lin and democloid, with earlier LittleGPTracker work by Marc Nostromo and other contributors.
+
+Justin Severn's changes, the three commits after that v3.2.1 snapshot, add a Desktop SDL2 adapter and Electron standalone host (`sources/Adapters/DesktopSDL2`, `hosts/electron`), a GitHub Actions workflow that builds and runs the existing C++ doctest suite (`.github/workflows/ci.yml`), and the Development & Testing section at the bottom of this file. The original README follows.
+
+---
+
 # picoTracker Advance Firmware
 
 This repository holds source code releases of the picoTracker Advance firmware. The firmware started as a modified version of [LittleGPTracker](https://littlegptracker.com/) but has now diverged in many areas and added alot of new and improved functionality. It implements a user interface similar to the refined track-by-joypad software [*littlesounddj*](http://www.littlesounddj.com/).
